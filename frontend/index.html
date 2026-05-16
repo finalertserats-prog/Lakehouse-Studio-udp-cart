@@ -822,8 +822,10 @@
       <p class="text-slate-400 mt-2">Each template is a use-case-shaped view over the certified stack. Pending components are flagged with the release that brings them.</p>
     </div>
     <div id="goal-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
-    <div class="text-xs text-slate-500 mt-6">
-      Looking for the older goal-based flow? <button id="btn-classic-goals" class="text-cyan-400 hover:text-cyan-300 underline-offset-2 hover:underline">Show classic goals</button>
+    <div class="text-xs text-slate-500 mt-6" id="picker-toggle-row">
+      <span id="picker-toggle-label-templates">Looking for the older goal-based flow?</span>
+      <span id="picker-toggle-label-classic" class="hidden">Switched to classic goals.</span>
+      <button id="btn-classic-goals" class="text-cyan-400 hover:text-cyan-300 underline-offset-2 hover:underline">Show classic goals</button>
     </div>
   </section>
 
@@ -1780,9 +1782,42 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     });
   }
 
-  document.getElementById("btn-classic-goals")?.addEventListener("click", () => {
+  // Bidirectional toggle: classic goals <-> templates. Button text + label
+  // flip so the user is never stuck on one view.
+  function _updatePickerToggle(mode) {
+    const btn = document.getElementById("btn-classic-goals");
+    const lblT = document.getElementById("picker-toggle-label-templates");
+    const lblC = document.getElementById("picker-toggle-label-classic");
+    if (!btn) return;
+    if (mode === "classic") {
+      btn.textContent = "Show templates";
+      lblT?.classList.add("hidden");
+      lblC?.classList.remove("hidden");
+    } else {
+      btn.textContent = "Show classic goals";
+      lblT?.classList.remove("hidden");
+      lblC?.classList.add("hidden");
+    }
+  }
+  document.getElementById("btn-classic-goals")?.addEventListener("click", async () => {
     if (!state.catalog) return;
+    if (state._pickerMode === "classic") {
+      // toggle back to templates
+      try {
+        const r = await api("/api/templates");
+        const templates = r?.templates || [];
+        if (templates.length > 0) {
+          renderTemplateCards(templates);
+          state._pickerMode = "templates";
+          _updatePickerToggle("templates");
+          return;
+        }
+      } catch (_) { /* fall through */ }
+      // If template fetch fails, stay on classic
+    }
     renderClassicGoalCards();
+    state._pickerMode = "classic";
+    _updatePickerToggle("classic");
   });
 
   // ===========================================================

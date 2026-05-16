@@ -99,6 +99,22 @@ def validate_catalog() -> list[str]:
             if "version" in comp and not isinstance(comp["version"], (str, int, float)):
                 problems.append(f"component '{comp_id}': 'version' must be scalar")
 
+            # Cart-UX content fields. These are WARNINGS only — the catalog
+            # still loads, install still proceeds. Surfaced via /healthz so
+            # the team sees them before shipping a cart card with no logo.
+            # Applies to certified (recommended/compatible) components only;
+            # we don't warn about unfleshed coming_soon entries here.
+            is_certified = bool(comp.get("recommended")) or bool(comp.get("compatible"))
+            if is_certified:
+                if not (isinstance(comp.get("logo"), str) and comp["logo"]):
+                    problems.append(
+                        f"component '{comp_id}': warning — missing 'logo' (cart UX will fall back to a placeholder)"
+                    )
+                if not (isinstance(comp.get("tagline"), str) and comp["tagline"]):
+                    problems.append(
+                        f"component '{comp_id}': warning — missing 'tagline' (cart card subtitle will be empty)"
+                    )
+
     # Validate goals reference known recommended_sets
     goals = data.get("goals") or []
     rec_sets = data.get("recommended_sets") or {}
