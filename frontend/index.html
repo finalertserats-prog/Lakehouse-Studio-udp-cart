@@ -362,6 +362,15 @@
     .step-arrow { color: var(--ink-faint); font-size: 12px; opacity: 0.5; }
 
     /* ---------------- CART SIDEBAR ---------------- */
+    /* Fallback when a logo SVG fails to load — first-letter monogram in a gradient circle */
+    .monogram {
+      width: 36px; height: 36px; border-radius: 9999px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 16px;
+      color: white;
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      text-transform: uppercase;
+    }
     .cat-card {
       padding: 20px; border-radius: 14px; transition: all .25s ease;
       background: var(--glass); border: 1px solid var(--hairline);
@@ -556,6 +565,61 @@
     </div>
     <div class="text-xs text-slate-500 mt-4">
       The token is stored in your browser only. <span class="text-slate-600">Note: in v0.3 the token sits in localStorage — see README for the cookie-auth migration plan.</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============== COMPONENT DETAILS MODAL ============== -->
+<div id="comp-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center p-4" style="background: rgba(7,6,26,0.78); backdrop-filter: blur(8px);">
+  <div class="glass max-w-3xl w-full max-h-[88vh] overflow-y-auto p-7" style="border-color: rgba(255,255,255,0.14);">
+    <div class="flex items-start gap-5 mb-5">
+      <div class="shrink-0 w-16 h-16 rounded-xl flex items-center justify-center" style="background: rgba(255,255,255,0.04); border: 1px solid var(--hairline);">
+        <img id="comp-modal-logo" class="w-12 h-12" alt="" onerror="this.style.display='none'">
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
+          <h2 id="comp-modal-name" class="display-3 grad-text-soft"></h2>
+          <span id="comp-modal-version" class="text-xs mono text-slate-500 ml-1"></span>
+        </div>
+        <div id="comp-modal-tagline" class="text-sm text-slate-300"></div>
+        <div id="comp-modal-badges" class="flex flex-wrap gap-1.5 mt-2"></div>
+      </div>
+      <button id="comp-modal-close" class="text-slate-400 hover:text-white text-2xl leading-none" aria-label="Close">×</button>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div>
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">What it is</div>
+        <div id="comp-modal-whatitis" class="text-sm text-slate-300 leading-relaxed mb-5"></div>
+
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Best for</div>
+        <ul id="comp-modal-bestfor" class="text-sm text-slate-300 list-disc pl-5 space-y-1 mb-5"></ul>
+
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Resource needs (recommended)</div>
+        <div id="comp-modal-resource" class="text-sm text-slate-300 mono mb-5"></div>
+      </div>
+
+      <div>
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Capabilities</div>
+        <ul id="comp-modal-caps" class="text-sm text-slate-300 list-disc pl-5 space-y-1 mb-5"></ul>
+
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Plays well with</div>
+        <div id="comp-modal-compat" class="flex flex-wrap gap-1.5 mb-5"></div>
+
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Why this version</div>
+        <div id="comp-modal-whyver" class="text-sm text-slate-300 leading-relaxed mb-5"></div>
+      </div>
+    </div>
+
+    <div class="border-t border-white/5 pt-4 mt-2 flex items-center justify-between text-xs text-slate-500">
+      <div>
+        <span id="comp-modal-license"></span> · <span id="comp-modal-maintainer"></span> ·
+        <a id="comp-modal-url" target="_blank" rel="noopener" class="text-cyan-400 hover:underline">project ↗</a>
+      </div>
+      <div class="flex gap-2">
+        <button id="comp-modal-add" class="btn-primary text-sm">Add to cart</button>
+        <button id="comp-modal-close-2" class="btn-ghost text-sm">Close</button>
+      </div>
     </div>
   </div>
 </div>
@@ -817,6 +881,17 @@
           <div id="cart-next-pick" class="hidden text-xs glass p-3 mb-5"></div>
 
           <div id="cart-warnings" class="hidden space-y-1 mb-5 text-xs"></div>
+
+          <!-- Live stack sizing (recommended tier) — derived from the manifest -->
+          <div id="cart-sizing" class="hidden mb-5 p-3 rounded-lg" style="background: rgba(168,85,247,0.06); border: 1px solid rgba(168,85,247,0.25);">
+            <div class="text-xs uppercase tracking-widest text-purple-200/80 mb-2">Stack needs (recommended)</div>
+            <div class="grid grid-cols-3 gap-2 text-xs">
+              <div><div class="mono text-lg text-purple-100" id="sizing-cpu">—</div><div class="text-purple-300/70">vCPU</div></div>
+              <div><div class="mono text-lg text-purple-100" id="sizing-ram">—</div><div class="text-purple-300/70">GB RAM</div></div>
+              <div><div class="mono text-lg text-purple-100" id="sizing-disk">—</div><div class="text-purple-300/70">GB disk</div></div>
+            </div>
+            <div class="text-xs text-slate-400 mt-2" id="sizing-hint"></div>
+          </div>
 
           <button id="btn-build-continue" class="btn-primary w-full" disabled>Validate &amp; continue →</button>
         </div>
@@ -1768,6 +1843,23 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     alert(lines.trim());
   });
 
+  // ---- enriched component card renderer (v0.4 polish) ----
+  // Pulls logo / tagline / what_it_is / best_for / capabilities / why_this_version /
+  // resource_profile_summary from components-catalog.yaml. Falls back gracefully
+  // for any missing field so older catalog entries still render.
+  function _logoImg(comp, size = 40) {
+    const src = comp.logo || `/assets/logos/${comp.id}.svg`;
+    return `<img src="${esc(src)}" alt="" class="object-contain"
+      style="width:${size}px;height:${size}px;"
+      onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'monogram',textContent:'${esc((comp.name||'?')[0])}'}))">`;
+  }
+  function _renderBestForChips(arr) {
+    if (!arr || !arr.length) return "";
+    return arr.slice(0, 3).map(s =>
+      `<span class="text-xs px-2 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25 text-cyan-200">${esc(s)}</span>`
+    ).join("");
+  }
+
   function renderCatalog() {
     const wrap = document.getElementById("catalog-list"); wrap.innerHTML = "";
     (state.catalog.categories || []).forEach((cat) => {
@@ -1775,29 +1867,50 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       const card = document.createElement("div");
       card.className = "cat-card spot" + (inCart ? " added" : "");
       const optionalTag = cat.optional ? `<span class="text-xs text-slate-500 ml-2">(optional)</span>` : "";
+
       const comps = (cat.components || []).length ? (cat.components.map(comp => {
         const added = state.cart.includes(comp.id);
         const badges = (comp.badges || []).map(b => {
           const cls = b === "Recommended" ? "badge-rec" : b === "Stable" ? "badge-stable" : "badge-exp";
           return `<span class="badge ${cls}">${esc(b)}</span>`;
         }).join("");
+        const bestFor = _renderBestForChips(comp.best_for);
+        // Prefer the new tagline; fall back to the legacy summary if missing.
+        const tagline = comp.tagline || comp.summary || '';
         return `
           <div class="flex items-start gap-4 p-4 rounded-lg ${added ? 'bg-emerald-500/8 border border-emerald-500/25' : 'bg-white/[0.02] border border-white/5'} mb-2">
+            <div class="shrink-0 w-12 h-12 rounded-lg flex items-center justify-center" style="background: rgba(255,255,255,0.04); border: 1px solid var(--hairline);">
+              ${_logoImg(comp, 36)}
+            </div>
             <div class="flex-1 min-w-0">
               <div class="flex items-baseline gap-2 mb-1 flex-wrap">
                 <span class="font-semibold text-slate-100">${esc(comp.name)}</span>
                 <span class="text-xs mono text-slate-500">v${esc(comp.version || '?')}</span>
                 ${badges}
               </div>
-              <div class="text-sm text-slate-400 mb-2 leading-relaxed">${esc(comp.summary || '')}</div>
+              <div class="text-sm text-slate-300 mb-2 leading-relaxed">${esc(tagline)}</div>
+              ${bestFor ? `<div class="flex flex-wrap gap-1 mb-2">${bestFor}</div>` : ''}
               ${comp.production_note ? `<div class="text-xs text-amber-300/80 italic">⚠ ${esc(comp.production_note)}</div>` : ''}
-              <div class="text-xs text-slate-500 mt-2">${esc(comp.license || '')} · ${esc(comp.maintainer || '')} · <a href="${esc(comp.url || '#')}" target="_blank" class="text-cyan-400 hover:underline">project ↗</a></div>
+              <div class="text-xs text-slate-500 mt-1.5 flex items-center gap-2 flex-wrap">
+                <span>${esc(comp.license || '')}</span>
+                <span class="text-slate-700">·</span>
+                <button class="comp-details-btn text-cyan-400 hover:text-cyan-300 underline-offset-2 hover:underline" data-comp="${esc(comp.id)}">Details &rarr;</button>
+              </div>
             </div>
             <button class="cart-btn ${added ? 'btn-ghost' : 'btn-primary'} text-sm whitespace-nowrap" data-comp="${esc(comp.id)}">${added ? '✓ Added · remove' : 'Add to cart'}</button>
           </div>
         `;
       }).join("")) : `<div class="text-sm text-slate-500 italic px-4 py-3">No options yet — coming in v0.4+.</div>`;
-      const soon = (cat.coming_soon || []).map(s => `<span class="text-xs px-2 py-1 rounded-md bg-white/[0.03] border border-white/5 text-slate-500" title="${esc(s.reason || '')}">${esc(s.name)} <span class="text-slate-600">(soon)</span></span>`).join("");
+
+      const soon = (cat.coming_soon || []).map(s => {
+        const fakeId = (s.id || s.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const logoSrc = s.logo || (fakeId ? `/assets/logos/${fakeId}.svg` : '');
+        const logoEl = logoSrc
+          ? `<img src="${esc(logoSrc)}" class="w-4 h-4 object-contain inline-block opacity-70" alt="" onerror="this.style.display='none'">`
+          : '';
+        return `<span class="text-xs px-2 py-1 rounded-md bg-white/[0.03] border border-white/5 text-slate-500 inline-flex items-center gap-1.5" title="${esc(s.reason || s.summary || '')}">${logoEl}${esc(s.name)} <span class="text-slate-600">(soon)</span></span>`;
+      }).join("");
+
       card.innerHTML = `
         <div class="flex items-baseline justify-between mb-2">
           <div>
@@ -1810,6 +1923,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       `;
       wrap.appendChild(card);
     });
+
     // Wire add/remove buttons
     wrap.querySelectorAll(".cart-btn").forEach(b => {
       b.addEventListener("click", async () => {
@@ -1820,7 +1934,83 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
         await refreshCartValidation();
       });
     });
+    // Wire Details buttons
+    wrap.querySelectorAll(".comp-details-btn").forEach(b => {
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        showComponentDetails(b.dataset.comp);
+      });
+    });
   }
+
+  // ---- Details modal ----
+  function showComponentDetails(compId) {
+    const comp = _findComponent(compId);
+    if (!comp) return;
+    const m = document.getElementById("comp-modal");
+    const logoImg = document.getElementById("comp-modal-logo");
+    logoImg.src = comp.logo || `/assets/logos/${comp.id}.svg`;
+    logoImg.style.display = "";
+    document.getElementById("comp-modal-name").textContent = comp.name || comp.id;
+    document.getElementById("comp-modal-version").textContent = comp.version ? `v${comp.version}` : '';
+    document.getElementById("comp-modal-tagline").textContent = comp.tagline || comp.summary || '';
+    const badgesEl = document.getElementById("comp-modal-badges");
+    badgesEl.innerHTML = (comp.badges || []).map(b => {
+      const cls = b === "Recommended" ? "badge-rec" : b === "Stable" ? "badge-stable" : "badge-exp";
+      return `<span class="badge ${cls}">${esc(b)}</span>`;
+    }).join("");
+    document.getElementById("comp-modal-whatitis").textContent = comp.what_it_is || comp.summary || "No description yet.";
+    document.getElementById("comp-modal-bestfor").innerHTML = (comp.best_for || []).length
+      ? comp.best_for.map(x => `<li>${esc(x)}</li>`).join("")
+      : `<li class="text-slate-500 italic">Not yet documented.</li>`;
+    document.getElementById("comp-modal-caps").innerHTML = (comp.capabilities || []).length
+      ? comp.capabilities.map(x => `<li>${esc(x)}</li>`).join("")
+      : `<li class="text-slate-500 italic">Not yet documented.</li>`;
+    document.getElementById("comp-modal-resource").textContent = comp.resource_profile_summary || "Sizing data not yet specified.";
+    document.getElementById("comp-modal-compat").innerHTML = (comp.compatible_with || []).map(c =>
+      `<span class="text-xs px-2 py-1 rounded bg-purple-500/10 border border-purple-500/25 text-purple-200">${esc(c)}</span>`
+    ).join("") || `<span class="text-xs text-slate-500 italic">No constraints recorded.</span>`;
+    document.getElementById("comp-modal-whyver").textContent = comp.why_this_version || "Pinned per the compatibility lock file.";
+    document.getElementById("comp-modal-license").textContent = comp.license || "—";
+    document.getElementById("comp-modal-maintainer").textContent = comp.maintainer || "—";
+    const urlEl = document.getElementById("comp-modal-url");
+    urlEl.href = comp.url || "#";
+    const addBtn = document.getElementById("comp-modal-add");
+    const isAdded = state.cart.includes(compId);
+    addBtn.textContent = isAdded ? "✓ Remove from cart" : "Add to cart";
+    addBtn.className = isAdded ? "btn-ghost text-sm" : "btn-primary text-sm";
+    addBtn.onclick = async () => {
+      if (state.cart.includes(compId)) state.cart = state.cart.filter(x => x !== compId);
+      else state.cart = [...state.cart, compId];
+      _hideCompModal();
+      renderCatalog();
+      await refreshCartValidation();
+    };
+    m.classList.remove("hidden");
+    document.body.style.overflow = "hidden";
+  }
+  function _hideCompModal() {
+    document.getElementById("comp-modal").classList.add("hidden");
+    document.body.style.overflow = "";
+  }
+  function _findComponent(compId) {
+    for (const cat of (state.catalog?.categories || [])) {
+      for (const c of (cat.components || [])) {
+        if (c.id === compId) return c;
+      }
+    }
+    return null;
+  }
+  document.getElementById("comp-modal-close")?.addEventListener("click", _hideCompModal);
+  document.getElementById("comp-modal-close-2")?.addEventListener("click", _hideCompModal);
+  document.getElementById("comp-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "comp-modal") _hideCompModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !document.getElementById("comp-modal").classList.contains("hidden")) {
+      _hideCompModal();
+    }
+  });
 
   // Request-versioning: only the most recent in-flight validation result wins.
   // Prevents fast clicks from settling on a stale response.
@@ -1842,9 +2032,40 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     }
   }
 
+  // Cached sizing per stack (totals come from the manifest's resource_profiles).
+  // We refresh once per stack id, then re-render whenever the cart changes.
+  state._sizingCache = state._sizingCache || {};
+  async function _ensureSizing(stackId) {
+    if (state._sizingCache[stackId]) return state._sizingCache[stackId];
+    try {
+      const r = await api(`/api/stacks/${encodeURIComponent(stackId)}/sizing`);
+      state._sizingCache[stackId] = r;
+      return r;
+    } catch (_) { return null; }
+  }
+  async function renderStackSizing() {
+    // Stack id comes from the udp-recommended set; for v0.4 there's only one.
+    const stackId = state.catalog?.recommended_sets?.['udp-recommended']?.stack_id || 'udp-local-v0.2';
+    const wrap = document.getElementById("cart-sizing");
+    if (!wrap) return;
+    if (!state.cart || state.cart.length === 0) { wrap.classList.add("hidden"); return; }
+    const sizing = await _ensureSizing(stackId);
+    if (!sizing || !sizing.tiers?.recommended) { wrap.classList.add("hidden"); return; }
+    const t = sizing.tiers.recommended.totals || {};
+    wrap.classList.remove("hidden");
+    document.getElementById("sizing-cpu").textContent  = t.cpu  ?? "—";
+    document.getElementById("sizing-ram").textContent  = t.ram_gb  ?? "—";
+    document.getElementById("sizing-disk").textContent = t.disk_gb ?? "—";
+    const hint = (sizing.tiers.recommended.cheapest_overall)
+      ? `Fits cheapest VPS: ${sizing.tiers.recommended.cheapest_overall.provider} ${sizing.tiers.recommended.cheapest_overall.plan} (~$${sizing.tiers.recommended.cheapest_overall.monthly_usd}/mo)`
+      : `Full UDP stack — minimal tier exists for smaller VPSes.`;
+    document.getElementById("sizing-hint").textContent = hint;
+  }
+
   function renderCartSidebar(v) {
     document.getElementById("cart-score").textContent = "0";
     animateCount(document.getElementById("cart-score"), 0, v.score, 600);
+    renderStackSizing();  // fire-and-forget; safe even if it fails
     const bar = document.getElementById("cart-score-bar");
     bar.style.width = `${v.score}%`;
     bar.classList.remove("good", "mid", "bad");
@@ -2869,6 +3090,794 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       list.appendChild(div);
     });
   }
+
+  // ============================================================
+  //                      V0.4 UI CARDS (additive)
+  //  Backups · Upgrades · Tables · Ingest · Security · Settings
+  // ============================================================
+
+  // ----- collapsible card helper -----
+  // Lazy-loads on first expand; subsequent expands don't refetch unless user
+  // clicks the card's own Refresh button.
+  const V04_LOADED = {};
+  function toggleCard(headEl, key) {
+    const card = headEl.closest("[data-card]") || headEl.parentElement;
+    const body = card.querySelector(".card-body");
+    const chev = headEl.querySelector(".chevron");
+    if (!body) return;
+    const willOpen = body.classList.contains("hidden");
+    body.classList.toggle("hidden");
+    if (chev) chev.classList.toggle("open", willOpen);
+    if (willOpen && key && !V04_LOADED[key]) {
+      V04_LOADED[key] = true;
+      const loader = V04_LOADERS[key];
+      if (typeof loader === "function") {
+        try { loader(); } catch (e) { console.error("v04 loader", key, e); }
+      }
+    }
+  }
+
+  // ----- confirm modal helper (returns Promise<boolean>) -----
+  function v04Confirm(opts) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "v04-modal";
+      overlay.innerHTML = `
+        <div class="glass-strong p-6 max-w-md w-full" style="border-radius: 18px;">
+          <h3 class="display-3 mb-2">${esc(opts.title || "Confirm")}</h3>
+          <div class="text-sm text-slate-300 mb-5">${opts.bodyHtml || esc(opts.body || "")}</div>
+          <div class="flex items-center justify-end gap-2">
+            <button class="btn-ghost text-sm" data-act="cancel">Cancel</button>
+            <button class="text-sm px-4 py-2 rounded-lg font-semibold" style="background: rgba(244,63,94,0.18); border: 1px solid rgba(244,63,94,0.5); color: #fda4af;" data-act="ok">${esc(opts.okLabel || "Confirm")}</button>
+          </div>
+        </div>`;
+      function close(v) { document.body.removeChild(overlay); resolve(v); }
+      overlay.addEventListener("click", (e) => {
+        const act = e.target?.dataset?.act;
+        if (e.target === overlay) close(false);
+        else if (act === "cancel") close(false);
+        else if (act === "ok") close(true);
+      });
+      document.body.appendChild(overlay);
+    });
+  }
+
+  // ----- formatters -----
+  function fmtBytes(n) {
+    if (n == null || isNaN(n)) return "—";
+    const u = ["B","KB","MB","GB","TB"]; let i = 0; let v = +n;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(v < 10 ? 1 : 0)} ${u[i]}`;
+  }
+  function fmtDate(s) {
+    if (!s) return "—";
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return String(s);
+    return d.toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z");
+  }
+
+  // ============== 1. BACKUPS ==============
+  async function loadBackups() {
+    const root = document.getElementById("backups-list");
+    const errEl = document.getElementById("backups-error");
+    errEl.classList.add("hidden");
+    if (!state.installId) {
+      root.innerHTML = `<div class="v04-empty">No install selected.</div>`;
+      return;
+    }
+    root.innerHTML = `<div class="v04-empty">Loading backups…</div>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/backups`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const items = data.data?.backups || data.backups || data.data || [];
+      if (!items.length) {
+        root.innerHTML = `<div class="v04-empty">No backups yet — create your first one above.</div>`;
+        return;
+      }
+      const rows = items.map((b) => `
+        <tr>
+          <td class="mono text-xs">${esc(fmtDate(b.created_at))}</td>
+          <td><span class="v04-badge ${b.kind === "full" ? "warn" : "info"}">${esc(b.kind || "—")}</span></td>
+          <td class="mono text-xs">${esc(fmtBytes(b.size_bytes ?? b.size))}</td>
+          <td class="mono text-xs text-slate-500">${esc(b.backup_id || b.id || "")}</td>
+          <td>
+            <button class="btn-ghost text-xs mr-1" data-act="restore" data-bid="${esc(b.backup_id || b.id)}" data-kind="${esc(b.kind || "")}">Restore</button>
+            <button class="btn-ghost text-xs" style="border-color: rgba(244,63,94,0.4); color: #fca5a5;" data-act="delete" data-bid="${esc(b.backup_id || b.id)}">Delete</button>
+          </td>
+        </tr>`).join("");
+      root.innerHTML = `
+        <div class="overflow-x-auto">
+          <table class="v04-table">
+            <thead><tr><th>created</th><th>kind</th><th>size</th><th>id</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+      root.querySelectorAll("button[data-act]").forEach((btn) => {
+        btn.addEventListener("click", () => handleBackupAction(btn.dataset.act, btn.dataset.bid, btn.dataset.kind));
+      });
+    } catch (e) {
+      root.innerHTML = `<div class="v04-empty">Couldn't load backups.</div>`;
+      errEl.textContent = `Error: ${e.message}`;
+      errEl.classList.remove("hidden");
+    }
+  }
+  async function handleBackupAction(act, bid, kind) {
+    if (act === "restore") {
+      const ok = await v04Confirm({
+        title: "Restore this backup?",
+        bodyHtml: `<p class="mb-2">Restoring will <strong class="text-amber-300">restart the stack</strong>${kind === "full" ? ` and <strong class="text-rose-300">overwrite current data</strong>` : ` and overwrite metadata`}.</p><p>Backup ID: <span class="mono text-cyan-300">${esc(bid)}</span></p>`,
+        okLabel: "Restore",
+      });
+      if (!ok) return;
+      try {
+        const r = await api(`/api/backups/${bid}/restore`, { method: "POST" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        showToast("Restore started", "info");
+        setTimeout(loadBackups, 800);
+      } catch (e) {
+        showToast(`Restore failed: ${e.message}`);
+      }
+    } else if (act === "delete") {
+      const ok = await v04Confirm({
+        title: "Delete this backup?",
+        bodyHtml: `<p>Backup <span class="mono text-cyan-300">${esc(bid)}</span> will be removed permanently.</p>`,
+        okLabel: "Delete",
+      });
+      if (!ok) return;
+      try {
+        const r = await api(`/api/backups/${bid}`, { method: "DELETE" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        showToast("Backup deleted", "info");
+        loadBackups();
+      } catch (e) {
+        showToast(`Delete failed: ${e.message}`);
+      }
+    }
+  }
+  function bindBackupsCard() {
+    const c = document.getElementById("btn-create-backup");
+    const r = document.getElementById("btn-refresh-backups");
+    if (!c || c._bound) return;
+    c._bound = true;
+    c.addEventListener("click", async () => {
+      if (!state.installId) { showToast("No install selected"); return; }
+      const kind = document.getElementById("backup-kind-select").value;
+      c.disabled = true; c.textContent = "Creating…";
+      try {
+        const resp = await api(`/api/installs/${state.installId}/backups`, {
+          method: "POST", body: JSON.stringify({ kind }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        showToast("Backup created", "info");
+        loadBackups();
+      } catch (e) {
+        showToast(`Backup failed: ${e.message}`);
+      } finally {
+        c.disabled = false; c.textContent = "Create backup";
+      }
+    });
+    r.addEventListener("click", loadBackups);
+  }
+
+  // ============== 2. UPGRADES ==============
+  async function loadUpgrades() {
+    const root = document.getElementById("upgrades-list");
+    const errEl = document.getElementById("upgrades-error");
+    const badge = document.getElementById("upgrades-count-badge");
+    errEl.classList.add("hidden");
+    const stackId = state.installRecord?.stack_id || state.selected?.id;
+    if (!stackId) {
+      root.innerHTML = `<div class="v04-empty">No stack selected.</div>`;
+      return;
+    }
+    root.innerHTML = `<div class="v04-empty">Loading candidates…</div>`;
+    try {
+      const r = await api(`/api/stacks/${stackId}/upgrades`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const items = data.data?.candidates || data.candidates || data.data || [];
+      if (!items.length) {
+        root.innerHTML = `<div class="v04-empty">You're up to date — no upgrade candidates.</div>`;
+        badge.classList.add("hidden");
+        return;
+      }
+      badge.textContent = String(items.length);
+      badge.classList.remove("hidden");
+      const rows = items.map((c, idx) => `
+        <tr data-idx="${idx}">
+          <td><span class="mono text-cyan-300">${esc(c.component || c.name || "—")}</span></td>
+          <td class="mono text-xs">${esc(c.current || "—")}</td>
+          <td class="mono text-xs text-emerald-300">${esc(c.proposed || c.target || "—")}</td>
+          <td class="text-xs text-slate-400">${esc(c.source || "—")}</td>
+          <td>
+            <button class="btn-ghost text-xs" data-act="sim" data-comp="${esc(c.component || c.name || "")}" data-prop="${esc(c.proposed || c.target || "")}">Simulate</button>
+            <button class="btn-ghost text-xs ml-1" disabled title="Execute coming in v0.4.1" style="opacity:0.4; cursor: not-allowed;">Execute</button>
+          </td>
+        </tr>
+        <tr><td colspan="5"><div class="sim-result text-xs mono px-3 py-1 text-slate-400"></div></td></tr>`).join("");
+      root.innerHTML = `
+        <div class="overflow-x-auto">
+          <table class="v04-table">
+            <thead><tr><th>component</th><th>current</th><th>proposed</th><th>source</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+      root.querySelectorAll("button[data-act='sim']").forEach((btn) => {
+        btn.addEventListener("click", () => handleSimulate(btn, stackId));
+      });
+    } catch (e) {
+      root.innerHTML = `<div class="v04-empty">Couldn't load upgrades.</div>`;
+      errEl.textContent = `Error: ${e.message}`;
+      errEl.classList.remove("hidden");
+    }
+  }
+  async function handleSimulate(btn, stackId) {
+    const resultCell = btn.closest("tr").nextElementSibling?.querySelector(".sim-result");
+    if (resultCell) resultCell.innerHTML = `<span class="text-slate-500">Simulating…</span>`;
+    btn.disabled = true;
+    try {
+      const proposed = { [btn.dataset.comp]: btn.dataset.prop };
+      const r = await api(`/api/stacks/${stackId}/upgrades/simulate`, {
+        method: "POST", body: JSON.stringify({ proposed }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const verdict = (data.data?.verdict || data.verdict || "unknown").toString();
+      const reason = data.data?.reason || data.reason || "";
+      const cls = verdict === "pass" ? "ok" : verdict === "fail" ? "err" : "warn";
+      if (resultCell) {
+        resultCell.innerHTML = `<span class="v04-badge ${cls}">${esc(verdict)}</span> ${esc(reason)}`;
+      }
+    } catch (e) {
+      if (resultCell) resultCell.innerHTML = `<span class="v04-badge err">error</span> ${esc(e.message)}`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  function bindUpgradesCard() {
+    const r = document.getElementById("btn-refresh-upgrades");
+    if (!r || r._bound) return;
+    r._bound = true;
+    r.addEventListener("click", loadUpgrades);
+  }
+
+  // ============== 3. TABLES EXPLORER ==============
+  async function loadTables() {
+    const tree = document.getElementById("tables-tree");
+    const errEl = document.getElementById("tables-error");
+    errEl.classList.add("hidden");
+    if (!state.installId) {
+      tree.innerHTML = `<div class="v04-empty">No install selected.</div>`;
+      return;
+    }
+    tree.innerHTML = `<div class="v04-empty">Loading…</div>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/tables`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const ns = data.data?.namespaces || data.namespaces || [];
+      if (!ns.length) {
+        tree.innerHTML = `<div class="v04-empty">No tables found. Create some via the SQL editor or Upload data.</div>`;
+        return;
+      }
+      const html = ns.map((n) => {
+        const tbls = (n.tables || []).map((t) => `
+          <div class="tree-row tree-tbl" data-ns="${esc(n.namespace || n.name)}" data-tbl="${esc(t.name || t)}">
+            <span class="text-slate-500">·</span><span>${esc(t.name || t)}</span>
+          </div>`).join("");
+        return `
+          <div>
+            <div class="tree-row tree-ns"><span class="text-cyan-400">▸</span>${esc(n.namespace || n.name)}</div>
+            ${tbls || `<div class="tree-tbl text-slate-500 text-xs px-2 py-1">(no tables)</div>`}
+          </div>`;
+      }).join("");
+      tree.innerHTML = html;
+      tree.querySelectorAll(".tree-row.tree-tbl").forEach((row) => {
+        row.addEventListener("click", () => {
+          tree.querySelectorAll(".tree-row").forEach((r) => r.classList.remove("active"));
+          row.classList.add("active");
+          loadTableDetail(row.dataset.ns, row.dataset.tbl);
+        });
+      });
+    } catch (e) {
+      tree.innerHTML = `<div class="v04-empty">Couldn't load tables.</div>`;
+      errEl.textContent = `Error: ${e.message}`;
+      errEl.classList.remove("hidden");
+    }
+  }
+  async function loadTableDetail(ns, name) {
+    const root = document.getElementById("tables-detail");
+    root.innerHTML = `<div class="v04-empty">Loading ${esc(ns)}.${esc(name)}…</div>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/tables/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const d = data.data || data;
+      const schema = d.schema || d.columns || [];
+      const rowCount = d.row_count ?? d.rows ?? null;
+      const path = d.storage_path || d.location || "—";
+      const schemaRows = schema.map((c) => `
+        <tr>
+          <td class="mono text-cyan-300">${esc(c.name || c[0])}</td>
+          <td class="mono text-xs text-slate-300">${esc(c.type || c[1] || "")}</td>
+          <td class="text-xs text-slate-500">${c.nullable === false ? "NOT NULL" : ""}</td>
+        </tr>`).join("");
+      root.innerHTML = `
+        <div class="mb-3">
+          <div class="text-xs text-slate-500 uppercase tracking-wider">Table</div>
+          <div class="font-display text-xl text-slate-100">${esc(ns)}.${esc(name)}</div>
+        </div>
+        <div class="grid grid-cols-2 gap-3 mb-4 text-xs">
+          <div class="glass p-3"><div class="text-slate-500 uppercase tracking-wider mb-1">Row count</div><div class="mono text-cyan-300">${rowCount != null ? esc(String(rowCount)) : "—"}</div><div class="text-slate-500 text-[10px] mt-1">approx (from snapshot)</div></div>
+          <div class="glass p-3"><div class="text-slate-500 uppercase tracking-wider mb-1">Storage path</div><div class="mono text-slate-300 break-all">${esc(path)}</div></div>
+        </div>
+        <div class="text-xs text-slate-400 mono mb-2">schema</div>
+        <div class="overflow-x-auto">
+          <table class="v04-table">
+            <thead><tr><th>column</th><th>type</th><th></th></tr></thead>
+            <tbody>${schemaRows || `<tr><td colspan="3" class="text-slate-500">No columns reported.</td></tr>`}</tbody>
+          </table>
+        </div>`;
+    } catch (e) {
+      root.innerHTML = `<div class="v04-empty">Couldn't load table detail: ${esc(e.message)}</div>`;
+    }
+  }
+  function bindTablesCard() {
+    const r = document.getElementById("btn-refresh-tables");
+    if (!r || r._bound) return;
+    r._bound = true;
+    r.addEventListener("click", loadTables);
+  }
+
+  // ============== 4. INGEST ==============
+  const INGEST_STATE = { file: null, uploadId: null, schema: [], jobId: null, pollTimer: null };
+
+  function bindIngestCard() {
+    const dz = document.getElementById("ingest-dropzone");
+    const inp = document.getElementById("ingest-file-input");
+    if (!dz || dz._bound) return;
+    dz._bound = true;
+    dz.addEventListener("click", () => inp.click());
+    dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+    dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+    dz.addEventListener("drop", (e) => {
+      e.preventDefault(); dz.classList.remove("drag");
+      const f = e.dataTransfer?.files?.[0];
+      if (f) handleIngestFile(f);
+    });
+    inp.addEventListener("change", () => {
+      const f = inp.files?.[0];
+      if (f) handleIngestFile(f);
+    });
+    document.getElementById("btn-ingest-reset").addEventListener("click", resetIngest);
+    document.getElementById("btn-ingest-start").addEventListener("click", startIngestJob);
+  }
+  function resetIngest() {
+    INGEST_STATE.file = null; INGEST_STATE.uploadId = null; INGEST_STATE.schema = [];
+    INGEST_STATE.jobId = null;
+    if (INGEST_STATE.pollTimer) { clearInterval(INGEST_STATE.pollTimer); INGEST_STATE.pollTimer = null; }
+    document.getElementById("ingest-preview").classList.add("hidden");
+    document.getElementById("ingest-file-input").value = "";
+    document.getElementById("ingest-job-status").textContent = "";
+  }
+  async function handleIngestFile(file) {
+    if (!state.installId) { showToast("No install selected"); return; }
+    if (!/\.csv$/i.test(file.name)) { showToast("CSV only for v0.4"); return; }
+    INGEST_STATE.file = file;
+    document.getElementById("ingest-filename").textContent = file.name;
+    document.getElementById("ingest-filesize").textContent = fmtBytes(file.size);
+    document.getElementById("ingest-upload-id").textContent = "uploading…";
+    document.getElementById("ingest-preview").classList.remove("hidden");
+    const errEl = document.getElementById("ingest-error");
+    errEl.classList.add("hidden");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const tok = authToken();
+      const headers = {};
+      if (tok) headers["Authorization"] = "Bearer " + tok;
+      const r = await fetch(`/api/installs/${state.installId}/uploads`, {
+        method: "POST", body: fd, headers,
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const d = data.data || data;
+      INGEST_STATE.uploadId = d.upload_id || d.id || "";
+      INGEST_STATE.schema = d.schema || d.columns || [];
+      document.getElementById("ingest-upload-id").textContent = `upload_id: ${INGEST_STATE.uploadId}`;
+      renderIngestSchema();
+      // Suggest defaults
+      const base = file.name.replace(/\.csv$/i, "").replace(/[^a-z0-9_]/gi, "_").toLowerCase();
+      document.getElementById("ingest-target-tbl").value = base;
+      document.getElementById("ingest-target-db").value = "app_analytics";
+    } catch (e) {
+      errEl.textContent = `Upload failed: ${e.message}`;
+      errEl.classList.remove("hidden");
+      document.getElementById("ingest-upload-id").textContent = "upload failed";
+    }
+  }
+  function renderIngestSchema() {
+    const root = document.getElementById("ingest-schema-table");
+    if (!INGEST_STATE.schema.length) {
+      root.innerHTML = `<div class="text-slate-500 text-xs">No schema inferred.</div>`;
+      return;
+    }
+    const types = ["STRING", "INT", "BIGINT", "DOUBLE", "BOOLEAN", "DATE", "TIMESTAMP"];
+    const rows = INGEST_STATE.schema.map((c, idx) => {
+      const cn = c.name || c[0] || `col_${idx}`;
+      const ct = (c.type || c[1] || "STRING").toUpperCase();
+      const opts = types.map((t) => `<option ${t === ct ? "selected" : ""} value="${t}">${t}</option>`).join("");
+      if (!types.includes(ct)) {
+        // Preserve unknown inferred type as first option
+      }
+      return `<tr>
+        <td class="mono text-cyan-300">${esc(cn)}</td>
+        <td><select data-idx="${idx}" class="ingest-type-sel input mono text-xs" style="padding: 4px 8px;">${opts}</select></td>
+      </tr>`;
+    }).join("");
+    root.innerHTML = `
+      <table class="v04-table">
+        <thead><tr><th>column</th><th>type</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    root.querySelectorAll(".ingest-type-sel").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const i = +sel.dataset.idx;
+        if (INGEST_STATE.schema[i]) {
+          if (typeof INGEST_STATE.schema[i] === "object") INGEST_STATE.schema[i].type = sel.value;
+          else INGEST_STATE.schema[i] = [INGEST_STATE.schema[i][0], sel.value];
+        }
+      });
+    });
+  }
+  async function startIngestJob() {
+    const errEl = document.getElementById("ingest-error");
+    errEl.classList.add("hidden");
+    if (!INGEST_STATE.uploadId) { showToast("Upload a file first"); return; }
+    const db = document.getElementById("ingest-target-db").value.trim();
+    const tbl = document.getElementById("ingest-target-tbl").value.trim();
+    if (!db || !tbl) { showToast("Database and table required"); return; }
+    const btn = document.getElementById("btn-ingest-start");
+    btn.disabled = true; btn.textContent = "Starting…";
+    try {
+      const payload = {
+        upload_id: INGEST_STATE.uploadId,
+        target_database: db,
+        target_table: tbl,
+        schema: INGEST_STATE.schema,
+      };
+      const r = await api(`/api/installs/${state.installId}/ingest`, {
+        method: "POST", body: JSON.stringify(payload),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const d = data.data || data;
+      INGEST_STATE.jobId = d.job_id || d.id;
+      document.getElementById("ingest-job-status").textContent = `job ${INGEST_STATE.jobId} queued…`;
+      pollIngestJob();
+    } catch (e) {
+      errEl.textContent = `Ingest failed: ${e.message}`;
+      errEl.classList.remove("hidden");
+    } finally {
+      btn.disabled = false; btn.textContent = "Ingest";
+    }
+  }
+  function pollIngestJob() {
+    if (INGEST_STATE.pollTimer) clearInterval(INGEST_STATE.pollTimer);
+    INGEST_STATE.pollTimer = setInterval(async () => {
+      if (!INGEST_STATE.jobId) return;
+      try {
+        const r = await api(`/api/installs/${state.installId}/ingest/${INGEST_STATE.jobId}`, { silent: true });
+        if (!r.ok) return;
+        const data = await r.json();
+        const d = data.data || data;
+        const stateStr = d.state || d.status || "unknown";
+        const msg = d.message || d.error || "";
+        const statusEl = document.getElementById("ingest-job-status");
+        const cls = stateStr === "succeeded" ? "ok" : stateStr === "failed" ? "warn" : "info";
+        statusEl.innerHTML = `<span class="v04-badge ${cls}">${esc(stateStr)}</span> ${esc(msg)}`;
+        if (stateStr === "succeeded" || stateStr === "failed") {
+          clearInterval(INGEST_STATE.pollTimer);
+          INGEST_STATE.pollTimer = null;
+          if (stateStr === "succeeded") showToast("Ingest complete", "info");
+        }
+      } catch (e) {
+        // silent
+      }
+    }, 2000);
+  }
+  function loadIngest() {
+    // No initial load — driven by user action
+    bindIngestCard();
+  }
+
+  // ============== 5. SECURITY & TLS ==============
+  function bindSecurityCard() {
+    const pwd = document.getElementById("sec-new-pwd");
+    if (!pwd || pwd._bound) return;
+    pwd._bound = true;
+    let pwdTimer = null;
+    pwd.addEventListener("input", () => {
+      clearTimeout(pwdTimer);
+      pwdTimer = setTimeout(updatePwdStrength, 300);
+    });
+    document.getElementById("btn-toggle-pwd").addEventListener("click", () => {
+      const cur = pwd.type;
+      pwd.type = cur === "password" ? "text" : "password";
+      document.getElementById("btn-toggle-pwd").textContent = pwd.type === "password" ? "Show" : "Hide";
+    });
+    document.getElementById("sec-svc-select").addEventListener("change", updateRotateHint);
+    document.getElementById("btn-rotate-pwd").addEventListener("click", rotatePassword);
+    document.getElementById("btn-tls-generate").addEventListener("click", generateTls);
+    updateRotateHint();
+  }
+  function updateRotateHint() {
+    const svc = document.getElementById("sec-svc-select").value;
+    const hint = document.getElementById("sec-rotate-hint");
+    if (svc === "minio") {
+      hint.innerHTML = `Service restart required after rotation: <span class="mono text-cyan-300">docker compose up -d --no-deps minio</span>`;
+    } else {
+      hint.innerHTML = `StarRocks requires SQL paste-in. After rotation, the response will include SQL to run in the SQL editor.`;
+    }
+  }
+  async function updatePwdStrength() {
+    const pwd = document.getElementById("sec-new-pwd").value;
+    const fill = document.getElementById("sec-pwd-fill");
+    const label = document.getElementById("sec-pwd-label");
+    if (!pwd) {
+      fill.style.width = "0%"; fill.style.background = "#64748b";
+      label.textContent = "strength: —";
+      return;
+    }
+    try {
+      const r = await api(`/api/installs/${state.installId}/security/password-strength`, {
+        method: "POST", body: JSON.stringify({ password: pwd }), silent: true,
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const d = data.data || data;
+      const score = Math.max(0, Math.min(4, +d.score ?? 0));
+      const label2 = d.strength || d.label || ["very weak","weak","fair","strong","very strong"][score];
+      const colors = ["#f43f5e","#f59e0b","#fbbf24","#34d399","#22d3ee"];
+      fill.style.width = `${((score+1)/5)*100}%`;
+      fill.style.background = colors[score];
+      label.textContent = `strength: ${label2}`;
+    } catch (e) {
+      label.textContent = "strength: (check failed)";
+    }
+  }
+  async function rotatePassword() {
+    const svc = document.getElementById("sec-svc-select").value;
+    const newPwd = document.getElementById("sec-new-pwd").value;
+    const result = document.getElementById("sec-rotate-result");
+    if (!newPwd) { showToast("Enter a new password"); return; }
+    const ok = await v04Confirm({
+      title: `Rotate ${svc} password?`,
+      bodyHtml: `<p class="mb-2">This will rotate the credential for <span class="mono text-cyan-300">${esc(svc)}</span>.</p>${svc === "minio" ? `<p class="text-amber-200">A service restart is required after rotation.</p>` : `<p class="text-amber-200">You'll need to paste returned SQL into the SQL editor.</p>`}`,
+      okLabel: "Rotate",
+    });
+    if (!ok) return;
+    result.innerHTML = `<span class="text-slate-500">Rotating…</span>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/security/rotate-password`, {
+        method: "POST",
+        body: JSON.stringify({ service: svc, new_password: newPwd }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const d = data.data || data;
+      showToast("Password rotated", "info");
+      let html = `<span class="v04-badge ok">rotated</span> ${esc(d.message || "")}`;
+      if (d.sql) {
+        html += `<div class="mt-2 text-xs text-slate-400 mono">Paste in SQL editor:</div><pre class="terminal p-3 mt-1 text-xs">${esc(d.sql)}</pre>`;
+      }
+      if (d.restart_command || svc === "minio") {
+        html += `<div class="mt-2 text-xs text-amber-200/80">Run: <span class="mono text-amber-200">${esc(d.restart_command || "docker compose up -d --no-deps minio")}</span></div>`;
+      }
+      result.innerHTML = html;
+      document.getElementById("sec-new-pwd").value = "";
+      updatePwdStrength();
+    } catch (e) {
+      result.innerHTML = `<span class="v04-badge err">failed</span> ${esc(e.message)}`;
+    }
+  }
+
+  async function loadTlsCerts() {
+    const root = document.getElementById("tls-list");
+    const errEl = document.getElementById("tls-error");
+    errEl.classList.add("hidden");
+    if (!state.installId) {
+      root.innerHTML = `<div class="v04-empty">No install selected.</div>`;
+      return;
+    }
+    root.innerHTML = `<div class="v04-empty">Loading certificates…</div>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/tls/certs`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const items = data.data?.certs || data.certs || data.data || [];
+      if (!items.length) {
+        root.innerHTML = `<div class="v04-empty">No TLS certificates yet — generate one above.</div>`;
+        return;
+      }
+      const rows = items.map((c) => `
+        <tr>
+          <td class="mono text-xs text-cyan-300">${esc(c.cert_id || c.id || "")}</td>
+          <td class="mono text-xs">${esc(c.common_name || c.cn || c.domain || "—")}</td>
+          <td class="mono text-xs">${esc(fmtDate(c.expires_at || c.not_after))}</td>
+          <td class="mono text-[10px] text-slate-500 break-all" style="max-width: 200px;">${esc((c.sha256_fingerprint || c.fingerprint || "").slice(0, 32))}…</td>
+          <td>
+            <button class="btn-ghost text-xs" style="border-color: rgba(244,63,94,0.4); color: #fca5a5;" data-act="del-cert" data-cid="${esc(c.cert_id || c.id)}">Delete</button>
+          </td>
+        </tr>`).join("");
+      root.innerHTML = `
+        <div class="overflow-x-auto">
+          <table class="v04-table">
+            <thead><tr><th>id</th><th>common name</th><th>expires</th><th>sha256</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+      root.querySelectorAll("button[data-act='del-cert']").forEach((btn) => {
+        btn.addEventListener("click", () => deleteTlsCert(btn.dataset.cid));
+      });
+    } catch (e) {
+      root.innerHTML = `<div class="v04-empty">Couldn't load certificates.</div>`;
+      errEl.textContent = `Error: ${e.message}`;
+      errEl.classList.remove("hidden");
+    }
+  }
+  async function deleteTlsCert(cid) {
+    const ok = await v04Confirm({
+      title: "Delete this certificate?",
+      bodyHtml: `<p>Certificate <span class="mono text-cyan-300">${esc(cid)}</span> will be removed.</p>`,
+      okLabel: "Delete",
+    });
+    if (!ok) return;
+    try {
+      const r = await api(`/api/tls/certs/${cid}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      showToast("Certificate deleted", "info");
+      loadTlsCerts();
+    } catch (e) {
+      showToast(`Delete failed: ${e.message}`);
+    }
+  }
+  async function generateTls() {
+    const domain = document.getElementById("tls-domain").value.trim();
+    const valid = parseInt(document.getElementById("tls-valid-days").value, 10) || 365;
+    const keySize = parseInt(document.getElementById("tls-key-size").value, 10) || 4096;
+    const result = document.getElementById("tls-gen-result");
+    if (!domain) { showToast("Domain required"); return; }
+    result.innerHTML = `<span class="text-slate-500">Generating…</span>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/tls/generate`, {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "self_signed", domain, email: "", valid_days: valid, key_size: keySize,
+        }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const d = data.data || data;
+      result.innerHTML = `<span class="v04-badge ok">generated</span> id: <span class="mono text-cyan-300">${esc(d.cert_id || d.id || "")}</span>`;
+      showToast("Certificate generated", "info");
+      loadTlsCerts();
+    } catch (e) {
+      result.innerHTML = `<span class="v04-badge err">failed</span> ${esc(e.message)}`;
+    }
+  }
+  function loadSecurity() {
+    bindSecurityCard();
+    loadTlsCerts();
+  }
+
+  // ============== 6. SETTINGS / NOTIFICATIONS ==============
+  async function loadNotifications() {
+    const root = document.getElementById("notif-config-view");
+    const errEl = document.getElementById("notif-error");
+    errEl.classList.add("hidden");
+    root.innerHTML = `<div class="v04-empty">Loading notification config…</div>`;
+    try {
+      const r = await api(`/api/notifications/config`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const d = data.data || data;
+      const channels = d.channels || d;
+      const keys = Object.keys(channels || {});
+      if (!keys.length) {
+        root.innerHTML = `<div class="v04-empty">No notification channels configured. See docs/examples/notifications.yaml.</div>`;
+        return;
+      }
+      const cards = keys.map((k) => {
+        const ch = channels[k] || {};
+        const enabled = ch.enabled !== false;
+        // Scrub sensitive fields client-side as a defense-in-depth (server is expected to scrub too)
+        const safe = {};
+        Object.entries(ch).forEach(([key, val]) => {
+          if (/secret|token|password|key/i.test(key)) safe[key] = "•••• (scrubbed)";
+          else safe[key] = val;
+        });
+        return `
+          <div class="glass-strong p-4 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-3">
+                <span class="font-display font-semibold text-slate-100">${esc(k)}</span>
+                <span class="v04-badge ${enabled ? "ok" : "warn"}">${enabled ? "enabled" : "disabled"}</span>
+              </div>
+              <button class="btn-ghost text-xs" data-act="test-notif" data-channel="${esc(k)}">Send test alert</button>
+            </div>
+            <pre class="mono text-xs text-slate-400 overflow-x-auto">${esc(JSON.stringify(safe, null, 2))}</pre>
+            <div class="text-xs mt-2 mono notif-test-result" data-channel="${esc(k)}"></div>
+          </div>`;
+      }).join("");
+      root.innerHTML = cards;
+      root.querySelectorAll("button[data-act='test-notif']").forEach((btn) => {
+        btn.addEventListener("click", () => sendTestNotif(btn.dataset.channel, btn));
+      });
+    } catch (e) {
+      root.innerHTML = `<div class="v04-empty">Couldn't load config. See docs/examples/notifications.yaml.</div>`;
+      errEl.textContent = `Error: ${e.message}`;
+      errEl.classList.remove("hidden");
+    }
+  }
+  async function sendTestNotif(channel, btn) {
+    const out = document.querySelector(`.notif-test-result[data-channel="${channel}"]`);
+    btn.disabled = true;
+    if (out) out.innerHTML = `<span class="text-slate-500">Sending…</span>`;
+    try {
+      const r = await api(`/api/notifications/test`, {
+        method: "POST", body: JSON.stringify({ channel }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const d = data.data || data;
+      const okFlag = d.success !== false && (d.ok !== false);
+      const cls = okFlag ? "ok" : "err";
+      const msg = d.message || (okFlag ? "delivered" : "failed");
+      if (out) out.innerHTML = `<span class="v04-badge ${cls}">${esc(okFlag ? "sent" : "failed")}</span> ${esc(msg)}`;
+    } catch (e) {
+      if (out) out.innerHTML = `<span class="v04-badge err">error</span> ${esc(e.message)}`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ----- loaders registry (used by toggleCard) -----
+  const V04_LOADERS = {
+    backups:  () => { bindBackupsCard(); loadBackups(); },
+    upgrades: () => { bindUpgradesCard(); loadUpgrades(); },
+    tables:   () => { bindTablesCard(); loadTables(); },
+    ingest:   () => { loadIngest(); },
+    security: () => { loadSecurity(); },
+  };
+
+  // ----- hook into navigate() so V04_LOADED resets per install + settings loads notif -----
+  const _v04OrigNavigate = window.navigate || navigate;
+  window.navigate = function(screen) {
+    _v04OrigNavigate(screen);
+    if (screen === "settings") {
+      // Re-bind refresh button (idempotent)
+      const r = document.getElementById("btn-refresh-notif");
+      if (r && !r._bound) { r._bound = true; r.addEventListener("click", loadNotifications); }
+      loadNotifications();
+    }
+    if (screen === "success") {
+      // Reset lazy-load cache so a re-entry to success doesn't show stale data
+      // for cards the user might re-expand. (Backups card is expanded by default,
+      // so trigger its initial load now.)
+      Object.keys(V04_LOADED).forEach((k) => delete V04_LOADED[k]);
+      // Backups card is open by default — kick it off immediately.
+      // Use setTimeout to let showSuccess() finish populating state first.
+      setTimeout(() => {
+        if (!V04_LOADED.backups) {
+          V04_LOADED.backups = true;
+          bindBackupsCard();
+          loadBackups();
+        }
+      }, 100);
+    }
+  };
 
   // boot
   navigate("welcome");
