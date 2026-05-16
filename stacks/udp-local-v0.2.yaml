@@ -1,0 +1,102 @@
+id: udp-local-v0.2
+name: Unified Data Plug — Local Lakehouse
+version: "0.2"
+mode: docker-compose
+maturity: pilot
+description: >
+  Plug-and-play open lakehouse starter. MinIO object storage + Iceberg REST
+  catalog + Spark processing + StarRocks analytics. Runs entirely on a single
+  Docker host. Bootstraps demo raw/curated/analytics tables and verifies with
+  smoke tests.
+
+repository:
+  url: https://github.com/finalertserats-prog/Unified-Data-Plug.git
+  ref: main
+  install_dir: udp
+
+components:
+  - id: minio
+    name: MinIO
+    category: object_storage
+    version: RELEASE.2025-04-22T22-12-26Z
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    ports: [9000, 9001]
+  - id: iceberg-rest
+    name: Iceberg REST Catalog
+    category: catalog
+    version: "1.6.0"
+    image: tabulario/iceberg-rest:1.6.0
+    ports: [8181]
+  - id: spark
+    name: Spark + Iceberg
+    category: processing
+    version: 3.5.1_1.5.2
+    image: tabulario/spark-iceberg:3.5.1_1.5.2
+    ports: [8888, 4040]
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    category: serving
+    version: 3.3-latest
+    image: starrocks/fe-ubuntu:3.3-latest
+    ports: [8030, 9020, 9030]
+  - id: starrocks-be
+    name: StarRocks Backend
+    category: serving
+    version: 3.3-latest
+    image: starrocks/be-ubuntu:3.3-latest
+    ports: [8040, 8060, 9050, 9060]
+
+requirements:
+  os: [linux, windows-docker-desktop, darwin]
+  docker: required
+  docker_compose: required
+  bash: required
+  minimum_ram_gb: 8
+  recommended_ram_gb: 16
+  minimum_cpu_cores: 4
+  recommended_cpu_cores: 8
+  minimum_disk_gb: 50
+  recommended_disk_gb: 100
+
+ports:
+  required: [9000, 9001, 8181, 8888, 8030, 9030]
+  optional: [4040, 9020, 8040, 8060, 9050, 9060]
+
+env_defaults:
+  UDP_PROJECT_NAME: unified-data-plug
+  UDP_ENV: local
+  MINIO_ROOT_USER: admin
+  MINIO_ROOT_PASSWORD: udp_admin_12345
+  MINIO_BUCKET: datalake
+  AWS_ACCESS_KEY_ID: admin
+  AWS_SECRET_ACCESS_KEY: udp_admin_12345
+  AWS_REGION: us-east-1
+  S3_ENDPOINT: http://minio:9000
+  ICEBERG_WAREHOUSE: s3://datalake/warehouse
+  ICEBERG_REST_URI: http://iceberg-rest:8181
+  STARROCKS_HOST: 127.0.0.1
+  STARROCKS_MYSQL_PORT: "9030"
+  STARROCKS_ROOT_PASSWORD: ""
+
+commands:
+  doctor:    { argv: ["./udp", "doctor"],     timeout: 60 }
+  start:     { argv: ["./udp", "start"],      timeout: 600 }
+  bootstrap: { argv: ["./udp", "bootstrap"],  timeout: 900 }
+  smoke:     { argv: ["./udp", "smoke-test"], timeout: 600 }
+  status:    { argv: ["./udp", "status"],     timeout: 30 }
+  stop:      { argv: ["./udp", "stop"],       timeout: 120 }
+  clean:     { argv: ["./udp", "clean"],      timeout: 180 }
+
+outputs:
+  urls:
+    minio_console:  { url: "http://{host}:9001", label: "MinIO Console" }
+    iceberg_rest:   { url: "http://{host}:8181/v1/config", label: "Iceberg REST" }
+    spark_notebook: { url: "http://{host}:8888", label: "Spark Notebook" }
+    starrocks_ui:   { url: "http://{host}:8030", label: "StarRocks UI" }
+  connections:
+    starrocks_mysql: "mysql -h {host} -P 9030 -u root"
+
+certification:
+  smoke_test_required: true
+  demo_bootstrap_required: true
+  evidence_dir: evidence/udp-local-v0.2/

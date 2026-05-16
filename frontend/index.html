@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LakeHouse Studio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+    .log-line { white-space: pre-wrap; word-break: break-all; }
+    .pulse-dot { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+    .step-running { background: linear-gradient(90deg, rgba(56,189,248,0.08) 0%, rgba(56,189,248,0.18) 50%, rgba(56,189,248,0.08) 100%); background-size: 200% 100%; animation: shimmer 2s linear infinite; }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    .scroll-shadow { box-shadow: inset 0 -10px 12px -10px rgba(0,0,0,0.4), inset 0 10px 12px -10px rgba(0,0,0,0.4); }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+
+<header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
+  <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center font-bold text-slate-900">L</div>
+      <div>
+        <div class="font-semibold text-lg leading-none">LakeHouse Studio</div>
+        <div class="text-xs text-slate-400 mt-0.5">Pilot · UDP reference stack</div>
+      </div>
+    </div>
+    <nav class="flex items-center gap-2 text-sm">
+      <button data-nav="welcome" class="nav-btn px-3 py-1.5 rounded text-slate-300 hover:bg-slate-800">Home</button>
+      <button data-nav="installs" class="nav-btn px-3 py-1.5 rounded text-slate-300 hover:bg-slate-800">Installs</button>
+      <a href="https://github.com/finalertserats-prog/Lakehouse-Studio-udp-cart" target="_blank" class="px-3 py-1.5 rounded text-slate-400 hover:text-slate-200">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-6 py-8">
+
+  <!-- WELCOME -->
+  <section id="screen-welcome" class="screen">
+    <div class="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800/40 border border-slate-800 p-10">
+      <div class="max-w-3xl">
+        <div class="text-xs uppercase tracking-widest text-cyan-400 mb-3">Plug-and-play data lakehouse</div>
+        <h1 class="text-4xl font-bold leading-tight mb-4">Install a production-ready open lakehouse in 30 minutes.</h1>
+        <p class="text-slate-400 mb-8">Shop for components, check your server, compile a deployment, install, verify with a demo query. The first certified stack is <span class="text-slate-200 font-medium">Unified Data Plug</span> — MinIO + Iceberg + Spark + StarRocks.</p>
+        <button id="btn-start" class="px-6 py-3 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold transition">Start Pilot Install →</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+      <div class="rounded-xl bg-slate-900 border border-slate-800 p-5">
+        <div class="text-cyan-400 text-2xl mb-2">①</div>
+        <div class="font-semibold mb-1">Compatibility-validated</div>
+        <div class="text-sm text-slate-400">Every component pinned. Smoke tests prove the stack actually works end-to-end.</div>
+      </div>
+      <div class="rounded-xl bg-slate-900 border border-slate-800 p-5">
+        <div class="text-cyan-400 text-2xl mb-2">②</div>
+        <div class="font-semibold mb-1">Server-aware</div>
+        <div class="text-sm text-slate-400">Inspects Docker, ports, RAM, disk before installing — fails loud, never silent.</div>
+      </div>
+      <div class="rounded-xl bg-slate-900 border border-slate-800 p-5">
+        <div class="text-cyan-400 text-2xl mb-2">③</div>
+        <div class="font-semibold mb-1">Day-2 ready</div>
+        <div class="text-sm text-slate-400">Status, logs, smoke-test, stop, clean — operations baked in from install.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STACKS -->
+  <section id="screen-stacks" class="screen hidden">
+    <h2 class="text-2xl font-semibold mb-1">Choose a stack</h2>
+    <p class="text-slate-400 mb-6">Pick the lakehouse blueprint to install on your target server.</p>
+    <div id="stack-list" class="grid grid-cols-1 gap-4"></div>
+  </section>
+
+  <!-- SERVER -->
+  <section id="screen-server" class="screen hidden">
+    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3" onclick="navigate('stacks')">← Back to stacks</button>
+    <h2 class="text-2xl font-semibold mb-1">Server details</h2>
+    <p class="text-slate-400 mb-6">For this pilot, the target is <span class="mono text-slate-200">localhost</span> — Studio drives Docker on this machine.</p>
+    <div class="rounded-xl bg-slate-900 border border-slate-800 p-6 max-w-2xl">
+      <label class="block text-sm font-medium mb-1">Host</label>
+      <input id="input-host" value="localhost" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
+      <p class="text-xs text-slate-500 mt-1">Use <span class="mono">localhost</span> for the pilot. Remote-host (SSH) support comes next.</p>
+
+      <label class="block text-sm font-medium mb-1 mt-4">Install directory</label>
+      <input id="input-installdir" placeholder="(default: ./work/udp)" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
+      <p class="text-xs text-slate-500 mt-1">Where the UDP repo will be cloned and run. Leave empty for default.</p>
+
+      <div class="flex items-center gap-3 mt-6">
+        <button id="btn-inspect" class="px-5 py-2 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold">Inspect server</button>
+        <button class="text-sm text-slate-400 hover:text-slate-200" onclick="navigate('stacks')">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- INSPECT -->
+  <section id="screen-inspect" class="screen hidden">
+    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3" onclick="navigate('server')">← Back</button>
+    <h2 class="text-2xl font-semibold mb-1">Pre-flight inspection</h2>
+    <p class="text-slate-400 mb-6">Checking the target environment against stack requirements.</p>
+    <div id="inspect-summary" class="rounded-xl border border-slate-800 bg-slate-900 p-5 mb-4"></div>
+    <div id="inspect-checks" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>
+    <div class="flex items-center gap-3 mt-6">
+      <button id="btn-install" class="px-5 py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold">Install</button>
+      <button class="text-sm text-slate-400 hover:text-slate-200" onclick="runInspect()">Re-run inspection</button>
+    </div>
+  </section>
+
+  <!-- INSTALL -->
+  <section id="screen-install" class="screen hidden">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="text-2xl font-semibold">Installing</h2>
+        <p class="text-slate-400 text-sm mono" id="install-meta"></p>
+      </div>
+      <div id="install-state" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-800">…</div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-1">
+        <div class="rounded-xl border border-slate-800 bg-slate-900 p-2">
+          <div id="step-list" class="space-y-1"></div>
+        </div>
+      </div>
+      <div class="lg:col-span-2">
+        <div class="rounded-xl border border-slate-800 bg-black/70 h-[460px] flex flex-col">
+          <div class="px-4 py-2 border-b border-slate-800 text-xs text-slate-400 flex items-center justify-between">
+            <span>Live logs</span>
+            <span id="log-step" class="mono text-slate-500"></span>
+          </div>
+          <div id="log-stream" class="flex-1 overflow-y-auto p-4 text-xs mono leading-relaxed scroll-shadow"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SUCCESS -->
+  <section id="screen-success" class="screen hidden">
+    <div class="rounded-2xl bg-gradient-to-br from-emerald-900/30 to-slate-900 border border-emerald-700/40 p-8 mb-6">
+      <div class="text-emerald-300 text-sm font-semibold mb-2">✓ STACK READY</div>
+      <h2 class="text-3xl font-bold mb-2">Your lakehouse is live.</h2>
+      <p class="text-slate-300">Demo data loaded, smoke tests passed. Connect to any service below.</p>
+    </div>
+    <h3 class="text-lg font-semibold mb-3">Service URLs</h3>
+    <div id="success-urls" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6"></div>
+    <h3 class="text-lg font-semibold mb-3">Connections</h3>
+    <div id="success-conns" class="space-y-2 mb-6"></div>
+
+    <div class="rounded-2xl border border-amber-800/40 bg-amber-950/30 p-5 mb-6">
+      <div class="flex items-start gap-3">
+        <div class="text-amber-300 text-xl">⚠</div>
+        <div class="flex-1">
+          <div class="text-amber-200 font-semibold mb-1">This is a pilot / demo stack — not production-hardened.</div>
+          <div class="text-sm text-amber-100/70 mb-3">Before exposing this stack to real workloads or untrusted networks, address every item below.</div>
+          <ul class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-sm text-amber-100/90">
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Rotate default MinIO credentials</li>
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Enable TLS on all service ports</li>
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Move object storage to managed S3/GCS/Azure</li>
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Configure persistent backups (catalog + storage)</li>
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Add monitoring + alerting (Prometheus / Grafana)</li>
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Enable RBAC + audit logs</li>
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Restrict network access (firewall / VPN)</li>
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Store secrets in a vault, not .env files</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div id="success-evidence" class="text-xs text-slate-500 mono mb-4"></div>
+
+    <h3 class="text-lg font-semibold mb-3 mt-8">Day-2 operations</h3>
+    <div class="rounded-xl border border-slate-800 bg-slate-900 p-4 flex flex-wrap gap-2">
+      <button class="ops-btn" data-action="status">Status</button>
+      <button class="ops-btn" data-action="smoke">Re-run smoke test</button>
+      <button class="ops-btn" data-action="stop">Stop stack</button>
+      <button class="ops-btn ops-danger" data-action="clean">Clean (destroy volumes)</button>
+    </div>
+    <div id="ops-output" class="mt-4 rounded-xl border border-slate-800 bg-black/70 p-4 text-xs mono whitespace-pre-wrap min-h-[80px] text-slate-300"></div>
+  </section>
+
+  <!-- INSTALLS LIST -->
+  <section id="screen-installs" class="screen hidden">
+    <h2 class="text-2xl font-semibold mb-1">Installs</h2>
+    <p class="text-slate-400 mb-6">History of installs Studio has driven on this machine.</p>
+    <div id="installs-list" class="space-y-2"></div>
+  </section>
+
+</main>
+
+<style>
+  .ops-btn { @apply px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm font-medium; }
+  .ops-danger { @apply bg-rose-900/60 hover:bg-rose-800; }
+</style>
+
+<script>
+  // ----- state -----
+  const state = {
+    stacks: [],
+    selected: null,
+    inspectReport: null,
+    installId: null,
+    installRecord: null,
+    ws: null,
+    host: "localhost",
+    installDir: "",
+  };
+
+  // ----- routing -----
+  function navigate(screen) {
+    document.querySelectorAll(".screen").forEach(s => s.classList.add("hidden"));
+    const el = document.getElementById("screen-" + screen);
+    if (el) el.classList.remove("hidden");
+    document.querySelectorAll(".nav-btn").forEach(b => {
+      b.classList.toggle("bg-slate-800", b.dataset.nav === screen);
+    });
+    if (screen === "installs") loadInstalls();
+  }
+  document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => navigate(b.dataset.nav)));
+  document.getElementById("btn-start").addEventListener("click", () => { loadStacks().then(() => navigate("stacks")); });
+
+  // ----- api helpers -----
+  async function api(path, opts = {}) {
+    const r = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...opts,
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`${r.status} ${r.statusText}: ${t}`);
+    }
+    return r.json();
+  }
+
+  // ----- stacks -----
+  async function loadStacks() {
+    state.stacks = await api("/api/stacks");
+    const list = document.getElementById("stack-list");
+    list.innerHTML = "";
+    state.stacks.forEach(s => {
+      const div = document.createElement("div");
+      div.className = "rounded-xl border border-slate-800 bg-slate-900 p-5 hover:border-cyan-700 cursor-pointer transition";
+      const comps = s.components.map(c => `<span class="px-2 py-0.5 rounded bg-slate-800 text-xs mono">${c.name} ${c.version || ''}</span>`).join("");
+      div.innerHTML = `
+        <div class="flex items-center justify-between mb-2">
+          <div class="font-semibold text-lg">${s.name}</div>
+          <span class="px-2 py-0.5 rounded text-xs font-medium ${s.maturity === 'certified' ? 'bg-emerald-700/40 text-emerald-300' : 'bg-amber-700/40 text-amber-300'}">${s.maturity || 'pilot'} · v${s.version || '?'}</span>
+        </div>
+        <div class="text-sm text-slate-400 mb-3">${s.description || ''}</div>
+        <div class="flex flex-wrap gap-1 mb-4">${comps}</div>
+        <div class="text-xs text-slate-500">Min RAM ${s.requirements.minimum_ram_gb || '?'} GB · Ports ${(s.ports.required || []).join(', ')}</div>
+      `;
+      div.addEventListener("click", () => {
+        state.selected = s;
+        navigate("server");
+      });
+      list.appendChild(div);
+    });
+  }
+
+  // ----- server / inspect -----
+  document.getElementById("btn-inspect").addEventListener("click", () => {
+    state.host = document.getElementById("input-host").value.trim() || "localhost";
+    state.installDir = document.getElementById("input-installdir").value.trim();
+    navigate("inspect");
+    runInspect();
+  });
+
+  async function runInspect() {
+    const summary = document.getElementById("inspect-summary");
+    const grid = document.getElementById("inspect-checks");
+    summary.innerHTML = `<div class="flex items-center gap-2 text-slate-400 text-sm"><div class="w-2 h-2 rounded-full bg-cyan-400 pulse-dot"></div>Inspecting…</div>`;
+    grid.innerHTML = "";
+    try {
+      const r = await api("/api/inspect", {
+        method: "POST",
+        body: JSON.stringify({ stack_id: state.selected.id, host: state.host }),
+      });
+      state.inspectReport = r;
+      renderInspect(r);
+    } catch (e) {
+      summary.innerHTML = `<div class="text-rose-400">${e.message}</div>`;
+    }
+  }
+
+  function statusBadge(s) {
+    if (s === "passed") return `<span class="px-2 py-0.5 rounded text-xs bg-emerald-700/40 text-emerald-300">PASS</span>`;
+    if (s === "warning") return `<span class="px-2 py-0.5 rounded text-xs bg-amber-700/40 text-amber-300">WARN</span>`;
+    if (s === "failed") return `<span class="px-2 py-0.5 rounded text-xs bg-rose-700/40 text-rose-300">FAIL</span>`;
+    return `<span class="px-2 py-0.5 rounded text-xs bg-slate-700 text-slate-300">${s}</span>`;
+  }
+
+  function renderInspect(r) {
+    const summary = document.getElementById("inspect-summary");
+    const grid = document.getElementById("inspect-checks");
+    const palette = { passed: "emerald", warning: "amber", failed: "rose" };
+    const c = palette[r.overall];
+    summary.innerHTML = `
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-xs uppercase tracking-widest text-${c}-300 mb-1">Overall · ${r.overall}</div>
+          <div class="font-semibold">${r.recommended ? 'Ready to install.' : 'Cannot install — required checks failed.'}</div>
+        </div>
+        <div class="text-sm text-slate-500 mono">host: ${r.host}</div>
+      </div>
+    `;
+    grid.innerHTML = "";
+    r.checks.forEach(c => {
+      const el = document.createElement("div");
+      el.className = "flex items-start gap-3 px-4 py-3 rounded-lg border border-slate-800 bg-slate-900";
+      el.innerHTML = `
+        <div class="mt-0.5">${statusBadge(c.status)}</div>
+        <div class="flex-1 min-w-0">
+          <div class="font-medium mono text-sm">${c.name}</div>
+          <div class="text-xs text-slate-400 break-words">${c.message}</div>
+          ${c.detail ? `<div class="text-xs text-slate-600 mono mt-1 break-words">${c.detail}</div>` : ''}
+        </div>
+      `;
+      grid.appendChild(el);
+    });
+    document.getElementById("btn-install").disabled = !r.recommended;
+    document.getElementById("btn-install").classList.toggle("opacity-50", !r.recommended);
+    document.getElementById("btn-install").classList.toggle("cursor-not-allowed", !r.recommended);
+  }
+
+  // ----- install -----
+  document.getElementById("btn-install").addEventListener("click", async () => {
+    if (!state.inspectReport?.recommended) return;
+    const body = {
+      stack_id: state.selected.id,
+      host: state.host,
+    };
+    if (state.installDir) body.install_dir = state.installDir;
+    const rec = await api("/api/installs", { method: "POST", body: JSON.stringify(body) });
+    state.installId = rec.install_id;
+    state.installRecord = rec;
+    navigate("install");
+    renderInstall(rec);
+    openLogStream(rec.install_id);
+  });
+
+  function renderInstall(rec) {
+    document.getElementById("install-meta").textContent = `${rec.install_id} · ${rec.stack_id} · ${rec.host}`;
+    setStateBadge(rec.state);
+    renderSteps(rec.steps);
+  }
+
+  function setStateBadge(s) {
+    const el = document.getElementById("install-state");
+    el.textContent = s;
+    el.className = "px-3 py-1.5 rounded-full text-xs font-semibold ";
+    if (s === "READY") el.className += "bg-emerald-700/40 text-emerald-300";
+    else if (s === "FAILED") el.className += "bg-rose-700/40 text-rose-300";
+    else el.className += "bg-cyan-700/30 text-cyan-300";
+  }
+
+  function renderSteps(steps) {
+    const list = document.getElementById("step-list");
+    list.innerHTML = "";
+    steps.forEach(s => {
+      const div = document.createElement("div");
+      div.id = "step-" + s.id;
+      let icon, color;
+      if (s.status === "success") { icon = "✓"; color = "text-emerald-400"; }
+      else if (s.status === "failed") { icon = "✗"; color = "text-rose-400"; }
+      else if (s.status === "running") { icon = "▶"; color = "text-cyan-400"; }
+      else if (s.status === "skipped") { icon = "↷"; color = "text-slate-500"; }
+      else { icon = "○"; color = "text-slate-500"; }
+      div.className = "flex items-center gap-3 px-3 py-2 rounded " + (s.status === "running" ? "step-running" : "");
+      div.innerHTML = `<div class="w-6 text-center ${color} font-mono">${icon}</div><div class="text-sm flex-1">${s.title}</div>`;
+      list.appendChild(div);
+    });
+  }
+
+  function updateStepUI(stepId, status) {
+    const rec = state.installRecord;
+    if (!rec) return;
+    const s = rec.steps.find(x => x.id === stepId);
+    if (s) s.status = status;
+    renderSteps(rec.steps);
+  }
+
+  function openLogStream(id) {
+    if (state.ws) try { state.ws.close(); } catch(e){}
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    state.ws = new WebSocket(`${proto}://${location.host}/api/installs/${id}/logs`);
+    const logEl = document.getElementById("log-stream");
+    logEl.innerHTML = "";
+    state.ws.onmessage = (msg) => {
+      const evt = JSON.parse(msg.data);
+      handleEvent(evt, logEl);
+    };
+    state.ws.onclose = () => {
+      // refresh record state at the end
+      refreshInstall(id);
+    };
+  }
+
+  function handleEvent(evt, logEl) {
+    if (evt.kind === "log") {
+      const div = document.createElement("div");
+      div.className = "log-line " + (evt.stream === "stderr" ? "text-amber-300" : "text-slate-300");
+      div.textContent = evt.line;
+      logEl.appendChild(div);
+      if (logEl.children.length > 4000) logEl.removeChild(logEl.firstChild);
+      logEl.scrollTop = logEl.scrollHeight;
+      document.getElementById("log-step").textContent = evt.step || "";
+    } else if (evt.kind === "step_start") {
+      updateStepUI(evt.step, "running");
+    } else if (evt.kind === "step_end") {
+      updateStepUI(evt.step, evt.status === "success" ? "success" : "failed");
+    } else if (evt.kind === "state") {
+      setStateBadge(evt.status);
+      if (evt.status === "READY") {
+        setTimeout(() => refreshInstall(state.installId).then(showSuccess), 400);
+      }
+    } else if (evt.kind === "result") {
+      if (state.installRecord) state.installRecord.outputs = evt.payload || {};
+    } else if (evt.kind === "error") {
+      const div = document.createElement("div");
+      div.className = "log-line text-rose-400";
+      div.textContent = "ERROR: " + (evt.line || "");
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+
+  async function refreshInstall(id) {
+    const rec = await api(`/api/installs/${id}`);
+    state.installRecord = rec;
+    renderInstall(rec);
+    return rec;
+  }
+
+  // ----- success -----
+  function showSuccess() {
+    const rec = state.installRecord;
+    if (!rec) return;
+    navigate("success");
+    const urls = document.getElementById("success-urls");
+    urls.innerHTML = "";
+    Object.values(rec.outputs?.urls || {}).forEach(u => {
+      const a = document.createElement("a");
+      a.href = u.url; a.target = "_blank";
+      a.className = "flex items-center justify-between px-4 py-3 rounded-xl border border-slate-800 bg-slate-900 hover:border-cyan-700";
+      a.innerHTML = `<div><div class="font-medium">${u.label}</div><div class="text-xs text-slate-500 mono break-all">${u.url}</div></div><div class="text-cyan-400">→</div>`;
+      urls.appendChild(a);
+    });
+    const conns = document.getElementById("success-conns");
+    conns.innerHTML = "";
+    Object.entries(rec.outputs?.connections || {}).forEach(([k, v]) => {
+      const div = document.createElement("div");
+      div.className = "px-4 py-2 rounded-lg border border-slate-800 bg-slate-900 mono text-sm flex justify-between items-center";
+      div.innerHTML = `<div><span class="text-slate-500 mr-2">${k}</span>${v}</div><button class="text-xs text-cyan-400" onclick="navigator.clipboard.writeText(${JSON.stringify(v)})">copy</button>`;
+      conns.appendChild(div);
+    });
+    const ev = document.getElementById("success-evidence");
+    if (rec.outputs?.evidence_dir) {
+      ev.textContent = `evidence captured at ${rec.outputs.evidence_dir}`;
+    } else {
+      ev.textContent = "";
+    }
+  }
+
+  // ----- ops -----
+  document.querySelectorAll(".ops-btn").forEach(b => {
+    b.addEventListener("click", async () => {
+      const action = b.dataset.action;
+      const out = document.getElementById("ops-output");
+      if (action === "clean" && !confirm("This will stop containers AND remove UDP Docker volumes (data loss). Continue?")) return;
+      out.textContent = `> ${action}…`;
+      try {
+        // re-open ws so we get fresh logs
+        openLogStream(state.installId);
+        const r = await api(`/api/installs/${state.installId}/control`, { method: "POST", body: JSON.stringify({ action }) });
+        out.textContent = `exit ${r.exit_code}`;
+      } catch (e) {
+        out.textContent = e.message;
+      }
+    });
+  });
+
+  // ----- installs list -----
+  async function loadInstalls() {
+    const list = document.getElementById("installs-list");
+    list.innerHTML = `<div class="text-slate-500 text-sm">Loading…</div>`;
+    const items = await api("/api/installs");
+    if (!items.length) {
+      list.innerHTML = `<div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-500 text-sm">No installs yet. Start one from Home.</div>`;
+      return;
+    }
+    list.innerHTML = "";
+    items.forEach(rec => {
+      const div = document.createElement("div");
+      div.className = "rounded-xl border border-slate-800 bg-slate-900 p-4 hover:border-cyan-700 cursor-pointer";
+      const ts = new Date(rec.created_at * 1000).toLocaleString();
+      div.innerHTML = `
+        <div class="flex items-center justify-between mb-1">
+          <div class="font-medium mono text-sm">${rec.install_id}</div>
+          <div class="text-xs px-2 py-0.5 rounded ${rec.state==='READY' ? 'bg-emerald-700/40 text-emerald-300' : rec.state==='FAILED' ? 'bg-rose-700/40 text-rose-300' : 'bg-slate-700 text-slate-300'}">${rec.state}</div>
+        </div>
+        <div class="text-xs text-slate-400">${rec.stack_id} · host ${rec.host} · ${ts}</div>
+      `;
+      div.addEventListener("click", () => {
+        state.installId = rec.install_id;
+        state.installRecord = rec;
+        if (rec.state === "READY") { showSuccess(); }
+        else { navigate("install"); renderInstall(rec); openLogStream(rec.install_id); }
+      });
+      list.appendChild(div);
+    });
+  }
+
+  // boot
+  navigate("welcome");
+</script>
+</body>
+</html>
