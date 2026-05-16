@@ -1,0 +1,181 @@
+id: udp-trino-local-v0.1
+name: Unified Data Plug — Trino Lakehouse (Candidate)
+version: "0.1"
+mode: docker-compose
+maturity: candidate
+description: >
+  CANDIDATE stack — Trino-based variant of the UDP reference lakehouse.
+  MinIO object storage + Iceberg REST catalog + Trino federated SQL +
+  StarRocks analytics. NOT YET CERTIFIED — no successful end-to-end
+  install has been verified for this combination. The bootstrap and
+  smoke scripts referenced under `commands` are TBD; they do not exist
+  on disk yet. Promotion to `pilot` requires: a working bootstrap script
+  that initializes Trino's Iceberg catalog against the REST server,
+  a smoke test that round-trips raw → curated through Trino instead
+  of Spark, and at least one passing evidence record on Windows or
+  Linux Docker. Use `udp-local-v0.2` for any real install today.
+
+repository:
+  url: https://github.com/finalertserats-prog/Unified-Data-Plug.git
+  # NOTE: Same UDP repository as v0.2. UDP's compose file already includes
+  # a Trino service definition in some branches, but the path is not
+  # wired into Studio's installer yet. Promoting this candidate likely
+  # needs either (a) a new UDP branch that ships a Trino-native bootstrap
+  # in place of Spark's, or (b) a separate `udp-trino` repository fork.
+  # Decide before evidence collection begins.
+  ref: claude/review-repo-udp-H7jt4
+  install_dir: udp-trino
+
+components:
+  - id: minio
+    name: MinIO
+    category: object_storage
+    version: RELEASE.2025-04-22T22-12-26Z
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    service_name: minio
+    ports: [9000, 9001]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2, disk_gb: 20 }
+      recommended: { cpu: 2, ram_gb: 4, disk_gb: 50 }
+      comfortable: { cpu: 4, ram_gb: 8, disk_gb: 200 }
+  - id: iceberg-rest
+    name: Iceberg REST Catalog
+    category: catalog
+    version: "1.6.0"
+    image: tabulario/iceberg-rest:1.6.0
+    service_name: iceberg-rest
+    ports: [8181]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1, disk_gb: 2 }
+      recommended: { cpu: 1, ram_gb: 2, disk_gb: 5 }
+      comfortable: { cpu: 2, ram_gb: 4, disk_gb: 10 }
+  - id: trino
+    name: Trino
+    category: processing
+    # Trino 475 verified via `docker manifest inspect trinodb/trino:475`
+    # on 2026-05-16. Picked over the floating `latest` (which currently
+    # points at 481) because 475 has been in-market long enough for
+    # community-reported Iceberg-REST + MinIO bugs to surface. Bump
+    # the lock + run the candidate validation before changing this.
+    version: "475"
+    image: trinodb/trino:475
+    service_name: trino
+    ports: [8080]
+    resource_profiles:
+      # Trino is RAM-hungry — its native execution holds working sets
+      # in JVM heap. Minimal tier is a hard floor; below this Trino
+      # rejects queries during startup with heap-allocation errors.
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 5 }
+      recommended: { cpu: 4, ram_gb: 10, disk_gb: 20 }
+      comfortable: { cpu: 8, ram_gb: 24, disk_gb: 50 }
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    category: serving
+    # Same PR #55416 requirement as udp-local-v0.2 — Iceberg REST catalog
+    # property propagation to S3 FileIO landed in 3.3.12.
+    version: "3.3.12"
+    image: starrocks/fe-ubuntu:3.3.12
+    service_name: starrocks-fe
+    ports: [8030, 9020, 9030]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2, disk_gb: 5 }
+      recommended: { cpu: 2, ram_gb: 4, disk_gb: 10 }
+      comfortable: { cpu: 2, ram_gb: 8, disk_gb: 20 }
+  - id: starrocks-be
+    name: StarRocks Backend
+    category: serving
+    version: "3.3.12"
+    image: starrocks/be-ubuntu:3.3.12
+    service_name: starrocks-be
+    ports: [8040, 8060, 9050, 9060]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 20 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 50 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 200 }
+
+requirements:
+  os: [linux, windows-docker-desktop, darwin]
+  docker: required
+  docker_compose: required
+  bash: required
+  # Trino's JVM dominates RAM. Bumping the floor over v0.2's 8 GB
+  # because Trino on 4 GB will reject Iceberg scans during planning.
+  minimum_ram_gb: 12
+  recommended_ram_gb: 20
+  minimum_cpu_cores: 4
+  recommended_cpu_cores: 8
+  minimum_disk_gb: 50
+  recommended_disk_gb: 100
+
+ports:
+  # Trino UI on 8080 replaces Spark's 8888/4040. Same MinIO + Iceberg-REST +
+  # StarRocks ports as v0.2.
+  required: [9000, 9001, 8181, 8080, 8030, 9030]
+  optional: [9020, 8040, 8060, 9050, 9060]
+
+env_defaults:
+  UDP_PROJECT_NAME: unified-data-plug-trino
+  UDP_ENV: local
+  MINIO_ROOT_USER: admin
+  MINIO_ROOT_PASSWORD: udp_admin_12345
+  MINIO_BUCKET: datalake
+  AWS_ACCESS_KEY_ID: admin
+  AWS_SECRET_ACCESS_KEY: udp_admin_12345
+  AWS_REGION: us-east-1
+  S3_ENDPOINT: http://minio:9000
+  ICEBERG_WAREHOUSE: s3://datalake/warehouse
+  ICEBERG_REST_URI: http://iceberg-rest:8181
+  # Trino-specific (consumed by the TBD bootstrap script that will write
+  # /etc/trino/catalog/iceberg.properties inside the trino container).
+  TRINO_CATALOG_ICEBERG_URI: http://iceberg-rest:8181
+  TRINO_CATALOG_ICEBERG_WAREHOUSE: s3://datalake/warehouse
+  TRINO_CATALOG_ICEBERG_FS_S3_ENABLED: "true"
+  TRINO_CATALOG_ICEBERG_FS_S3_PATH_STYLE: "true"
+  TRINO_CATALOG_ICEBERG_FS_S3_ENDPOINT: http://minio:9000
+  TRINO_HTTP_PORT: "8080"
+  STARROCKS_HOST: 127.0.0.1
+  STARROCKS_MYSQL_PORT: "9030"
+  STARROCKS_ROOT_PASSWORD: ""
+
+# CANDIDATE STATUS NOTE: every command below references a script that
+# does NOT exist on disk yet. backend/runner.py is frozen for this pass;
+# the install pipeline cannot actually invoke this stack end-to-end.
+# Promotion to pilot must (a) ship `scripts/lhs-trino-bootstrap.sh` and
+# `scripts/lhs-trino-smoke.sh`, (b) wire them into runner without
+# perturbing the existing v0.2 path, (c) capture a passing evidence
+# record in the lock file.
+commands:
+  doctor:    { argv: ["./udp", "doctor"],     timeout: 60 }
+  start:
+    type: docker_compose_up
+    extra_services: [create-bucket]
+    timeout: 600
+  # TODO(candidate): write scripts/lhs-trino-bootstrap.sh — should
+  # `docker exec trino trino --execute "CREATE SCHEMA iceberg.raw ..."`
+  # and seed demo tables via Trino SQL instead of PySpark.
+  bootstrap: { argv: ["bash", "scripts/lhs-trino-bootstrap.sh"], timeout: 900 }
+  # TODO(candidate): write scripts/lhs-trino-smoke.sh — should round-trip
+  # raw → curated through Trino and SELECT back via StarRocks against
+  # the same Iceberg catalog. Mirror v0.2's smoke shape so the harness
+  # can reuse its result-parsing logic.
+  smoke:     { argv: ["bash", "scripts/lhs-trino-smoke.sh"],     timeout: 600 }
+  status:    { argv: ["./udp", "status"],     timeout: 30 }
+  stop:      { argv: ["./udp", "stop"],       timeout: 120 }
+  clean:     { argv: ["./udp", "clean"],      timeout: 180 }
+
+outputs:
+  urls:
+    minio_console:  { url: "http://{host}:9001", label: "MinIO Console" }
+    iceberg_rest:   { url: "http://{host}:8181/v1/config", label: "Iceberg REST" }
+    trino_ui:       { url: "http://{host}:8080", label: "Trino UI" }
+    starrocks_ui:   { url: "http://{host}:8030", label: "StarRocks UI" }
+  connections:
+    starrocks_mysql: "mysql -h {host} -P 9030 -u root"
+    trino_cli:       "trino --server http://{host}:8080 --catalog iceberg"
+
+certification:
+  # Both flags true — promotion REQUIRES a passing smoke + a real
+  # bootstrap run with evidence. Today neither has happened.
+  smoke_test_required: true
+  demo_bootstrap_required: true
+  evidence_dir: evidence/udp-trino-local-v0.1/

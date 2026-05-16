@@ -54,6 +54,40 @@ We learned this the hard way stabilizing UDP — see [UDP PR #6](https://github.
 
 **Caveat (Windows only):** StarRocks BE → MinIO SQL query path hits a documented AWS SDK + Docker Desktop network interaction. Lakehouse is built correctly (Spark can read everything); only the StarRocks SELECT path fails. Documented + tracked in [`udp-local-v0.2.lock.yaml`](../stacks/compatibility/udp-local-v0.2.lock.yaml).
 
+## Candidate Stacks
+
+A **candidate stack** is one whose lock file carries `status: candidate` rather than `pilot-stable` (or higher). Candidates have had their image tags individually verified on the registry, and their pairwise compatibility constraints have been grounded in upstream documentation, but the COMBINATION has not been installed end-to-end and there is NO evidence record yet. They are surfaced in the UI on purpose — so contributors can pick them up and turn them into certified stacks — but Studio's `/healthz` emits a warning whenever a recommended_set references one, and operators should not pick a candidate for a real install.
+
+The distinction in one line:
+
+- **pilot-stable / linux-stable / production** → "we have run this and have receipts"
+- **candidate** → "we have verified the parts exist and the rules look right; nobody has plugged it in yet"
+
+### `udp-trino-local-v0.1` — Unified Data Plug (Trino variant, candidate)
+
+| Component | Image | Tag | Verified present on registry |
+|---|---|---|---|
+| MinIO | `minio/minio` | `RELEASE.2025-04-22T22-12-26Z` | ✅ |
+| MinIO Client (mc) | `minio/mc` | `RELEASE.2025-04-16T18-13-26Z` | ✅ |
+| Iceberg REST | `tabulario/iceberg-rest` | `1.6.0` | ✅ |
+| Trino | `trinodb/trino` | `475` | ✅ |
+| StarRocks FE | `starrocks/fe-ubuntu` | `3.3.12` | ✅ |
+| StarRocks BE | `starrocks/be-ubuntu` | `3.3.12` | ✅ |
+
+**Status:** `candidate` — image tags all verified on Docker Hub on 2026-05-16, but no install has ever been run end-to-end against this combination. Evidence array is intentionally empty.
+
+**Promotion TODO list** (to reach `pilot-stable`):
+
+1. **Write `scripts/lhs-trino-bootstrap.sh`** — must seed `raw`/`curated`/`analytics` schemas through Trino SQL (`CREATE SCHEMA iceberg.raw ...`, `INSERT INTO ...`) instead of PySpark. The script must write `/etc/trino/catalog/iceberg.properties` inside the trino container with `iceberg.catalog.type=rest`, `iceberg.rest-catalog.uri=$ICEBERG_REST_URI`, `fs.s3.enabled=true`, `s3.path-style-access=true`, `s3.endpoint=$S3_ENDPOINT`, `s3.aws-access-key=$AWS_ACCESS_KEY_ID`, `s3.aws-secret-key=$AWS_SECRET_ACCESS_KEY`.
+2. **Write `scripts/lhs-trino-smoke.sh`** — must round-trip a row through Trino (write via `INSERT INTO iceberg.curated.demo`) and verify it reads back from BOTH Trino AND StarRocks against the same Iceberg-REST catalog. Mirror the shape of `lhs-smoke.sh` so the harness can reuse its result-parsing.
+3. **Run end-to-end on Windows + Docker Desktop** — full pipeline `prepare → clone → env → doctor → start → bootstrap → smoke → finalize`. Capture host metadata (Docker version, RAM, CPU cores) and per-step result. Append as the first `evidence[]` entry in `udp-trino-local-v0.1.lock.yaml`.
+4. **Run end-to-end on Linux Docker** — same as above. Append as a second `evidence[]` entry. Both required because the v0.2 stack already established that the Windows AWS-SDK→MinIO path has a UnknownHostException quirk; the Trino candidate could hit the same or a different OS-specific issue, and we need to know which side of the line it falls on before promotion.
+5. **Decide Trino JVM heap config** for the `recommended` resource profile (10 GB RAM) — without an explicit `-Xmx` in `JAVA_OPTS`, Trino defaults to a fraction of container RAM that may not match the operator's expectation. Document the chosen value in the manifest's `env_defaults` and the lock file's `host_requirements`.
+6. **Wire `backend/runner.py`** to route `udp-trino-local-v0.1` installs through the new scripts WITHOUT perturbing the v0.2 pipeline. The frozen-runner constraint says step 5 of the promotion gate cannot regress v0.2 — add an opt-in branch keyed on `manifest.id`, never a default-flow change.
+7. **Flip the lock file's `status:`** from `candidate` to `pilot-stable` and update `status_notes` with the evidence ids. Bump `version_id` from `0.1.0` to `0.1.1` (or higher, semver applies — patch for evidence-only promotion, minor for any constraint relaxation).
+
+Until item 7 ships, `udp-trino-local-v0.1` stays a candidate. The /healthz endpoint will continue emitting the `recommended_set 'udp-trino-recommended': warning — stack 'udp-trino-local-v0.1' lock status is 'candidate'` line, by design.
+
 ## What "validating before finalizing" means in practice
 
 When a contributor proposes adding a new component (e.g. swapping Spark for Trino, or adding Dagster as an orchestrator), the workflow is:
@@ -197,4 +231,72 @@ The generated `prometheus.yml` targets four jobs. Each has a real-world gotcha:
 - It does not touch `backend/runner.py` or `_patch_compose_images` — the install pipeline is frozen.
 - It does not register a new entry in `stacks/compatibility/*.lock.yaml` — monitoring is intentionally outside the certified surface.
 - It does not run `docker compose up` for you — the operator retains explicit lifecycle control (same model as the Caddy sidecar).
+
+## JDBC Extras
+
+The certified Spark image (`tabulario/spark-iceberg:3.5.5_1.8.1`) ships **without** Postgres / MySQL JDBC drivers on the classpath. Repackaging it would invalidate the lock file, so v0.5.1 adds an **opt-in JDBC side-load override** the operator activates when they want real Postgres or MySQL ingest.
+
+Same override-file pattern as the Caddy TLS sidecar + the Monitoring sidecar: a sibling `docker-compose.jdbc.yml` the operator opts into. Required to unblock `POST /api/installs/{install_id}/ingest/postgres` and `.../ingest/mysql` — both real ingest paths refuse with a `Run POST /api/installs/.../jdbc/enable first` message until the override is active.
+
+### How it works
+
+The override declares two service blocks:
+
+1. **`jdbc-extras`** — a one-shot init container (image: `curlimages/curl:8.10.1`) that runs `curl -fL --retry 3` against Maven Central to download the requested JDBC jars into a named docker volume (`spark_jdbc_jars`). Idempotent: skips any jar already present in the volume.
+2. **`spark-iceberg`** — appends ONLY a new read-only volume mount (`spark_jdbc_jars:/opt/spark/jars/jdbc:ro`). Compose merge preserves every other key from the base service definition (image, command, ports, env). The spark-iceberg entrypoint adds `$SPARK_HOME/jars/*` to the classpath, so the JDBC jars are picked up automatically on next container start.
+
+A `depends_on: jdbc-extras { condition: service_completed_successfully }` clause on the spark service guarantees the spark container only restarts after the init container has exited 0 (i.e. jars are in place).
+
+### Two routes drive the override
+
+- `POST /api/installs/{install_id}/jdbc/enable` body `{include_postgres, include_mysql, postgres_driver_version, mysql_driver_version}` — writes `docker-compose.jdbc.yml` into the install_dir. Defaults: postgres `42.7.4`, mysql `9.0.0`. `include_postgres=True` by default; `include_mysql=False` by default (most users start with Postgres only — keeps the download to 1 MB).
+- `POST /api/installs/{install_id}/jdbc/disable` — removes the override file. Returns a granular `stop` + `rm -f` of just the `jdbc-extras` container (NOT a `compose down` — the rest of the lakehouse stays serving). The `spark_jdbc_jars` volume is intentionally **retained** so re-enabling skips the download; use `docker volume rm spark_jdbc_jars` for a clean slate.
+
+Both routes refuse if the install is in `RUNNING_STATES` (same guard as Caddy / monitoring).
+
+### Activation
+
+The enable route returns the exact command (it never runs `docker compose up` itself):
+
+```bash
+cd {install_dir}
+docker compose -f docker-compose.yml -f docker-compose.jdbc.yml up -d jdbc-extras
+# Once `docker compose ps jdbc-extras` shows exit-0, recreate the spark
+# service so it picks up the new mount:
+docker compose -f docker-compose.yml -f docker-compose.jdbc.yml up -d --no-deps spark-iceberg
+```
+
+### Pinned driver versions (verified reachable 2026-05-16)
+
+| Driver | Maven coordinate | Version | URL pattern | Size |
+|---|---|---|---|---|
+| Postgres JDBC | `org.postgresql:postgresql` | `42.7.4` | `https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar` | 1.04 MB |
+| MySQL Connector/J | `com.mysql:mysql-connector-j` | `9.0.0` | `https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/9.0.0/mysql-connector-j-9.0.0.jar` | 2.47 MB |
+
+Both URLs returned `HTTP/1.1 200 OK` with `Content-Type: application/java-archive` when verified ahead of pinning. Bytes pinned via Maven Central (not vendor mirrors) for the immutability guarantee — once a version is published to Central, it cannot be retracted or republished.
+
+When bumping these, run:
+
+```bash
+curl -I https://repo1.maven.org/maven2/org/postgresql/postgresql/<v>/postgresql-<v>.jar
+curl -I https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/<v>/mysql-connector-j-<v>.jar
+```
+
+and confirm a 200 before committing the version change in `backend/jdbc_extras.py`.
+
+### Credential handling
+
+The decrypted source credential (from `backend/data_sources.py::_decrypt_password`) reaches Spark via `--user` / `--password` argv on `spark-submit`. The credential **never** appears in:
+
+- The JDBC URL (built without embedded `user:pass@`)
+- Stored job records (`IngestJob.source` deliberately omits the credential)
+- The log stream — every line published to the event bus is run through `backend/redact.py::redact()`, which masks `--password X`, `KEY=value`, and `scheme://user:secret@host` patterns before emit.
+
+### What the override does NOT do
+
+- It does not modify `docker-compose.yml` (the certified base) — strict additive layering only.
+- It does not touch `backend/runner.py` or the install pipeline — the install pipeline is frozen.
+- It does not register a new entry in `stacks/compatibility/*.lock.yaml` — JDBC drivers are operational extras, intentionally outside the certified surface.
+- It does not run `docker compose up` for you — the operator retains explicit lifecycle control (same model as the Caddy + monitoring sidecars).
+- It does not delete the downloaded jars on disable — the named volume is retained so re-enabling is fast.
 

@@ -1,0 +1,224 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK — CANDIDATE STACK
+# =====================================================
+# This is a CANDIDATE compatibility lock. The image tags below have all
+# been verified to EXIST on their registries via `docker manifest inspect`
+# on the certified_at date, but the COMBINATION has NOT been end-to-end
+# installed yet. No evidence record exists. Do not promote this stack to
+# `pilot-stable` until at least one passing install + smoke + finalize
+# run has been captured in the evidence block.
+#
+# For the certified path that DOES have evidence, see
+# `udp-local-v0.2.lock.yaml` (Spark-based, pilot-stable).
+
+schema_version: "1.0"
+stack_id: udp-trino-local-v0.1
+version_id: "0.1.0"
+certified_at: "2026-05-16T19:30:00+05:30"
+certified_by: vishnu.wildeagle@gmail.com
+certified_on:
+  os: "Windows 11 + Docker Desktop"
+  docker: "28.3.0"
+  docker_compose: "v2.38.1-desktop.1"
+# IMPORTANT: status is `candidate`, NOT `pilot-stable`. Studio's compatibility
+# loader exposes this verbatim through /api/stacks/{id}/lock-summary so the UI
+# can warn before showing the option.
+status: "candidate"
+
+# Maturity grades:
+#   candidate       — tags verified present on registry; combination NOT installed end-to-end
+#   pilot-stable    — install completes, lakehouse readable, smoke may need Skip on some OS
+#   linux-stable    — verified end-to-end on a Linux VPS, smoke passes clean
+#   production      — additional hardening (TLS, backups, RBAC) certified
+status_notes: |
+  CANDIDATE — NOT INSTALLABLE END-TO-END YET.
+
+  What's here:
+    - Every image tag below has been verified present on its registry via
+      `docker manifest inspect` on 2026-05-16.
+    - Pairwise compatibility constraints are grounded in upstream Trino +
+      Apache Iceberg + StarRocks docs (see `constraints[]`) but have NOT
+      been runtime-validated against this exact image-tag combination.
+
+  What's MISSING for promotion to pilot-stable:
+    1. `scripts/lhs-trino-bootstrap.sh` — must seed raw/curated/analytics
+       schemas through Trino SQL instead of PySpark. Does not exist on disk.
+    2. `scripts/lhs-trino-smoke.sh` — must round-trip a write through
+       Trino and verify the row reads back from both Trino AND StarRocks
+       against the same Iceberg-REST catalog. Does not exist on disk.
+    3. `backend/runner.py` integration — runner is currently frozen against
+       the v0.2 path; needs an opt-in branch that routes installs whose
+       stack manifest is `udp-trino-local-v0.1` to the new scripts without
+       touching the v0.2 flow.
+    4. At least one passing install on Windows Docker Desktop AND one on
+       Linux Docker, both captured as `evidence[]` entries below.
+    5. A documented decision on Trino's heap config (`-Xmx` in JAVA_OPTS)
+       for the recommended-tier 10 GB RAM profile.
+
+  Use udp-local-v0.2 for any real install today.
+
+# ---------------------------------------------------------------------------
+# Component lock — every container image and tag in the candidate stack.
+# All tags below verified on 2026-05-16 via `docker manifest inspect`.
+# ---------------------------------------------------------------------------
+components:
+  - id: minio
+    name: MinIO
+    role: object_storage
+    image: minio/minio
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+    registry_url: https://hub.docker.com/r/minio/minio/tags
+    upstream_url: https://github.com/minio/minio
+    notes: |
+      Same MinIO release as udp-local-v0.2. Verified present on Docker Hub
+      on 2026-05-16. No Trino-specific MinIO concerns — Trino's native S3
+      filesystem speaks the same S3 API surface MinIO implements.
+
+  - id: minio-client
+    name: MinIO Client (mc)
+    role: object_storage_bootstrap
+    image: minio/mc
+    tag: "RELEASE.2025-04-16T18-13-26Z"
+    registry_url: https://hub.docker.com/r/minio/mc/tags
+    upstream_url: https://github.com/minio/mc
+    notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
+
+  - id: iceberg-rest
+    name: Iceberg REST Catalog
+    role: catalog
+    image: tabulario/iceberg-rest
+    tag: "1.6.0"
+    registry_url: https://hub.docker.com/r/tabulario/iceberg-rest/tags
+    upstream_url: https://github.com/apache/iceberg
+    notes: |
+      Same iceberg-rest release as udp-local-v0.2. Trino 475's Iceberg
+      connector targets the Iceberg REST spec and does not require a
+      higher-than-1.6.0 server version for basic CREATE/READ/INSERT.
+
+  - id: trino
+    name: Trino
+    role: processing
+    image: trinodb/trino
+    tag: "475"
+    registry_url: https://hub.docker.com/r/trinodb/trino/tags
+    upstream_url: https://trino.io/docs/current/connector/iceberg.html
+    notes: |
+      Trino 475 picked over the floating `latest` (currently 481) for two
+      reasons: (a) 475 has been in-market long enough for community-reported
+      Iceberg-REST and MinIO bugs to surface; (b) the `latest` tag is a
+      moving target — pinning a number is the only way the lock-file
+      contract holds. Verified present via `docker manifest inspect
+      trinodb/trino:475` on 2026-05-16.
+
+      DO NOT use `trinodb/trino:latest` here — the lock-file contract
+      requires a stable tag. Bumping past 475 requires running the
+      candidate's bootstrap + smoke + an evidence entry.
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    image: starrocks/fe-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/fe-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: |
+      Same StarRocks release as udp-local-v0.2 — PR #55416 (Iceberg REST
+      catalog property propagation to S3 FileIO) is required and shipped
+      in 3.3.12. Do not downgrade below 3.3.12 or the StarRocks→MinIO
+      via Iceberg-REST query path will break the same way it did in
+      pre-3.3.12 releases. Do not use the floating `3.3-latest` tag.
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    image: starrocks/be-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/be-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: Same version requirement as FE.
+
+# ---------------------------------------------------------------------------
+# Compatibility constraints — pairs that MUST hold for this stack to work.
+# CANDIDATE: rules below are grounded in upstream docs (trino.io,
+# iceberg.apache.org, StarRocks GitHub) but `verified` strings are
+# documentation citations, NOT runtime evidence. Bumping any tag in this
+# lock requires re-checking every constraint against the new combination.
+# ---------------------------------------------------------------------------
+constraints:
+  - between: [trino, iceberg-rest]
+    rule: "Trino's Iceberg connector requires iceberg.catalog.type=rest and a reachable iceberg.rest-catalog.uri pointing at an Iceberg-REST-spec-compliant server"
+    verified: "Per trino.io/docs/current/object-storage/metastores.html (fetched 2026-05-16): the only required property when iceberg.catalog.type=rest is iceberg.rest-catalog.uri. tabulario/iceberg-rest:1.6.0 implements the spec end-to-end."
+
+  - between: [trino, iceberg-rest]
+    rule: "Trino 475 supports Iceberg table format v1 and v2; v3 is experimental. Iceberg-REST 1.6.0 defaults to writing v2 tables which is the supported target."
+    verified: "Per trino.io/docs/current/connector/iceberg.html (fetched 2026-05-16): 'Trino supports Apache Iceberg table spec versions 1 and 2. Support for format version 3 is experimental.' Iceberg-REST 1.6.0's default format-version is 2."
+
+  - between: [trino, minio]
+    rule: "Trino's native S3 filesystem must be enabled (fs.s3.enabled=true on the iceberg catalog) AND configured for path-style addressing (s3.path-style-access=true) when the endpoint is MinIO — MinIO on plain HTTP does not implement virtual-hosted-style bucket addressing"
+    verified: "Per trino.io/docs/current/object-storage/file-system-s3.html (fetched 2026-05-16): MinIO is listed alongside AWS S3 as the only two officially-tested S3-compatible stores. Path-style access is documented as the addressing mode for S3-compatible systems on HTTP endpoints. The bootstrap script (TBD) must write s3.path-style-access=true and s3.endpoint=http://minio:9000 into the iceberg catalog properties file."
+
+  - between: [trino, minio]
+    rule: "Trino's iceberg catalog must carry s3.aws-access-key + s3.aws-secret-key matching the MinIO root credentials in env_defaults, otherwise CREATE TABLE fails at Parquet write with a 403 from MinIO"
+    verified: "trino.io S3 filesystem docs require s3.aws-access-key + s3.aws-secret-key when not using IAM role auth. The candidate's bootstrap script must inject the values from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY into the catalog properties."
+
+  - between: [starrocks-fe, iceberg-rest]
+    rule: "StarRocks 3.3.x requires PR #55416 for Iceberg REST catalog FileIO propagation to non-AWS S3 endpoints"
+    verified: "3.3.12 includes PR #55416 — same constraint as udp-local-v0.2.lock.yaml. Promotion to pilot-stable does NOT relax this rule; the StarRocks side of the candidate is identical to v0.2."
+
+  - between: [starrocks-fe, starrocks-be]
+    rule: "FE and BE must run the same minor + patch version"
+    verified: "both pinned to 3.3.12"
+
+  - between: [minio, starrocks-fe, starrocks-be]
+    rule: "StarRocks FE+BE must export AWS_REGION + AWS_ENDPOINT_URL_S3 + AWS_S3_US_EAST_1_REGIONAL_ENDPOINT=regional in startup, beyond catalog props"
+    verified: "Same constraint as udp-local-v0.2 — the StarRocks side reuses UDP PR #6's docker-compose env injection. The Windows AWS-SDK→MinIO UnknownHostException caveat from v0.2 likely also applies here; not yet observed."
+
+  - between: [trino, starrocks-fe]
+    rule: "Both engines must read from the SAME Iceberg-REST endpoint with the SAME warehouse location so that tables Trino writes are visible to StarRocks (and vice-versa) without snapshot drift"
+    verified: "Both consume ICEBERG_REST_URI=http://iceberg-rest:8181 and ICEBERG_WAREHOUSE=s3://datalake/warehouse from env_defaults. Runtime verification pending."
+
+# ---------------------------------------------------------------------------
+# Host requirements — Trino's JVM bumps the floor versus v0.2.
+# ---------------------------------------------------------------------------
+host_requirements:
+  docker_min: "28.0"
+  docker_compose_min: "v2.30"
+  bash_min: "5.0"
+  os_verified: []  # CANDIDATE: nothing verified yet
+  os_unverified_but_likely_works:
+    - "Ubuntu 22.04+ (Linux)"
+    - "Windows 11 + Docker Desktop"
+    - "macOS + Docker Desktop"
+  # Trino's JVM holds working sets in heap during planning + execution.
+  # Below ~10 GB total RAM Trino on 4 GB will reject Iceberg scans with
+  # heap-allocation errors during planning even before any data flows.
+  ram_min_gb: 12
+  ram_recommended_gb: 20
+  disk_min_gb: 50
+  ports_required: [9000, 9001, 8181, 8080, 8030, 9030]
+
+# ---------------------------------------------------------------------------
+# Evidence — per-attempt verification records. EMPTY for candidate stacks.
+# Append a record after every install attempt (including failed ones) so
+# the failure mode is documented for the next contributor to pick up.
+# ---------------------------------------------------------------------------
+evidence: []
+
+# ---------------------------------------------------------------------------
+# Known-incompatible — combinations we know DO NOT work. Carried over from
+# v0.2 where the constraint still applies, plus Trino-specific entries.
+# ---------------------------------------------------------------------------
+incompatible:
+  - combination: [trino:latest]
+    reason: "Floating `latest` tag changes whenever Trino ships (currently 481, was 475 last week, will be 482+ next week). The lock-file contract requires a stable tag — use a numeric pin like `475`."
+    discovered: "2026-05-16"
+    workaround: "Pin to the numeric Trino tag that matches the lock (currently 475)."
+
+  - combination: [starrocks-fe:3.3-latest, starrocks-be:3.3-latest]
+    reason: "Floating tag has historically resolved to 3.3.10 (pre-3.3.12) which has the Iceberg REST FileIO propagation bug fixed by PR #55416. Same caveat as udp-local-v0.2."
+    discovered: "2026-05-16"
+    workaround: "Pin to exact 3.3.12 or newer."
+
+  - combination: [trino:475, "iceberg-rest:<1.5.0"]
+    reason: "Trino 475's Iceberg connector exercises REST spec endpoints (table listing, snapshot updates) that older iceberg-rest images do not implement consistently. Not runtime-observed in this candidate — derived from Trino release notes referencing minimum spec expectations."
+    discovered: "2026-05-16"
+    workaround: "Stay on tabulario/iceberg-rest:1.6.0 or bump to a newer pinned tag and re-verify."

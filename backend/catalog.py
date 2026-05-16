@@ -134,6 +134,41 @@ def validate_catalog() -> list[str]:
                     f"recommended_set '{rs_id}': references unknown component '{comp_id}'"
                 )
 
+    # Warn when a recommended_set points at a stack whose compatibility
+    # lock is `status: candidate`. The set is allowed to surface in the
+    # UI (we explicitly ship candidates for visibility) but operators
+    # and /healthz need to see the non-certified status BEFORE someone
+    # picks it for a real install. Import locally to avoid a startup
+    # circular import — compatibility imports catalog via main.py.
+    try:
+        from .compatibility import load_lock  # local import
+    except Exception:  # pragma: no cover — defensive
+        load_lock = None
+    if load_lock is not None:
+        for rs_id, rs in rec_sets.items():
+            if not isinstance(rs, dict): continue
+            stack_id = rs.get("stack_id")
+            if not isinstance(stack_id, str) or not stack_id:
+                continue
+            try:
+                lock = load_lock(stack_id)
+            except Exception as e:
+                problems.append(
+                    f"recommended_set '{rs_id}': warning — could not load lock for stack '{stack_id}' ({type(e).__name__}: {e})"
+                )
+                continue
+            if lock is None:
+                # No lock file at all — uncertified stack. Surface as warning.
+                problems.append(
+                    f"recommended_set '{rs_id}': warning — stack '{stack_id}' has no compatibility lock file (uncertified)"
+                )
+                continue
+            status = lock.get("status")
+            if status == "candidate":
+                problems.append(
+                    f"recommended_set '{rs_id}': warning — stack '{stack_id}' lock status is 'candidate' (not pilot-stable; no end-to-end install evidence yet)"
+                )
+
     return problems
 
 

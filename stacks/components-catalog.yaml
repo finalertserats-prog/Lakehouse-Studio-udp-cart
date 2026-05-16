@@ -47,6 +47,14 @@ recommended_sets:
     name: UDP Reference Stack
     components: [iceberg, iceberg-rest, minio, spark-iceberg, starrocks]
     stack_id: udp-local-v0.2
+  # CANDIDATE — image tags verified on registry but no end-to-end install
+  # evidence yet. Listed here so the UI/picker can surface it as an
+  # explicit candidate option (gated by the lock file's status="candidate"
+  # which surfaces as a warning via /healthz).
+  udp-trino-recommended:
+    name: UDP Trino Reference Stack (Candidate)
+    components: [iceberg, iceberg-rest, minio, trino, starrocks]
+    stack_id: udp-trino-local-v0.1
 
 # ============================================================
 # Templates — use-case-shaped views over recommended_sets.
@@ -359,8 +367,52 @@ categories:
           Iceberg 1.8.1 satisfies the spark↔iceberg-rest server-side-newer
           constraint.
         resource_profile_summary: "Recommended tier: 4 CPU, 8 GB RAM, 20 GB disk. RAM dominates — Spark spills to disk under pressure but slows sharply."
+      - id: trino
+        name: Trino
+        version: "475"
+        maturity: ga
+        recommended: false
+        # Candidate badge tells the UI to render a non-green status pill so
+        # operators see this is not the certified pick. Stack-level status
+        # also flows from stacks/compatibility/udp-trino-local-v0.1.lock.yaml
+        # which carries status: "candidate".
+        status_badge: "Candidate"
+        badges: [Candidate]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Trino Software Foundation
+        url: https://trino.io
+        summary: Federated SQL engine that reads Iceberg, Postgres, Kafka, and more in one statement. CANDIDATE for the v0.1 Trino stack — image tags verified but no successful end-to-end install captured yet.
+        compatible_with: [iceberg, iceberg-rest, minio]
+        logo: "/assets/logos/trino.svg"
+        tagline: "Distributed SQL query engine for federated analytics across many data sources."
+        what_it_is: >
+          Trino is a parallel SQL engine that runs ANSI SQL across Iceberg,
+          Hive, Postgres, MySQL, Kafka, MongoDB, and dozens of other sources
+          without copying data into a warehouse first. In this candidate
+          stack Trino takes Spark's slot — it both bootstraps the demo
+          tables (via Trino SQL) and serves ad-hoc queries against the
+          Iceberg REST catalog.
+        best_for:
+          - "Federated queries that join Iceberg tables against relational sources"
+          - "Interactive ad-hoc SQL exploration on lakehouse data"
+          - "Replacing Presto / PrestoSQL deployments with the modern fork"
+          - "Multi-engine architectures where one SQL surface fronts everything"
+        capabilities:
+          - "ANSI SQL with window functions, CTEs, lateral joins, and approximate aggregates"
+          - "Native Iceberg connector with REST catalog support"
+          - "Federated query across Iceberg + relational + streaming sources"
+          - "Native S3 filesystem with MinIO-compatible path-style addressing"
+          - "Cost-based optimizer with dynamic filtering and join reordering"
+          - "Web UI on port 8080 for query plans, stage timings, and worker health"
+        why_this_version: >
+          Pinned to trinodb/trino:475 because (a) it's been in-market long
+          enough for community-reported Iceberg-REST and MinIO bugs to surface
+          and (b) the floating `latest` tag is a moving target that breaks
+          the lock-file contract. Verified present on Docker Hub via
+          `docker manifest inspect trinodb/trino:475` on 2026-05-16.
+        resource_profile_summary: "Recommended tier: 4 CPU, 10 GB RAM, 20 GB disk. RAM dominates — Trino's JVM holds working sets in heap; below 10 GB total it rejects Iceberg scans during planning."
     coming_soon:
-      - { name: "Trino",        id: "trino",  logo: "/assets/logos/trino.svg",  summary: "Federated SQL engine — query Iceberg, Postgres, Kafka, and more in one statement.", reason: "Federated SQL; planned for v0.4" }
       - { name: "Apache Flink", id: "flink",  logo: "/assets/logos/flink.svg",  summary: "Streaming compute with an Iceberg sink for low-latency CDC pipelines.",          reason: "Streaming-first; planned for v0.5" }
       - { name: "Dremio",       id: "dremio", logo: "/assets/logos/dremio.svg", summary: "BI-focused lakehouse engine with semantic layer and reflections.",                reason: "BI-focused lakehouse engine" }
 
