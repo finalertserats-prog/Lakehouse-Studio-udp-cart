@@ -329,6 +329,18 @@
     .display-2 { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: clamp(1.75rem, 3.2vw, 2.5rem); line-height: 1.1; letter-spacing: -0.02em; }
     .display-3 { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.015em; }
 
+    /* ---------------- HOW IT WORKS MODAL ---------------- */
+    .how-step { transition: border-color .25s ease, transform .25s ease; }
+    .how-step:hover { border-color: rgba(34,211,238,0.45); transform: translateX(2px); }
+    .how-num {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 14px;
+      background: linear-gradient(120deg, var(--cyan), var(--purple));
+      color: #0a0a1f; flex-shrink: 0;
+      box-shadow: 0 0 18px -4px rgba(34,211,238,0.55);
+    }
+
     /* ---------------- STEPPER ---------------- */
     .step-pill {
       padding: 6px 12px; border-radius: 999px;
@@ -379,6 +391,78 @@
 <!-- Aurora + grid backgrounds -->
 <div class="aurora"><div class="blob"></div></div>
 <div class="grid-bg"></div>
+
+<!-- "How it works" modal — walkthrough of the 8-step pipeline -->
+<div id="how-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center p-4" style="background: rgba(7,6,26,0.78); backdrop-filter: blur(8px);">
+  <div class="glass-strong relative w-full max-w-3xl mx-4 p-8 overflow-y-auto" style="border-radius: 22px; max-height: 90vh;">
+    <button id="how-modal-close" class="absolute top-4 right-4 text-slate-400 hover:text-white text-2xl leading-none w-8 h-8 rounded-full hover:bg-white/5">×</button>
+    <div class="text-xs uppercase tracking-widest text-cyan-300 mb-2">How it works</div>
+    <div class="display-2 grad-text-soft mb-3">From cart to query in 8 steps</div>
+    <p class="text-slate-400 mb-6">Studio compresses what's normally a 6-week integration into a guided 30-minute flow. Each step is reversible, every error is explained.</p>
+    <div class="space-y-3">
+      <div class="how-step glass p-4 flex gap-4 items-start">
+        <div class="how-num">1</div>
+        <div class="flex-1">
+          <div class="font-semibold text-slate-100 mb-1">Choose your goal</div>
+          <div class="text-sm text-slate-400">Pick the use case closest to yours (local demo / production / AI-ML / analytics / air-gapped). We pre-select sensible defaults but you control every choice.</div>
+        </div>
+      </div>
+      <div class="how-step glass p-4 flex gap-4 items-start">
+        <div class="how-num">2</div>
+        <div class="flex-1">
+          <div class="font-semibold text-slate-100 mb-1">Build your stack</div>
+          <div class="text-sm text-slate-400">Shop components category by category — table format, catalog, object storage, processing, serving. Live compatibility score (0-100) updates as you add. Alternates listed as "coming soon".</div>
+        </div>
+      </div>
+      <div class="how-step glass p-4 flex gap-4 items-start">
+        <div class="how-num">3</div>
+        <div class="flex-1">
+          <div class="font-semibold text-slate-100 mb-1">Name your lakehouse</div>
+          <div class="text-sm text-slate-400">Personal name — "ocean", "nebula", "halcyon" — shown everywhere afterward. Suggestions on tap, all validated.</div>
+        </div>
+      </div>
+      <div class="how-step glass p-4 flex gap-4 items-start">
+        <div class="how-num">4</div>
+        <div class="flex-1">
+          <div class="font-semibold text-slate-100 mb-1">Size your server</div>
+          <div class="text-sm text-slate-400">Three tiers (minimal / recommended / comfortable) sized from your cart. Live-matched VPS plans from Hetzner, DigitalOcean, Linode, Vultr — cheapest fit highlighted, direct signup links.</div>
+        </div>
+      </div>
+      <div class="how-step glass p-4 flex gap-4 items-start">
+        <div class="how-num">5</div>
+        <div class="flex-1">
+          <div class="font-semibold text-slate-100 mb-1">Connect server</div>
+          <div class="text-sm text-slate-400">Host + install directory. v0.3 runs against the same machine Studio is on; SSH-to-remote-VPS lands in v0.4.</div>
+        </div>
+      </div>
+      <div class="how-step glass p-4 flex gap-4 items-start">
+        <div class="how-num">6</div>
+        <div class="flex-1">
+          <div class="font-semibold text-slate-100 mb-1">Pre-flight inspection</div>
+          <div class="text-sm text-slate-400">Docker, Compose, bash, RAM, CPU, disk, port conflicts — 14 checks before installing. Never installs into a broken environment.</div>
+        </div>
+      </div>
+      <div class="how-step glass p-4 flex gap-4 items-start">
+        <div class="how-num">7</div>
+        <div class="flex-1">
+          <div class="font-semibold text-slate-100 mb-1">Install with live logs</div>
+          <div class="text-sm text-slate-400">Clone repo, write env file, run doctor / start / bootstrap / smoke test. Live WebSocket logs in a terminal panel. Per-step Retry, Skip, Rollback if anything fails — with a diagnose panel that explains what / why / how to fix.</div>
+        </div>
+      </div>
+      <div class="how-step glass p-4 flex gap-4 items-start">
+        <div class="how-num">8</div>
+        <div class="flex-1">
+          <div class="font-semibold text-slate-100 mb-1">Run a query</div>
+          <div class="text-sm text-slate-400">Demo data loaded. One-click queries against StarRocks. Sandboxed SQL editor for ad-hoc reads. Service URLs for MinIO, Iceberg REST, Spark, StarRocks. Confetti.</div>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center justify-end gap-3 mt-6">
+      <button id="how-modal-start" class="btn-primary text-sm">Start install <span class="ml-1">→</span></button>
+      <button id="how-modal-close-2" class="btn-ghost text-sm">Close</button>
+    </div>
+  </div>
+</div>
 
 <!-- Auth-token modal (hidden by default; takes over for window.prompt) -->
 <div id="auth-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center" style="background: rgba(7,6,26,0.78); backdrop-filter: blur(8px);">
@@ -492,7 +576,7 @@
         </p>
         <div class="flex items-center gap-3">
           <button id="btn-start" class="btn-primary text-base">Start install <span class="ml-2">→</span></button>
-          <a href="#what" class="btn-ghost text-sm">See how it works</a>
+          <button id="btn-how" class="btn-ghost text-sm">See how it works</button>
         </div>
         <div class="flex items-center gap-6 mt-10 text-xs text-slate-500">
           <div class="flex items-center gap-2"><span class="w-1 h-1 rounded-full bg-cyan-400"></span> Compatibility-validated</div>
@@ -949,7 +1033,29 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => navigate(b.dataset.nav)));
-  document.getElementById("btn-start").addEventListener("click", () => { loadGoals().then(() => navigate("goal")); });
+  document.getElementById("btn-start").addEventListener("click", () => {
+    loadGoals().then(() => navigate("goal")).catch(e => showToast(`Couldn't load goals: ${e.message}`));
+  });
+
+  // "How it works" modal — opens on btn-how, closes on X / Close / Esc / backdrop.
+  (function () {
+    const modal = document.getElementById("how-modal");
+    const open = () => { modal.classList.remove("hidden"); document.body.style.overflow = "hidden"; };
+    const close = () => { modal.classList.add("hidden"); document.body.style.overflow = ""; };
+    document.getElementById("btn-how").addEventListener("click", open);
+    document.getElementById("how-modal-close").addEventListener("click", close);
+    document.getElementById("how-modal-close-2").addEventListener("click", close);
+    document.getElementById("how-modal-start").addEventListener("click", () => {
+      close();
+      document.getElementById("btn-start").click();
+    });
+    // Click backdrop (outside the panel) to close
+    modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+    // Escape key closes when open
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !modal.classList.contains("hidden")) close();
+    });
+  })();
 
   // ----- escape helper -----
   function esc(s) {
