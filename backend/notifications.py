@@ -158,6 +158,14 @@ class EmailDriver:
     async def send(self, event: NotifyEvent) -> None:
         if not self.recipients:
             raise RuntimeError("email driver has no recipients configured")
+        # Refuse to attempt SMTP AUTH with an empty resolved secret — that's
+        # an unset ${ENV} or keyring miss, which would emit a weak/null login
+        # attempt the server logs as an auth failure. Fail loudly here instead.
+        if self.username and not self.password:
+            raise RuntimeError(
+                "email driver has username but no resolved secret — "
+                "check ${ENV} indirection or keyring entry"
+            )
         await asyncio.to_thread(self._send_sync, event)
 
 

@@ -69,8 +69,20 @@ async def list_namespaces(rest_base_url: str = DEFAULT_REST_BASE_URL) -> list[st
     return out
 
 
+_IDENT_RE = __import__("re").compile(r"^[A-Za-z0-9_.\-]{1,128}$")
+
+
+def _validate_ident(value: str, field: str) -> None:
+    """Reject namespace / table identifiers that don't match a sane regex.
+    Catches path traversal (..), URL injection (?, &, #), and absurd lengths
+    before they hit the REST catalog URL."""
+    if not isinstance(value, str) or not _IDENT_RE.match(value):
+        raise ValueError(f"{field} {value!r}: must match [A-Za-z0-9_.-]{{1,128}}")
+
+
 async def list_tables(namespace: str, rest_base_url: str = DEFAULT_REST_BASE_URL) -> list[dict]:
     """List tables in a namespace. Returns [{namespace, name}]."""
+    _validate_ident(namespace, "namespace")
     key = ("list_tables", rest_base_url, namespace)
     cached = _cache_get(key)
     if cached is not None:
@@ -143,6 +155,8 @@ async def get_table_info(
     namespace: str, name: str, rest_base_url: str = DEFAULT_REST_BASE_URL
 ) -> dict:
     """Fetch a single table's metadata. No cache — callers may want fresh data."""
+    _validate_ident(namespace, "namespace")
+    _validate_ident(name, "table name")
     ns_path = namespace.replace(".", "%1F")
     url = f"{rest_base_url.rstrip('/')}/v1/namespaces/{ns_path}/tables/{name}"
     data = await _get_json(url)
