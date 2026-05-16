@@ -123,7 +123,7 @@ categories:
     components:
       - id: spark-iceberg
         name: Apache Spark + Iceberg
-        version: "3.5.1_1.5.2"
+        version: "3.5.5_1.8.1"
         maturity: ga
         recommended: true
         badges: [Recommended, Stable]

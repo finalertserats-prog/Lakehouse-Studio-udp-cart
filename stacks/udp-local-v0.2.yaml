@@ -20,6 +20,7 @@ components:
     category: object_storage
     version: RELEASE.2025-04-22T22-12-26Z
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    service_name: minio
     ports: [9000, 9001]
     resource_profiles:
       minimal:     { cpu: 1, ram_gb: 2, disk_gb: 20 }
@@ -30,6 +31,7 @@ components:
     category: catalog
     version: "1.6.0"
     image: tabulario/iceberg-rest:1.6.0
+    service_name: iceberg-rest
     ports: [8181]
     resource_profiles:
       minimal:     { cpu: 1, ram_gb: 1, disk_gb: 2 }
@@ -38,8 +40,9 @@ components:
   - id: spark
     name: Spark + Iceberg
     category: processing
-    version: 3.5.1_1.5.2
-    image: tabulario/spark-iceberg:3.5.1_1.5.2
+    version: 3.5.5_1.8.1
+    image: tabulario/spark-iceberg:3.5.5_1.8.1
+    service_name: spark
     ports: [8888, 4040]
     resource_profiles:
       minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 10 }
@@ -50,6 +53,7 @@ components:
     category: serving
     version: 3.3-latest
     image: starrocks/fe-ubuntu:3.3-latest
+    service_name: starrocks-fe
     ports: [8030, 9020, 9030]
     resource_profiles:
       minimal:     { cpu: 1, ram_gb: 2, disk_gb: 5 }
@@ -60,6 +64,7 @@ components:
     category: serving
     version: 3.3-latest
     image: starrocks/be-ubuntu:3.3-latest
+    service_name: starrocks-be
     ports: [8040, 8060, 9050, 9060]
     resource_profiles:
       minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 20 }
@@ -100,8 +105,20 @@ env_defaults:
 
 commands:
   doctor:    { argv: ["./udp", "doctor"],     timeout: 60 }
-  start:     { argv: ["./udp", "start"],      timeout: 600 }
-  bootstrap: { argv: ["./udp", "bootstrap"],  timeout: 900 }
+  # `start` is special: argv is computed at runtime from
+  #   docker compose up -d <services-from-cart> <extra_services>
+  # so UDP's compose can include enterprise/optional services (hive-metastore,
+  # ranger) that we don't want to spin up. The cart-to-service mapping uses
+  # each component's `service_name` field. extra_services covers one-shots
+  # that aren't components themselves (create-bucket initializes MinIO).
+  start:
+    type: docker_compose_up
+    extra_services: [create-bucket]
+    timeout: 600
+  # Studio's own bootstrap (not UDP's) — uses REST catalog only, no
+  # dependency on hive-metastore. Written into the install_dir by the
+  # env step. See backend/runner.py:_STUDIO_BOOTSTRAP_SH.
+  bootstrap: { argv: ["bash", "scripts/lhs-bootstrap.sh"],  timeout: 900 }
   smoke:     { argv: ["./udp", "smoke-test"], timeout: 600 }
   status:    { argv: ["./udp", "status"],     timeout: 30 }
   stop:      { argv: ["./udp", "stop"],       timeout: 120 }

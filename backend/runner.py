@@ -17,6 +17,52 @@ from .stack_manifest import StackManifest
 from .state import store
 
 
+_STUDIO_BOOTSTRAP_SH = r"""#!/usr/bin/env bash
+# Studio-owned bootstrap. Replaces UDP's scripts/bootstrap.sh because that
+# script hard-requires hive-metastore which Studio's v0.3 pilot deliberately
+# doesn't ship. This version uses only MinIO + Iceberg-REST + Spark + StarRocks.
+set -euo pipefail
+
+echo "[studio-bootstrap] waiting for Iceberg REST..."
+for i in $(seq 1 60); do
+  if curl -fsS http://localhost:8181/v1/config >/dev/null 2>&1; then
+    echo "  iceberg-rest OK"; break
+  fi
+  echo "  ($i/60) iceberg-rest not ready yet"; sleep 2
+done
+
+echo "[studio-bootstrap] waiting for StarRocks FE..."
+for i in $(seq 1 60); do
+  if docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "SELECT 1" >/dev/null 2>&1; then
+    echo "  starrocks-fe OK"; break
+  fi
+  echo "  ($i/60) starrocks-fe not ready yet"; sleep 5
+done
+
+echo "[studio-bootstrap] registering StarRocks backend..."
+docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e \
+  "ALTER SYSTEM ADD BACKEND 'starrocks-be:9050';" 2>&1 | grep -v "already exists" || true
+
+echo "[studio-bootstrap] running Spark bootstrap job (REST-catalog)..."
+docker exec udp-spark spark-submit /home/iceberg/jobs/bootstrap_demo_lake.py
+
+echo "[studio-bootstrap] creating StarRocks REST catalog..."
+docker exec -i udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root \
+  < sql/starrocks/00b_create_iceberg_rest_catalog.sql
+
+echo "[studio-bootstrap] creating app_analytics views (REST-backed)..."
+docker exec -i udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root <<'SQL'
+CREATE DATABASE IF NOT EXISTS app_analytics;
+DROP VIEW IF EXISTS app_analytics.demo_customer_summary;
+CREATE VIEW app_analytics.demo_customer_summary AS
+SELECT region, customer_count, total_order_amount, curated_timestamp
+FROM iceberg_rest_catalog.curated.demo_customer_summary;
+SQL
+
+echo "[studio-bootstrap] complete"
+"""
+
+
 def _build_steps(stack: StackManifest) -> list[StepStatus]:
     return [
         StepStatus(id="prepare", title="Prepare workspace"),
@@ -249,9 +295,173 @@ class UDPRunner:
         self._step_end("clone", ok, exit_code=rc)
         return ok
 
+    # Defaults for env vars referenced by UDP's compose but tied to optional
+    # services (hms / ranger) we don't ship in the v0.3 cart. Setting them to
+    # empty strings silences the "variable is not set" warnings; the services
+    # themselves either get a docker-compose profile gate (in UDP) or fail
+    # quietly without breaking the services we DO want.
+    _SAFE_DEFAULTS = {
+        "HMS_DB_NAME": "metastore",
+        "HMS_DB_USER": "hive",
+        "HMS_DB_PASSWORD": "hive",
+        "RANGER_DB_NAME": "ranger",
+        "RANGER_DB_USER": "ranger",
+        "RANGER_DB_PASSWORD": "ranger",
+    }
+
+    def _patch_compose_images(self) -> None:
+        """Rewrite the cloned UDP docker-compose.yml so it matches our cart:
+          1. Update every `image: <repo>:<tag>` to the catalog's pinned tag
+             (UDP upstream can drift; this keeps installs reproducible)
+          2. Strip `depends_on` edges pointing at services that aren't in
+             our cart (UDP includes enterprise services like hive-metastore
+             and ranger that we don't ship; their dep edges would force
+             docker compose to bring them up even when we don't ask for them)
+        Idempotent — running twice is a no-op. Logs every change."""
+        import re
+        compose_path = self.install_dir / "docker-compose.yml"
+        if not compose_path.exists():
+            return
+        text = compose_path.read_text(encoding="utf-8")
+        original = text
+
+        # ---- (1) image tag rewrites ----
+        image_replacements: list[tuple[str, str]] = []
+        for comp in self.stack.components:
+            image = comp.get("image")
+            if not image or ":" not in image:
+                continue
+            repo, _new_tag = image.rsplit(":", 1)
+            pattern = re.compile(
+                rf"^(\s*image:\s*){re.escape(repo)}:[^\s#]+",
+                re.MULTILINE,
+            )
+            new_text, n = pattern.subn(rf"\g<1>{image}", text)
+            if n:
+                image_replacements.append((repo, image))
+                text = new_text
+
+        # ---- (2) prune depends_on entries for services not in our cart ----
+        wanted_services = {c.get("service_name") for c in self.stack.components if c.get("service_name")}
+        start_cmd = self.stack.data.get("commands", {}).get("start", {}) or {}
+        wanted_services.update(start_cmd.get("extra_services") or [])
+
+        dep_removals: list[str] = []
+        # Match a single `<svc>:\n      condition: service_<state>\n` block inside a depends_on:
+        dep_block_re = re.compile(
+            r"^(?P<indent> {6,})(?P<svc>[a-z][a-z0-9_-]*):\n"
+            r"\s+condition:\s*service_(?:healthy|started|completed_successfully)\s*\n",
+            re.MULTILINE,
+        )
+        def _maybe_strip(m: re.Match) -> str:
+            svc = m.group("svc")
+            if svc in wanted_services or svc in ("create-bucket",):
+                return m.group(0)
+            dep_removals.append(svc)
+            return ""
+        text = dep_block_re.sub(_maybe_strip, text)
+
+        # Remove `depends_on:` lines whose children were ALL pruned.
+        text = re.sub(
+            r"^(?P<indent> {4,})depends_on:\s*\n(?=(?P=indent)[a-z]|^[a-z])",
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+
+        # Patch StarRocks FE startup to set priority_networks BEFORE start_fe.sh.
+        # Without this, FE on Docker Desktop gets a non-deterministic IP that
+        # doesn't match the meta/image/ROLE record, and FE refuses to elect
+        # itself leader — staying in INIT forever (the mysql port never binds).
+        # UDP's BE already has the equivalent patch; FE is missing it.
+        fe_old = r"/opt/starrocks/fe/bin/start_fe.sh --daemon"
+        fe_new = (r'echo "priority_networks = 172.16.0.0/12" >> /opt/starrocks/fe/conf/fe.conf'
+                  r' && /opt/starrocks/fe/bin/start_fe.sh --daemon')
+        if fe_old in text and fe_new not in text:
+            text = text.replace(fe_old, fe_new, 1)
+
+        # Downgrade `condition: service_healthy` → `condition: service_started`.
+        # Several UDP images ship broken healthchecks (iceberg-rest's check
+        # calls `wget` which isn't in the image, starrocks-fe takes minutes
+        # to pass on first boot). Downgrading lets `docker compose up -d`
+        # return after services START rather than waiting for healthchecks
+        # that may never pass. The bootstrap step has its own wait-for
+        # logic so we don't lose the readiness guarantee.
+        text, healthy_to_started = re.subn(
+            r"condition:\s*service_healthy",
+            "condition: service_started",
+            text,
+        )
+
+        if text != original:
+            compose_path.write_text(text, encoding="utf-8")
+            for repo, image in image_replacements:
+                self._log("env", "stdout", f"compose image: {repo} -> {image}")
+            if dep_removals:
+                # Dedupe and report
+                seen = []
+                for d in dep_removals:
+                    if d not in seen: seen.append(d)
+                self._log("env", "stdout",
+                          f"compose deps pruned (not in cart): {', '.join(seen)}")
+            if healthy_to_started:
+                self._log("env", "stdout",
+                          f"compose: downgraded {healthy_to_started} 'service_healthy' deps to 'service_started' (UDP upstream healthchecks unreliable; bootstrap step has its own readiness gate)")
+
+    def _patch_spark_defaults(self) -> None:
+        """Repoint Spark's default `udp` catalog from hive-metastore to
+        iceberg-REST. UDP's spark-defaults.conf configures `udp` for HMS
+        and `udp_rest` for REST in parallel; we replace the HMS lines so
+        the bootstrap job (hardcoded to use `udp`) runs against REST."""
+        cfg = self.install_dir / "config" / "spark" / "spark-defaults.conf"
+        if not cfg.exists():
+            return
+        text = cfg.read_text(encoding="utf-8")
+        original = text
+        # Replace the 3 hive-specific lines for the `udp` catalog
+        replacements = [
+            ("spark.sql.catalog.udp.type=hive", "spark.sql.catalog.udp.type=rest"),
+            ("spark.sql.catalog.udp.uri=thrift://hive-metastore:9083",
+             "spark.sql.catalog.udp.uri=http://iceberg-rest:8181"),
+            ("spark.sql.catalog.udp.warehouse=s3a://datalake/warehouse",
+             "spark.sql.catalog.udp.warehouse=s3://datalake/warehouse"),
+        ]
+        for old, new in replacements:
+            text = text.replace(old, new)
+        if text != original:
+            cfg.write_text(text, encoding="utf-8")
+            self._log("env", "stdout", "spark-defaults.conf: repointed 'udp' catalog from HMS to REST")
+
+    def _write_studio_bootstrap(self) -> None:
+        """Drop a Studio-owned bootstrap script into the install dir's scripts/
+        directory. Replaces UDP's bootstrap.sh which hard-requires
+        hive-metastore. Studio's script uses ONLY the services we ship:
+        MinIO + Iceberg REST + Spark + StarRocks."""
+        scripts_dir = self.install_dir / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        script = scripts_dir / "lhs-bootstrap.sh"
+        script.write_text(_STUDIO_BOOTSTRAP_SH, encoding="utf-8")
+        try:
+            script.chmod(0o755)
+        except Exception:
+            pass
+
     async def _step_env(self, overrides: dict[str, str]) -> bool:
         self._step_start("env")
         env_path = self.install_dir / ".env"
+
+        # ---- patch the cloned UDP repo with our catalog's pinned image versions ----
+        # UDP's docker-compose.yml may carry stale image tags upstream
+        # (caught in pilot: tabulario/spark-iceberg:3.5.1_1.5.2 was removed
+        # from Docker Hub). We override every image to whatever the catalog
+        # currently certifies, so an out-of-date UDP clone still installs
+        # cleanly. Bonus: this is what makes the cart's component versions
+        # actually mean something (closes part of the Gemini "guided
+        # illusion" gap for image tags specifically).
+        try:
+            self._patch_compose_images()
+        except Exception as e:
+            self._log("env", "stderr", f"compose image patch warning: {e}")
 
         # Sanitize user overrides; reject anything dangerous outright.
         clean_overrides, rejections = sanitize_env_overrides(overrides)
@@ -263,7 +473,29 @@ class UDPRunner:
             pass
 
         # Defaults are trusted (from the manifest), but quote them too for safety.
-        merged: dict[str, str] = {**self.stack.env_defaults, **clean_overrides}
+        # _SAFE_DEFAULTS supplies dummy values for env vars referenced by
+        # optional UDP services we don't ship (hms/ranger) — silences
+        # docker-compose's "variable not set" warnings on every command.
+        merged: dict[str, str] = {**self._SAFE_DEFAULTS, **self.stack.env_defaults, **clean_overrides}
+
+        # Patch Spark's catalog config: swap the default `udp` catalog from
+        # hive-metastore-backed to iceberg-REST-backed so the Spark bootstrap
+        # job works without hive-metastore. UDP ships a parallel `udp_rest`
+        # catalog already configured for REST — we redirect `udp` at the same
+        # endpoint so the bootstrap job (which hardcodes catalog name `udp`)
+        # runs unmodified.
+        try:
+            self._patch_spark_defaults()
+        except Exception as e:
+            self._log("env", "stderr", f"spark-defaults patch warning: {e}")
+
+        # Write Studio's own bootstrap script that uses REST catalog only.
+        # The manifest's `bootstrap` command points at this script via
+        # `./scripts/lhs-bootstrap.sh`.
+        try:
+            self._write_studio_bootstrap()
+        except Exception as e:
+            self._log("env", "stderr", f"studio bootstrap write warning: {e}")
 
         # Make UDP scripts executable. On Windows chmod is a near-noop, but on
         # Linux/macOS it matters. Don't swallow surprising errors silently.
@@ -309,7 +541,25 @@ class UDPRunner:
         except KeyError as e:
             self._step_end(step_id, False, message=str(e))
             return False
-        rc = await self._run_bash(step_id, list(spec["argv"]), self.install_dir, int(spec.get("timeout", 600)))
+
+        # Special command type: docker_compose_up with explicit service list
+        # built from the stack's components. Lets us skip enterprise services
+        # that UDP's compose includes by default (hive-metastore, ranger).
+        if spec.get("type") == "docker_compose_up":
+            services: list[str] = []
+            for comp in self.stack.components:
+                sn = comp.get("service_name")
+                if sn:
+                    services.append(sn)
+            services.extend(spec.get("extra_services") or [])
+            if not services:
+                self._step_end(step_id, False, message="no services to start (cart empty?)")
+                return False
+            argv = ["docker", "compose", "up", "-d"] + services
+        else:
+            argv = list(spec["argv"])
+
+        rc = await self._run_bash(step_id, argv, self.install_dir, int(spec.get("timeout", 600)))
         ok = rc == 0
         self._step_end(step_id, ok, exit_code=rc)
         return ok

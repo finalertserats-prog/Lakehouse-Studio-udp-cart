@@ -42,11 +42,22 @@ _PATTERNS: list[dict] = [
         "retryable": True,
     },
     {
+        "category": "image_not_found",
+        # Specific case: the tag literally doesn't exist on the registry.
+        # Order matters — this MUST come before the broader image_pull rule.
+        "match": re.compile(r"(?:failed to resolve reference \"[^\"]+\":\s*[^\s\"]+:\s*not found|manifest unknown|repository .* not found)", re.IGNORECASE),
+        "extract_image": re.compile(r'failed to resolve reference "([^"]+)"', re.IGNORECASE),
+        "title": "Image tag doesn't exist on the registry",
+        "why_tmpl": "The image '{image}' was requested but the registry returned 'not found'. This usually means the tag was removed/renamed upstream, or there's a typo.",
+        "fix_tmpl": "Verify what tags exist:\n  docker manifest inspect {image_repo}:latest\n  (or browse the registry page directly)\n\nIf the tag was removed upstream, edit stacks/components-catalog.yaml + stacks/udp-local-v0.2.yaml to use a valid version, restart Studio, and retry the install.",
+        "retryable": True,
+    },
+    {
         "category": "image_pull",
-        "match": re.compile(r"(?:pull access denied|manifest unknown|toomanyrequests|repository does not exist|i/o timeout.*registry|net/http: TLS handshake timeout)", re.IGNORECASE),
+        "match": re.compile(r"(?:pull access denied|toomanyrequests|i/o timeout.*registry|net/http: TLS handshake timeout)", re.IGNORECASE),
         "title": "Image pull failed",
-        "why": "Docker couldn't pull one of the component images — network issue, registry rate limit, or wrong tag.",
-        "fix": "Check internet from the host: `curl -I https://registry-1.docker.io`. If you're rate-limited, log in: `docker login`. If the tag is wrong, check stacks/udp-local-v0.2.yaml versions. Re-run.",
+        "why": "Docker couldn't pull one of the component images — network issue, registry rate limit, or auth required.",
+        "fix": "Check internet from the host: `curl -I https://registry-1.docker.io`. If you're rate-limited, log in: `docker login`. Re-run.",
         "retryable": True,
     },
     {
@@ -144,7 +155,15 @@ def explain(failed_step: Optional[str], log_tail: list[str], exit_code: Optional
             if pm:
                 port = pm.group(1)
         title = pat["title"]
-        if pat.get("why_tmpl") and not port:
+        # Extract image name when relevant
+        image = None
+        if pat.get("extract_image"):
+            im = pat["extract_image"].search(blob)
+            if im:
+                image = im.group(1)
+        image_repo = image.rsplit(":", 1)[0] if image and ":" in image else (image or "<image>")
+
+        if pat.get("why_tmpl") and pat.get("category") == "port_conflict" and not port:
             # Port-conflict template needs a port; without one, fall back to generic.
             why = "Another process is already listening on a port the stack needs."
             fix = ("Find what's using the conflicting port:\n"
@@ -152,8 +171,8 @@ def explain(failed_step: Optional[str], log_tail: list[str], exit_code: Optional
                    "  Windows: netstat -ano | findstr LISTENING\n"
                    "Stop the offending process and re-run.")
         else:
-            why = pat.get("why") or pat["why_tmpl"].format(port=port)
-            fix = pat.get("fix") or pat["fix_tmpl"].format(port=port)
+            why = pat.get("why") or pat["why_tmpl"].format(port=port, image=image or "<image>", image_repo=image_repo)
+            fix = pat.get("fix") or pat["fix_tmpl"].format(port=port, image=image or "<image>", image_repo=image_repo)
         return {
             "category": pat["category"],
             "title": title,
