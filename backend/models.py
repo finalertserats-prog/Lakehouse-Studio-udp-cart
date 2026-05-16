@@ -67,6 +67,9 @@ class InspectionReport(BaseModel):
     recommended: bool
 
 
+EnvironmentTier = Literal["dev", "staging", "prod"]
+
+
 class InstallRequest(BaseModel):
     stack_id: str = Field(min_length=1, max_length=128)
     host: str = Field(default="localhost", min_length=1, max_length=253)
@@ -75,6 +78,11 @@ class InstallRequest(BaseModel):
     lake_name: Optional[str] = Field(default=None, max_length=MAX_LAKE_NAME_LEN)
     goal: Optional[str] = Field(default=None, max_length=MAX_GOAL_ID_LEN)
     cart: Optional[list[str]] = Field(default=None)
+    # Optional environment tier. When set, the runner derives a unique
+    # install_dir suffix and injects UDP_ENV + UDP_PROJECT_NAME so multiple
+    # environments can co-exist on the same host without container or
+    # volume collisions. None = single-environment install (legacy default).
+    environment: Optional[EnvironmentTier] = None
 
     @field_validator("cart")
     @classmethod
@@ -108,6 +116,7 @@ class InstallRecord(BaseModel):
     lake_name: Optional[str] = None
     goal: Optional[str] = None
     cart: list[str] = Field(default_factory=list)
+    environment: Optional[EnvironmentTier] = None
 
 
 class LogEvent(BaseModel):

@@ -140,6 +140,7 @@ class StateStore:
         lake_name: Optional[str] = None,
         goal: Optional[str] = None,
         cart: Optional[list[str]] = None,
+        environment: Optional[str] = None,
     ) -> InstallRecord:
         with self._lock:
             now = time.time()
@@ -156,6 +157,7 @@ class StateStore:
                 lake_name=lake_name,
                 goal=goal,
                 cart=cart or [],
+                environment=environment,  # type: ignore[arg-type]
             )
             self._records[install_id] = record
             self._persist_locked()
