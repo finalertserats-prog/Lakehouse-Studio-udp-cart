@@ -1,0 +1,142 @@
+// LakeHouse Studio v1.0 — Agent gRPC contract.
+//
+// This is the contract a future Go agent implements. The Python control
+// plane calls this via outbound-initiated mTLS gRPC. The agent runs on
+// customer infrastructure and dials OUT to the control plane (so customer
+// firewalls don't need an inbound rule for us).
+//
+// Auth: mutual TLS. Per-agent client cert minted by the control plane
+// during enrolment; control plane pins its server cert in the agent
+// config. No bearer tokens — the cert IS the identity.
+//
+// Wire-compat target: gRPC over HTTP/2, protobuf v3, no JSON transcoding.
+// Server-streaming used only for StreamLogs (long-lived); everything else
+// is unary so timeouts are easy to reason about.
+//
+// Generated stubs land next to this file as agent_pb2.py /
+// agent_pb2_grpc.py — NOT committed; v1.0 build step regenerates them.
+
+syntax = "proto3";
+
+package lakehousestudio.v1;
+
+option go_package = "github.com/lakehousestudio/agent/proto;agentpb";
+
+
+service AgentControl {
+  // Capability + version report. Caller uses this to decide which Executor
+  // implementation it's actually talking to.
+  rpc Inspect(InspectRequest) returns (InspectResponse);
+
+  // docker compose up -d <services> (or k8s equivalent on the agent side).
+  rpc ComposeUp(ComposeUpRequest) returns (ExecResult);
+
+  // docker compose down.
+  rpc ComposeDown(ComposeDownRequest) returns (ExecResult);
+
+  // docker exec <container> <argv...>.
+  rpc ExecInContainer(ExecInContainerRequest) returns (ExecResult);
+
+  // Server-stream container logs back to the control plane.
+  // Each LogChunk is one line (\n stripped). Stream ends when the agent
+  // hits EOF or the deadline expires.
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
+
+  // TCP port probe from the agent's vantage point. True = port accepted a
+  // connection within the timeout.
+  rpc PortProbe(PortProbeRequest) returns (PortProbeResponse);
+}
+
+
+// ---------- Common ---------- //
+
+// Matches backend/v1/executor_interface.py ExecResult 1:1.
+message ExecResult {
+  bool   success     = 1;
+  string stdout      = 2;
+  string stderr      = 3;
+  int32  exit_code   = 4;
+  int32  duration_ms = 5;
+}
+
+
+// ---------- Inspect ---------- //
+
+message InspectRequest {}
+
+message InspectResponse {
+  string agent_version  = 1;
+  string platform       = 2;  // "linux/amd64", "darwin/arm64", ...
+  bool   docker_present = 3;
+  string docker_version = 4;
+  bool   compose_present = 5;
+  string compose_version = 6;
+  // Free-form: agent reports any extra capabilities it has (e.g. GPU,
+  // kubectl available, helm available). Keys MUST be lowercase.
+  map<string, string> extra = 7;
+}
+
+
+// ---------- ComposeUp / Down ---------- //
+
+message ComposeUpRequest {
+  // Absolute path on the AGENT host where docker-compose.yml lives. The
+  // control plane has already arranged for the install dir to be present
+  // (either by shipping files over a separate channel or by having the
+  // agent clone the stack repo itself).
+  string install_dir = 1;
+  // Empty list = "bring up everything in the compose project".
+  repeated string services = 2;
+  int32 timeout_sec = 3;
+}
+
+message ComposeDownRequest {
+  string install_dir = 1;
+  int32  timeout_sec = 2;
+}
+
+
+// ---------- Exec ---------- //
+
+message ExecInContainerRequest {
+  string container_name = 1;
+  repeated string cmd   = 2;  // argv form, NOT a single string
+  int32 timeout_sec     = 3;
+}
+
+
+// ---------- Logs ---------- //
+
+message StreamLogsRequest {
+  string container_name = 1;
+  // Lines of history to send before tailing live output. Match docker's
+  // --tail flag semantics; 0 = no history, just live.
+  int32 tail            = 2;
+  // If true, keep streaming new lines until the deadline fires.
+  bool  follow          = 3;
+}
+
+message LogChunk {
+  // "stdout" or "stderr".
+  string stream = 1;
+  string line   = 2;
+  // Agent-side wall clock for the line. The control plane re-stamps for
+  // its own audit log, but this is useful when reconstructing.
+  double ts     = 3;
+}
+
+
+// ---------- Port probe ---------- //
+
+message PortProbeRequest {
+  // Host the agent should try to reach. Usually "127.0.0.1" — the probe
+  // runs from the agent's network namespace.
+  string host        = 1;
+  int32  port        = 2;
+  int32  timeout_sec = 3;
+}
+
+message PortProbeResponse {
+  bool   ok     = 1;
+  string detail = 2;  // e.g. "connection refused", "timeout", "open"
+}
