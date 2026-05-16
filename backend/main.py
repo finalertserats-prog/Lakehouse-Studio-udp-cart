@@ -292,8 +292,12 @@ async def _validate_catalog_on_startup() -> None:
 
 
 def _require_catalog_ok() -> None:
-    if _CATALOG_PROBLEMS:
-        raise HTTPException(503, {"error": "catalog invalid", "problems": _CATALOG_PROBLEMS})
+    # Warnings (e.g. "warning — stack lock status is candidate") MUST NOT
+    # 503 the routes — they're informational, not blocking. Mirrors the
+    # healthz error/warning split. Errors still block.
+    errors = [p for p in _CATALOG_PROBLEMS if "warning —" not in (p or "")]
+    if errors:
+        raise HTTPException(503, {"error": "catalog invalid", "problems": errors})
 
 
 CatalogOk = Depends(_require_catalog_ok)
