@@ -1787,8 +1787,9 @@ async def post_rbac_user(request: Request, body: RbacUserCreateRequest):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {
-        "user": created.model_dump(),
-        # Surfaced exactly once. The DB never stores plaintext.
+        # Scrubbed via UserPublic — never expose the hashed token over HTTP.
+        "user": rbac_mod.to_public(created).model_dump(),
+        # Plaintext surfaced exactly once. The DB never stores it.
         "api_token": plaintext,
         "warning": "store this token now — it will not be shown again",
     }
@@ -1801,7 +1802,7 @@ async def get_rbac_users(request: Request):
     user = _require_rbac_user(request)
     _require_role(user, {"OWNER", "ADMIN"})
     users = await rbac_mod.list_users()
-    return {"users": [u.model_dump() for u in users]}
+    return {"users": [rbac_mod.to_public(u).model_dump() for u in users]}
 
 
 @app.delete("/api/rbac/users/{user_id}", status_code=204, dependencies=[AuthDep])
@@ -1823,7 +1824,7 @@ async def get_rbac_me(request: Request):
     """Return the calling user's RBAC identity. Any authenticated role."""
     _require_rbac_enabled()
     user = _require_rbac_user(request)
-    return {"user": user.model_dump()}
+    return {"user": rbac_mod.to_public(user).model_dump()}
 
 
 @app.on_event("shutdown")
@@ -2067,6 +2068,30 @@ async def ws_service_logs(websocket: WebSocket, install_id: str, service_name: s
     except ValueError:
         await websocket.close(code=4002)
         return
+
+    # Per Gemini v0.5.1 review: when RBAC is on, a logged-in OPERATOR/VIEWER
+    # could otherwise tail any install's logs by guessing install_id. Gate
+    # the stream on the same Bearer-token permission check as the HTTP route.
+    # No-op when RBAC is off (legacy single-token mode keeps origin-guard
+    # only, matching the existing /logs WS).
+    if rbac_mod.is_rbac_enabled():
+        auth_hdr = websocket.headers.get("authorization", "")
+        user = None
+        if auth_hdr:
+            try:
+                user = await rbac_mod.authenticate(auth_hdr)
+            except Exception:
+                user = None
+        if user is None:
+            await websocket.close(code=4003)  # unauthorized
+            return
+        try:
+            allowed = await rbac_mod.require_permission(user, "/api/installs/{install_id}/logs")
+        except Exception:
+            allowed = False
+        if not allowed:
+            await websocket.close(code=4003)
+            return
 
     await websocket.accept()
     try:

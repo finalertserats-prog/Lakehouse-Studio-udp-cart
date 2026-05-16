@@ -70,17 +70,33 @@ _VALID_ROLE_NAMES: frozenset[str] = frozenset(BUILTIN_ROLES.keys())
 
 
 class User(BaseModel):
-    """Public-facing user shape. Never carries the plaintext token.
+    """INTERNAL user shape used inside the auth layer ONLY.
 
-    ``api_token`` here is the **hashed** token (sha256 hex). Plaintext is
-    surfaced ONCE by ``create_user`` as a separate return value.
+    ``api_token`` is the sha256 HASH of the plaintext token — never the
+    plaintext value itself. Even hashed, this MUST NOT leave the auth
+    boundary: route handlers return UserPublic instead. Exposing a hash
+    in API responses widens the offline-brute-force surface.
     """
 
     user_id: str = Field(min_length=1)
     email: str = Field(min_length=3, max_length=320)
     role: str = Field(min_length=1)
     api_token: str = Field(min_length=64, max_length=64,
-                           description="sha256 hex of the plaintext token; never plaintext")
+                           description="sha256 hex of the plaintext token; INTERNAL ONLY")
+
+
+class UserPublic(BaseModel):
+    """Wire shape returned by API routes. Excludes the token hash so
+    nothing credential-shaped leaves the server (per Gemini v0.5.1 review).
+    """
+
+    user_id: str
+    email: str
+    role: str
+
+
+def to_public(u: User) -> UserPublic:
+    return UserPublic(user_id=u.user_id, email=u.email, role=u.role)
 
 
 # --------------------------------------------------------------------------- #

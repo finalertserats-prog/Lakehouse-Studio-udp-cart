@@ -27,7 +27,9 @@ from cli.ws import follow_logs
 @click.option("--server", default=DEFAULT_SERVER, show_default=True,
               help="Lakehouse Studio server base URL.")
 @click.option("--token", "auth", default=None,
-              help="API auth credential. Overrides the LHS_TOKEN env var.")
+              help=("API auth credential. PREFER the LHS_TOKEN env var — "
+                    "passing --token on the command line exposes the value "
+                    "in process lists (ps), shell history, and system logs."))
 @click.option("--output", type=click.Choice(["table", "json"]), default="table",
               show_default=True, help="Output format.")
 @click.pass_context
