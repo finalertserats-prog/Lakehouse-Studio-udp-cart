@@ -2973,6 +2973,12 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     else if (evt.kind === "state") {
       setStateBadge(evt.status);
       if (evt.status === "READY") setTimeout(() => refreshInstall(state.installId).then(showSuccess), 400);
+      // Terminal failure states must re-render the install record so the
+      // Skip / Retry / Rollback panel (renderFailureControls) appears.
+      // Without this, FAILED installs show the badge but no recovery UI.
+      else if (evt.status === "FAILED" || evt.status === "ROLLED_BACK") {
+        setTimeout(() => refreshInstall(state.installId).catch(() => {}), 400);
+      }
     } else if (evt.kind === "result") {
       if (state.installRecord) state.installRecord.outputs = evt.payload || {};
     } else if (evt.kind === "error") {

@@ -281,12 +281,22 @@ async def _validate_catalog_on_startup() -> None:
     # Start the backup scheduler (60s-tick loop firing enabled schedules).
     await backup_mod.get_scheduler().start()
 
+    # Opt-in DR drill — periodically verifies the latest backup tarball per
+    # install is readable + structurally sound. Non-destructive (no restore).
+    if backup_mod.is_drill_enabled():
+        try:
+            await backup_mod.get_drill_scheduler().start()
+        except Exception:
+            log.exception("DR drill scheduler failed to start; continuing without it")
+
     # Start the audit subscriber if the operator enabled it. Opt-in via
     # LHS_AUDIT_ENABLED=true; default behaviour is unchanged.
     if audit_log.is_enabled():
         try:
             audit_log.init_audit_db()
             await audit_log.get_subscriber().start()
+            if audit_log.is_scheduler_enabled():
+                await audit_log.get_scheduler().start()
         except Exception:
             import logging
             logging.getLogger("lhs.audit").exception(
@@ -666,7 +676,12 @@ async def create_install(body: InstallRequest):
     except KeyError:
         raise HTTPException(404, f"Stack {body.stack_id} not found")
 
-    raw_dir = body.install_dir or str(WORK_DIR / "udp")
+    # Per-environment isolation: when the request names a tier, derive a
+    # unique default install_dir suffix so dev/staging/prod can coexist on
+    # the same host without colliding on /work/udp. Explicit install_dir
+    # always wins — operators who want full control still get it.
+    default_subdir = "udp" if not body.environment else f"udp-{body.environment}"
+    raw_dir = body.install_dir or str(WORK_DIR / default_subdir)
     try:
         install_dir = validate_install_dir(raw_dir)
     except InstallDirError as e:
@@ -680,9 +695,12 @@ async def create_install(body: InstallRequest):
             raise HTTPException(400, f"lake_name rejected: {why}")
         lake_name = normalize_lake_name(body.lake_name)
 
-    # Validate goal against known goals (if catalog is loaded)
+    # Validate goal against known goals (if catalog is loaded).
+    # Warnings (e.g. "warning — stack lock status is candidate") must NOT
+    # block installs — they're informational. Same filter as _require_catalog_ok.
+    catalog_errors = [p for p in _CATALOG_PROBLEMS if "warning —" not in (p or "")]
     if body.goal:
-        if _CATALOG_PROBLEMS:
+        if catalog_errors:
             raise HTTPException(503, "cannot validate goal: catalog has errors")
         known_goals = {g["id"] for g in catalog_goals()}
         if body.goal not in known_goals:
@@ -691,7 +709,7 @@ async def create_install(body: InstallRequest):
     # Validate cart components against the catalog (cart was already validated
     # for shape/dedup/identifier-rules by the Pydantic field validator)
     if body.cart:
-        if _CATALOG_PROBLEMS:
+        if catalog_errors:
             raise HTTPException(503, "cannot validate cart: catalog has errors")
         from .catalog import component_index
         known_components = set(component_index().keys())
@@ -707,11 +725,29 @@ async def create_install(body: InstallRequest):
         lake_name=lake_name,
         goal=body.goal,
         cart=body.cart or [],
+        environment=body.environment,
     )
+
+    # Per-environment isolation: inject UDP_PROJECT_NAME suffix + UDP_ENV
+    # so docker-compose containers + volumes don't collide across tiers on
+    # the same host. The stack manifest's env_defaults provide the base
+    # values; we only patch when the request specifies an environment, and
+    # we never overwrite an operator-provided override.
+    install_env_overrides = dict(body.env_overrides)
+    if body.environment:
+        base_project = (
+            install_env_overrides.get("UDP_PROJECT_NAME")
+            or m.env_defaults.get("UDP_PROJECT_NAME")
+            or "unified-data-plug"
+        )
+        install_env_overrides.setdefault(
+            "UDP_PROJECT_NAME", f"{base_project}-{body.environment}"
+        )
+        install_env_overrides.setdefault("UDP_ENV", body.environment)
 
     runner = UDPRunner(m, rec.install_id, body.host, install_dir)
     wrapped = _make_install_task_wrapper(
-        rec.install_id, lambda: runner.run(body.env_overrides)
+        rec.install_id, lambda: runner.run(install_env_overrides)
     )
     task = asyncio.create_task(wrapped(), name=f"install:{rec.install_id}")
     _INSTALL_TASKS[rec.install_id] = task
@@ -1437,6 +1473,30 @@ async def post_ai_ask(body: ai_mod.ChatRequest):
     return await ai_mod.ask(body)
 
 
+@app.post(
+    "/api/components/{component_id}/recommend",
+    response_model=ai_mod.ComponentRecommendation,
+    dependencies=[AuthDep],
+)
+async def post_component_recommend(
+    component_id: str,
+    body: Optional[ai_mod.ComponentRecommendationRequest] = None,
+):
+    """Per-component LLM-grounded recommendation. Body is optional — when
+    omitted, the recommendation uses just the component's catalog entry and
+    siblings (no operator context). Returns a graceful disabled-state shape
+    (not 5xx) when the AI assistant isn't enabled, matching /api/ai/ask."""
+    if body is None:
+        body = ai_mod.ComponentRecommendationRequest(component_id=component_id)
+    elif body.component_id != component_id:
+        raise HTTPException(
+            400,
+            "component_id in path and body must match "
+            f"('{component_id}' vs '{body.component_id}')",
+        )
+    return await ai_mod.recommend_component(body)
+
+
 # ---------- CSV ingest + Table Explorer ----------
 
 class IngestRequest(BaseModel):
@@ -1979,13 +2039,20 @@ async def _shutdown():
         await backup_mod.get_scheduler().stop()
     except Exception:
         log.exception("backup scheduler stop failed")
+    if backup_mod.is_drill_enabled():
+        try:
+            await backup_mod.get_drill_scheduler().stop()
+        except Exception:
+            log.exception("DR drill scheduler stop failed")
     # Stop the audit subscriber if it was enabled. Idempotent — safe to call
     # even if start() was never invoked or already failed.
     if audit_log.is_enabled():
         try:
+            if audit_log.is_scheduler_enabled():
+                await audit_log.get_scheduler().stop()
             await audit_log.get_subscriber().stop()
         except Exception:
-            log.exception("audit subscriber stop failed")
+            log.exception("audit subscriber/scheduler stop failed")
 
 
 class ControlRequest(BaseModel):
