@@ -268,7 +268,7 @@ def preview_csv(file_path: Path, sample_rows: int = 1000) -> dict:
 # ---------- IngestJob registry ----------
 
 IngestState = Literal["pending", "preview", "running", "success", "failed"]
-IngestKind = Literal["csv", "postgres"]
+IngestKind = Literal["csv", "postgres", "mysql"]
 
 
 class IngestJob(BaseModel):
@@ -929,7 +929,323 @@ async def kick_off_csv_ingest(
     return job
 
 
-# ---------- Postgres -> Iceberg (stub pending v0.5) ----------
+# ---------- JDBC ingest (Postgres / MySQL via spark-submit) ----------
+#
+# Real path enabled by the `backend/jdbc_extras.py` opt-in override (which
+# downloads the JDBC jars into a docker volume mounted on the spark service
+# at /opt/spark/jars/jdbc). The flow mirrors the CSV path:
+#
+#   1. Preflight: jdbc_extras enabled + udp-spark container running.
+#   2. Decrypt source credential (data_sources._decrypt_password).
+#   3. Build a JDBC URL (no embedded credential -- user/password go through
+#      Spark's `option("user", ...).option("password", ...)`, never on the URL
+#      and never logged).
+#   4. Render a Spark Python job referencing the user/password values via
+#      argparse (the values never appear in shell echo or stdout because
+#      argparse populates argv -- which we redact() before any bus emit).
+#   5. `docker exec -i udp-spark sh -c "cat > /tmp/lhs_pg_ingest_<id>.py"`
+#      to write the script via stdin.
+#   6. `docker exec udp-spark spark-submit` to run it. stdout is parsed for
+#      the `ROWS_WRITTEN=<n>` sentinel (same convention as the CSV path).
+#   7. Best-effort cleanup of the in-container script.
+
+# Spark job written into the spark container and run via spark-submit.
+# Reads from JDBC, writes via the `udp` REST catalog (already configured
+# in spark-defaults.conf by runner._patch_spark_defaults). The `user` and
+# `password` arrive as argv -- argparse parses them into a Namespace
+# that's never echoed to stdout. The job itself NEVER prints argv.
+_STUDIO_JDBC_JOB_PY = r'''#!/usr/bin/env python3
+"""Studio JDBC-to-Iceberg ingest job. Generated/dispatched by backend.ingest.
+
+Usage:
+  spark-submit /tmp/lhs_<kind>_ingest_<id>.py \
+      --jdbc-url <url> --driver <fqcn> \
+      --user <u> --password <p> \
+      --remote-table <db.table> \
+      --target <db.table>
+
+The user/password values arrive on the spark-submit argv. We deliberately
+do NOT echo them to stdout/stderr -- argparse parses them and we hand
+them straight to the JDBC reader options.
+"""
+import argparse
+import sys
+
+from pyspark.sql import SparkSession
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--jdbc-url", required=True,
+                        help="JDBC URL (no credentials embedded)")
+    parser.add_argument("--driver", required=True,
+                        help="JDBC driver FQCN (e.g. org.postgresql.Driver)")
+    parser.add_argument("--user", required=True)
+    parser.add_argument("--password", required=True)
+    parser.add_argument("--remote-table", required=True,
+                        help="Remote table identifier (e.g. public.orders)")
+    parser.add_argument("--target", required=True,
+                        help="Iceberg target db.table in the udp catalog")
+    parser.add_argument("--fetch-size", default="10000",
+                        help="JDBC fetchSize (default 10000)")
+    args = parser.parse_args()
+
+    if "." not in args.target:
+        print("TARGET_PARSE_ERROR=target must be db.table", file=sys.stderr)
+        sys.exit(2)
+    target_db, target_tbl = args.target.split(".", 1)
+
+    spark = (SparkSession.builder
+             .appName("lhs-jdbc-ingest")
+             .getOrCreate())
+
+    spark.sql("CREATE NAMESPACE IF NOT EXISTS udp." + target_db)
+
+    # Read via JDBC. Iceberg / Spark catalog options come from spark-defaults.conf;
+    # the JDBC reader needs only url + driver + dbtable + user + password.
+    df = (spark.read
+          .format("jdbc")
+          .option("url", args.jdbc_url)
+          .option("driver", args.driver)
+          .option("dbtable", args.remote_table)
+          .option("user", args.user)
+          .option("password", args.password)
+          .option("fetchsize", args.fetch_size)
+          .load())
+
+    df.writeTo("udp." + target_db + "." + target_tbl).createOrReplace()
+
+    # Count for the IngestJob.rows_written field. O(rows) on the snapshot --
+    # acceptable for v0.5 single-table ingest sizes.
+    n = spark.table("udp." + target_db + "." + target_tbl).count()
+    print("ROWS_WRITTEN=" + str(n))
+    spark.stop()
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+# Strict identifier regex for the REMOTE table reference. We accept
+# `schema.table` (Postgres) and `database.table` (MySQL) by allowing a
+# single `.`. Splicing into spark-submit argv as a single arg, so we just
+# need to keep shell-meta out.
+_REMOTE_TABLE_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,127}"
+                              r"(\.[a-zA-Z_][a-zA-Z0-9_]{0,127})?$")
+
+
+def _validate_remote_table(name: str) -> str:
+    if not isinstance(name, str) or not name.strip():
+        raise UploadInvalidError("remote table name is required")
+    name = name.strip()
+    if not _REMOTE_TABLE_RE.match(name):
+        raise UploadInvalidError(
+            f"remote table {name!r} must match {_REMOTE_TABLE_RE.pattern}"
+        )
+    return name
+
+
+async def _write_jdbc_job(job_id: str, kind: str) -> tuple[Optional[str], str]:
+    """Pipe _STUDIO_JDBC_JOB_PY into /tmp/lhs_<kind>_ingest_<job_id>.py inside
+    the spark container via `docker exec -i ... sh -c "cat > path"`.
+    Returns (error_or_None, target_path)."""
+    target_path = f"/tmp/lhs_{kind}_ingest_{job_id}.py"
+    rc, _, err = await _docker(
+        ["exec", "-i", _SPARK_CONTAINER, "sh", "-c", f"cat > {target_path}"],
+        timeout=_DOCKER_QUICK_TIMEOUT_SEC,
+        stdin_data=_STUDIO_JDBC_JOB_PY.encode("utf-8"),
+    )
+    if rc != 0:
+        return (
+            f"failed to write JDBC spark job to container (rc={rc}): "
+            f"{err.strip()[:200]}",
+            target_path,
+        )
+    return None, target_path
+
+
+async def _jdbc_spark_submit(
+    install_id: str, job_id: str, target_path: str,
+    jdbc_url: str, driver_fqcn: str,
+    user: str, password: str,
+    remote_table: str, target_db_table: str,
+) -> tuple[int, str, str]:
+    """Run spark-submit inside udp-spark with the JDBC argv. Streams stdout
+    and stderr into the event bus line-by-line, with redact() applied to
+    every line we emit so the password can never leak via the log channel.
+
+    Mirrors the CSV path's _spark_submit but with the JDBC-specific argv
+    shape.
+    """
+    # Import locally to avoid a top-of-file dependency just for this helper.
+    from .redact import redact
+
+    argv = [
+        "exec", _SPARK_CONTAINER, "spark-submit", target_path,
+        "--jdbc-url", jdbc_url,
+        "--driver", driver_fqcn,
+        "--user", user,
+        "--password", password,
+        "--remote-table", remote_table,
+        "--target", target_db_table,
+    ]
+    # Echo a redacted form of the command so the operator can see what ran
+    # without seeing the credential. redact() handles `--password X`
+    # patterns via the CLI-flag rule in backend/redact.py.
+    _emit_log(
+        install_id,
+        redact(
+            f"[ingest:{job_id}] spark-submit {target_path} "
+            f"--jdbc-url {jdbc_url} --driver {driver_fqcn} "
+            f"--user {user} --password {password} "
+            f"--remote-table {remote_table} --target {target_db_table}"
+        ),
+    )
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except (FileNotFoundError, NotImplementedError, OSError) as e:
+        return 127, "", f"failed to spawn spark-submit: {e}"
+
+    out_buf: list[str] = []
+    err_buf: list[str] = []
+
+    async def _drain(stream: asyncio.StreamReader, buf: list[str], kind: str) -> None:
+        while True:
+            raw = await stream.readline()
+            if not raw:
+                return
+            text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            buf.append(text)
+            # Belt-and-suspenders: redact every line in case Spark ever
+            # echoes the JDBC URL with embedded credentials in a stack
+            # trace (it doesn't on the happy path, but stack traces are
+            # never predictable).
+            _emit_log(install_id, f"[ingest:{job_id}] {redact(text)}",
+                      stream=kind)
+
+    drain_out = asyncio.create_task(_drain(proc.stdout, out_buf, "stdout"))  # type: ignore[arg-type]
+    drain_err = asyncio.create_task(_drain(proc.stderr, err_buf, "stderr"))  # type: ignore[arg-type]
+
+    timed_out = False
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=_SPARK_SUBMIT_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        timed_out = True
+        _emit_log(install_id,
+                  f"[ingest:{job_id}] spark-submit exceeded "
+                  f"{_SPARK_SUBMIT_TIMEOUT_SEC}s; killing",
+                  stream="stderr")
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            pass
+    finally:
+        for t in (drain_out, drain_err):
+            try:
+                await asyncio.wait_for(t, timeout=5)
+            except asyncio.TimeoutError:
+                t.cancel()
+            except Exception:
+                pass
+
+    rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
+    # IMPORTANT: never return the raw password in the buffers (we don't
+    # echo it ourselves, but redact stderr again at the boundary for
+    # defense-in-depth).
+    return rc, redact("\n".join(out_buf)), redact("\n".join(err_buf))
+
+
+async def _run_jdbc_ingest(
+    job_id: str, install_id: str, kind: str,
+    jdbc_url: str, driver_fqcn: str,
+    user: str, password: str,
+    remote_table: str, target_db: str, target_tbl: str,
+) -> None:
+    """Background task driving a JDBC ingest job through its lifecycle.
+
+    Single source of truth for state transitions: pending -> running ->
+    success|failed. Mirrors the structure of _run_csv_ingest so the two
+    code paths read identically and bugs found in one apply to the other.
+    """
+    from .redact import redact
+
+    _update_job(job_id, state="running", error=None)
+    _emit_log(install_id,
+              redact(f"[ingest:{job_id}] starting (kind={kind}, "
+                     f"jdbc-url={jdbc_url}, target=udp.{target_db}.{target_tbl})"))
+
+    # Preflight: spark container must be running.
+    if not await _container_running(_SPARK_CONTAINER):
+        msg = f"required container {_SPARK_CONTAINER} is not running"
+        _emit_log(install_id, f"[ingest:{job_id}] {msg}", stream="stderr")
+        _update_job(job_id, state="failed", error=msg)
+        return
+
+    # Step 1: write the JDBC spark job to the container.
+    write_err, target_path = await _write_jdbc_job(job_id, kind)
+    if write_err:
+        _emit_log(install_id, f"[ingest:{job_id}] {write_err}", stream="stderr")
+        _update_job(job_id, state="failed", error=write_err)
+        return
+
+    # Step 2: spark-submit it.
+    rc, stdout_blob, stderr_blob = await _jdbc_spark_submit(
+        install_id, job_id, target_path,
+        jdbc_url, driver_fqcn, user, password,
+        remote_table, f"{target_db}.{target_tbl}",
+    )
+
+    # Best-effort cleanup of the in-container script (don't fail on this).
+    await _docker(
+        ["exec", _SPARK_CONTAINER, "rm", "-f", target_path],
+        timeout=_DOCKER_QUICK_TIMEOUT_SEC,
+    )
+
+    if rc != 0:
+        tail = "\n".join(stderr_blob.splitlines()[-30:]) if stderr_blob else ""
+        err = f"spark-submit exited {rc}" + (f": {tail}" if tail else "")
+        _emit_log(install_id, f"[ingest:{job_id}] FAILED: {err[:300]}",
+                  stream="stderr")
+        _update_job(job_id, state="failed", error=err)
+        return
+
+    rows = _parse_rows_written(stdout_blob)
+    if rows is None:
+        msg = ("spark-submit completed but ROWS_WRITTEN sentinel not found "
+               "in stdout")
+        _emit_log(install_id, f"[ingest:{job_id}] {msg}", stream="stderr")
+        _update_job(job_id, state="failed", error=msg)
+        return
+
+    _emit_log(install_id, f"[ingest:{job_id}] SUCCESS rows_written={rows}")
+    _update_job(job_id, state="success", rows_written=rows, error=None)
+
+
+def _postgres_jdbc_url(host: str, port: int, database: str) -> str:
+    """Build a Postgres JDBC URL with NO embedded credential.
+    user/password are passed via spark.read.option(...) instead so they
+    never appear in argv echo or stack traces."""
+    return f"jdbc:postgresql://{host}:{port}/{database}"
+
+
+def _mysql_jdbc_url(host: str, port: int, database: str) -> str:
+    """Build a MySQL JDBC URL with NO embedded credential. Includes
+    `useSSL=false` (most v0.5 lakehouse installs connect to an in-VPC DB
+    without TLS) and `serverTimezone=UTC` (Connector/J 8+ requires an
+    explicit timezone when the server's tz isn't named)."""
+    return (f"jdbc:mysql://{host}:{port}/{database}"
+            "?useSSL=false&serverTimezone=UTC")
+
 
 async def kick_off_postgres_ingest(
     install_id: str,
@@ -937,49 +1253,83 @@ async def kick_off_postgres_ingest(
     table_name: str,
     target: dict,
 ) -> IngestJob:
-    """Register a Postgres -> Iceberg ingest job.
+    """Dispatch a Postgres -> Iceberg ingest via the JDBC extras override.
 
-    v0.4.1 STUB: the Spark image doesn't yet bundle `postgresql-42.7.x.jar`,
-    so the actual JDBC read can't run. We still walk the full IngestJob
-    lifecycle (pending -> running -> failed) so the UI's polling loop and
-    job-history view work end-to-end; the job ends with a clear "pending
-    v0.5" error message.
-
-    TODO (v0.5):
-      - Bump the UDP Spark image to include `postgresql-42.7.x.jar` on the
-        Spark classpath (or pass `--packages org.postgresql:postgresql:42.7.x`).
-      - Add `udp/scripts/ingest_postgres.py` Spark job (mirrors ingest_csv.py)
-        that reads via JDBC and writes Iceberg via the REST catalog.
-      - Replace this stub with the same docker-exec / spark-submit dispatch
-        pattern as _run_csv_ingest, streaming stderr into the event bus and
-        capturing rows_written.
-      - The decrypted password reaches Spark via a `--driver-java-options
-        -Dpg.password=...` style flag wrapped in redact() for any echoed
-        command lines (never log the raw value).
+    Refuses if the JDBC extras override hasn't been enabled (operator runs
+    `POST /api/installs/<id>/jdbc/enable` first to side-load the driver
+    jar onto the spark service). Once the jar is present, this path
+    matches the CSV ingest flow byte-for-byte: register the job, dispatch
+    a background spark-submit, stream logs via redact(), parse
+    ROWS_WRITTEN.
     """
-    # Local import to avoid a circular import at module load time
-    # (data_sources doesn't depend on ingest, but keep the dep direction clean).
+    # Local imports to keep the module-level import graph clean and to avoid
+    # circulars (data_sources / jdbc_extras don't depend on ingest).
     from . import data_sources as ds_mod
+    from . import jdbc_extras as jdbc_mod
 
     if not isinstance(target, dict) or not target.get("database") or not target.get("table"):
         raise UploadInvalidError("target must include {database, table}")
-    if not isinstance(table_name, str) or not table_name.strip():
-        raise UploadInvalidError("table_name is required")
+    table_name = _validate_remote_table(table_name)
+    target_db, target_tbl = _validate_target(target)
 
     src = await ds_mod.get_source(source_id)
     if src is None:
         raise UploadInvalidError(f"data source {source_id} not found")
     if src.kind != "postgres":
-        raise UploadInvalidError(f"data source {source_id} is kind={src.kind}, expected postgres")
+        raise UploadInvalidError(
+            f"data source {source_id} is kind={src.kind}, expected postgres")
     if src.install_id != install_id:
-        raise UploadInvalidError(f"data source {source_id} belongs to a different install")
+        raise UploadInvalidError(
+            f"data source {source_id} belongs to a different install")
 
-    # Touch decryption so misconfigured key surfaces NOW, not later in the
-    # background task. We immediately discard the cleartext.
+    rec = store.get(install_id)
+    if rec is None:
+        raise UploadInvalidError(f"install {install_id!r} not found")
+    if rec.state != "READY":
+        raise UploadInvalidError(
+            f"install is in state {rec.state}; READY required for ingest"
+        )
+
+    # The override-file gate. We mark the job FAILED (not raise) here so
+    # the UI's job-history view shows a clear actionable error rather
+    # than the POST itself failing -- consistent with the CSV path's
+    # preflight pattern of surfacing failures via the bus.
+    if not jdbc_mod.is_jdbc_enabled(install_id):
+        now = time.time()
+        job_id = f"ing_{uuid.uuid4().hex[:10]}"
+        job = IngestJob(
+            job_id=job_id, install_id=install_id, kind="postgres",
+            state="failed",
+            target={"database": target_db, "table": target_tbl},
+            source={
+                "source_id": source_id, "source_name": src.name,
+                "remote_table": table_name,
+                "host": src.host, "port": src.port, "database": src.database,
+            },
+            created_at=now, updated_at=now,
+            error="Run POST /api/installs/.../jdbc/enable first",
+            rows_written=None,
+        )
+        with _INGEST_LOCK:
+            _INGEST_JOBS[job_id] = job
+            _persist_ingest_locked(force=True)
+        return job
+
+    # Stage source credential -- decrypt NOW so misconfigured key surfaces
+    # synchronously (better UX than failing inside the background task).
     try:
-        _ = ds_mod._decrypt_password(source_id)
+        password = ds_mod._decrypt_password(source_id)
     except Exception as e:
-        raise UploadInvalidError(f"could not access stored credential: {type(e).__name__}")
+        raise UploadInvalidError(
+            f"could not access stored credential: {type(e).__name__}")
+
+    if shutil.which("docker") is None:
+        raise UploadInvalidError(
+            "docker CLI not on PATH on the Studio host; cannot dispatch "
+            "Spark ingest"
+        )
+
+    jdbc_url = _postgres_jdbc_url(src.host, src.port, src.database)
 
     now = time.time()
     job_id = f"ing_{uuid.uuid4().hex[:10]}"
@@ -988,17 +1338,18 @@ async def kick_off_postgres_ingest(
         install_id=install_id,
         kind="postgres",
         state="pending",
-        target={"database": str(target["database"]), "table": str(target["table"])},
+        target={"database": target_db, "table": target_tbl},
         source={
             "source_id": source_id,
             "source_name": src.name,
-            "remote_table": table_name.strip(),
+            "remote_table": table_name,
             "host": src.host,
             "port": src.port,
             "database": src.database,
-            # NEVER include password / username:password URL here. The decrypted
-            # value lives only in _decrypt_password's return value, which we
-            # discarded above.
+            # NEVER embed password / username:password URL here. The
+            # decrypted value lives only in the `password` local + the
+            # background task's argv -- both of which are redacted on every
+            # log emit.
         },
         created_at=now,
         updated_at=now,
@@ -1009,33 +1360,118 @@ async def kick_off_postgres_ingest(
         _INGEST_JOBS[job_id] = job
         _persist_ingest_locked(force=True)
 
-    # Walk the lifecycle so the UI sees realistic transitions even on the stub.
-    asyncio.create_task(_run_postgres_ingest_stub(job_id))
+    asyncio.create_task(_run_jdbc_ingest(
+        job_id, install_id, "pg",
+        jdbc_url, "org.postgresql.Driver",
+        src.username, password,
+        table_name, target_db, target_tbl,
+    ))
     return job
 
 
-async def _run_postgres_ingest_stub(job_id: str) -> None:
-    """Drive the stub through pending -> running -> failed, with small pauses
-    so a polling UI can render each transition."""
-    await asyncio.sleep(0.05)
+async def kick_off_mysql_ingest(
+    install_id: str,
+    source_id: str,
+    table_name: str,
+    target: dict,
+) -> IngestJob:
+    """Dispatch a MySQL -> Iceberg ingest via the JDBC extras override.
+
+    Mirrors kick_off_postgres_ingest. The only differences are the source
+    kind check, the JDBC URL builder (Connector/J needs `useSSL=false`
+    and `serverTimezone=UTC`), and the driver FQCN.
+    """
+    from . import data_sources as ds_mod
+    from . import jdbc_extras as jdbc_mod
+
+    if not isinstance(target, dict) or not target.get("database") or not target.get("table"):
+        raise UploadInvalidError("target must include {database, table}")
+    table_name = _validate_remote_table(table_name)
+    target_db, target_tbl = _validate_target(target)
+
+    src = await ds_mod.get_source(source_id)
+    if src is None:
+        raise UploadInvalidError(f"data source {source_id} not found")
+    if src.kind != "mysql":
+        raise UploadInvalidError(
+            f"data source {source_id} is kind={src.kind}, expected mysql")
+    if src.install_id != install_id:
+        raise UploadInvalidError(
+            f"data source {source_id} belongs to a different install")
+
+    rec = store.get(install_id)
+    if rec is None:
+        raise UploadInvalidError(f"install {install_id!r} not found")
+    if rec.state != "READY":
+        raise UploadInvalidError(
+            f"install is in state {rec.state}; READY required for ingest"
+        )
+
+    if not jdbc_mod.is_jdbc_enabled(install_id):
+        now = time.time()
+        job_id = f"ing_{uuid.uuid4().hex[:10]}"
+        job = IngestJob(
+            job_id=job_id, install_id=install_id, kind="mysql",
+            state="failed",
+            target={"database": target_db, "table": target_tbl},
+            source={
+                "source_id": source_id, "source_name": src.name,
+                "remote_table": table_name,
+                "host": src.host, "port": src.port, "database": src.database,
+            },
+            created_at=now, updated_at=now,
+            error="Run POST /api/installs/.../jdbc/enable first",
+            rows_written=None,
+        )
+        with _INGEST_LOCK:
+            _INGEST_JOBS[job_id] = job
+            _persist_ingest_locked(force=True)
+        return job
+
+    try:
+        password = ds_mod._decrypt_password(source_id)
+    except Exception as e:
+        raise UploadInvalidError(
+            f"could not access stored credential: {type(e).__name__}")
+
+    if shutil.which("docker") is None:
+        raise UploadInvalidError(
+            "docker CLI not on PATH on the Studio host; cannot dispatch "
+            "Spark ingest"
+        )
+
+    jdbc_url = _mysql_jdbc_url(src.host, src.port, src.database)
+
+    now = time.time()
+    job_id = f"ing_{uuid.uuid4().hex[:10]}"
+    job = IngestJob(
+        job_id=job_id,
+        install_id=install_id,
+        kind="mysql",
+        state="pending",
+        target={"database": target_db, "table": target_tbl},
+        source={
+            "source_id": source_id,
+            "source_name": src.name,
+            "remote_table": table_name,
+            "host": src.host,
+            "port": src.port,
+            "database": src.database,
+            # NEVER embed the credential here.
+        },
+        created_at=now,
+        updated_at=now,
+        error=None,
+        rows_written=None,
+    )
     with _INGEST_LOCK:
-        job = _INGEST_JOBS.get(job_id)
-        if job is None:
-            return
-        # preview-skipped: we don't sample a Postgres preview in v0.4.1.
-        job.state = "running"
-        job.updated_at = time.time()
+        _INGEST_JOBS[job_id] = job
         _persist_ingest_locked(force=True)
 
-    await asyncio.sleep(0.1)
-    with _INGEST_LOCK:
-        job = _INGEST_JOBS.get(job_id)
-        if job is None:
-            return
-        job.state = "failed"
-        job.error = (
-            "Postgres ingest requires Spark image bump with "
-            "postgresql-42.7.x.jar — pending v0.5"
-        )
-        job.updated_at = time.time()
-        _persist_ingest_locked(force=True)
+    asyncio.create_task(_run_jdbc_ingest(
+        job_id, install_id, "mysql",
+        jdbc_url, "com.mysql.cj.jdbc.Driver",
+        src.username, password,
+        table_name, target_db, target_tbl,
+    ))
+    return job

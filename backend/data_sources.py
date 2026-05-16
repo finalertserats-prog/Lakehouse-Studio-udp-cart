@@ -1,6 +1,6 @@
 """External data source registry for the Ingest module.
 
-Today (v0.4.1) only Postgres is supported. The registry lets users register
+v0.5.1 supports Postgres and MySQL. The registry lets users register
 remote databases (host/port/db/user/password), test connectivity, and use
 them as sources for an Iceberg ingest job. Passwords are encrypted at rest
 with Fernet (AES-128 in CBC + HMAC-SHA256) and never returned over the API.
@@ -52,7 +52,7 @@ log = logging.getLogger("lhs.data_sources")
 
 # ---------- Models ----------
 
-SourceKind = Literal["postgres"]
+SourceKind = Literal["postgres", "mysql"]
 
 
 class DataSource(BaseModel):
@@ -410,22 +410,78 @@ def _sync_test_postgres(host: str, port: int, database: str,
     }
 
 
+def _sync_test_mysql(host: str, port: int, database: str,
+                     username: str, password: str) -> dict[str, Any]:
+    """Blocking pymysql connect + introspect. Caller wraps in to_thread.
+
+    Mirrors _sync_test_postgres: opens a real connection, runs SELECT 1
+    to prove auth, then SHOW DATABASES to enumerate schemas the user can
+    see. Returns the same shape as the Postgres test path so the UI
+    doesn't need to branch on `kind`.
+    """
+    # Local import so the module remains importable when pymysql isn't
+    # installed (same rationale as the psycopg local import above).
+    import pymysql  # noqa: WPS433
+
+    started = time.time()
+    conn = pymysql.connect(
+        host=host,
+        port=int(port),
+        database=database,
+        user=username,
+        password=password,
+        connect_timeout=_TEST_TIMEOUT_SEC,
+        read_timeout=_TEST_TIMEOUT_SEC,
+        write_timeout=_TEST_TIMEOUT_SEC,
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            cur.execute("SELECT VERSION()")
+            row = cur.fetchone()
+            server_version = row[0] if row else None
+            cur.execute("SHOW DATABASES")
+            # Filter out the system schemas users typically don't care about.
+            system = {"information_schema", "performance_schema", "mysql", "sys"}
+            schemas = [r[0] for r in cur.fetchall() if r[0] not in system][:200]
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    latency_ms = int((time.time() - started) * 1000)
+    return {
+        "ok": True,
+        "latency_ms": latency_ms,
+        "server_version": server_version,
+        "schemas": schemas,
+        "error": None,
+    }
+
+
 async def test_source(source_id: str) -> dict[str, Any]:
     """Open a real connection (5s hard timeout) and report basic facts.
 
     Runs in a worker thread so it never blocks the event loop. asyncio.wait_for
-    enforces the wall-clock cap independent of psycopg's own connect_timeout.
+    enforces the wall-clock cap independent of the driver's own connect_timeout.
+    Dispatches to the correct driver based on `src.kind` (postgres or mysql).
     """
     src = await get_source(source_id)
     if not src:
         raise DataSourceNotFoundError(source_id)
-    password = _decrypt_password(source_id)
+    secret = _decrypt_password(source_id)
+
+    if src.kind == "mysql":
+        worker = _sync_test_mysql
+    else:
+        worker = _sync_test_postgres
 
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(
-                _sync_test_postgres,
-                src.host, src.port, src.database, src.username, password,
+                worker,
+                src.host, src.port, src.database, src.username, secret,
             ),
             timeout=_TEST_TIMEOUT_SEC + 1,  # tiny slack over driver-level timeout
         )
