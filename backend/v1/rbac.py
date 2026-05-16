@@ -23,8 +23,14 @@ class Permission(Enum):
     INSTALL_CREATE   = "install.create"
     INSTALL_VIEW     = "install.view"
     INSTALL_DELETE   = "install.delete"
+    # Install-scoped state mutations that aren't create/delete:
+    # cancel, retry, skip, rollback, uninstall, control, plus per-install
+    # config changes like TLS, JDBC, monitoring, destinations, data
+    # sources, DQ checks. OPERATOR has this; VIEWER does not.
+    INSTALL_MUTATE   = "install.mutate"
     BACKUP_CREATE    = "backup.create"
     BACKUP_RESTORE   = "backup.restore"
+    BACKUP_DELETE    = "backup.delete"
     UPGRADE_EXECUTE  = "upgrade.execute"
     SQL_RUN          = "sql.run"
     AUDIT_VIEW       = "audit.view"
@@ -77,17 +83,65 @@ def has_permission(role: Role, perm: Permission) -> bool:
 # the matching simple (method + path prefix) — wildcards / regex matching is
 # the v1.0 session's call.
 ROUTE_PERMISSIONS: dict[tuple[str, str], Permission] = {
+    # --- Original scaffold entries (some paths historically stale, kept
+    # for backward compatibility with any consumer that still imports the
+    # constant by name) ----------------------------------------------------
     ("POST",   "/api/installs"):                 Permission.INSTALL_CREATE,
     ("GET",    "/api/installs"):                 Permission.INSTALL_VIEW,
     ("GET",    "/api/installs/{install_id}"):    Permission.INSTALL_VIEW,
     ("DELETE", "/api/installs/{install_id}"):    Permission.INSTALL_DELETE,
-    ("POST",   "/api/installs/{install_id}/backup"):   Permission.BACKUP_CREATE,
-    ("POST",   "/api/installs/{install_id}/restore"):  Permission.BACKUP_RESTORE,
-    ("POST",   "/api/installs/{install_id}/upgrade"):  Permission.UPGRADE_EXECUTE,
     ("POST",   "/api/installs/{install_id}/sql"):      Permission.SQL_RUN,
     ("GET",    "/api/audit"):                    Permission.AUDIT_VIEW,
     ("PUT",    "/api/settings"):                 Permission.SETTINGS_WRITE,
     ("GET",    "/api/billing"):                  Permission.BILLING_VIEW,
+
+    # --- 2026-05-17 hardening — cover the WRITE-RISK routes flagged in
+    # the docs/RBAC.md matrix. Without these, VIEWER could call any
+    # state-changing route below. -------------------------------------------
+    # Install lifecycle mutations (cancel / retry / skip / rollback /
+    # uninstall / control). All are per-install state changes that
+    # OPERATOR must be able to do but VIEWER must not.
+    ("POST",   "/api/installs/{install_id}/cancel"):         Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/steps/retry"):    Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/steps/skip"):     Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/steps/rollback"): Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/uninstall"):      Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/control"):        Permission.INSTALL_MUTATE,
+    # Backups + DR
+    ("POST",   "/api/installs/{install_id}/backups"):          Permission.BACKUP_CREATE,
+    ("PUT",    "/api/installs/{install_id}/backups/schedule"): Permission.BACKUP_CREATE,
+    ("POST",   "/api/backups/{backup_id}/restore"):            Permission.BACKUP_RESTORE,
+    ("DELETE", "/api/backups/{backup_id}"):                    Permission.BACKUP_DELETE,
+    # Upgrade execution (real path; old `/upgrade` entry above is stale)
+    ("POST",   "/api/installs/{install_id}/upgrades/execute"): Permission.UPGRADE_EXECUTE,
+    # Per-install config: TLS, security, sidecars (caddy/jdbc/monitoring).
+    # These are install-scoped state, not global Studio settings, so they
+    # belong on INSTALL_MUTATE (OPERATOR-callable) not SETTINGS_WRITE.
+    ("POST",   "/api/installs/{install_id}/tls/generate"):                Permission.INSTALL_MUTATE,
+    ("DELETE", "/api/tls/certs/{cert_id}"):                               Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/security/rotate-password"):    Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/tls/caddy/enable"):            Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/tls/caddy/disable"):           Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/jdbc/enable"):                 Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/jdbc/disable"):                Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/monitoring/enable"):           Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/monitoring/disable"):          Permission.INSTALL_MUTATE,
+    # Ingest jobs (CSV upload + Postgres/MySQL pull). These create work,
+    # treat them as INSTALL_CREATE-tier so the same OPERATOR gate applies.
+    ("POST",   "/api/installs/{install_id}/uploads"):           Permission.INSTALL_CREATE,
+    ("POST",   "/api/installs/{install_id}/ingest"):            Permission.INSTALL_CREATE,
+    ("POST",   "/api/installs/{install_id}/ingest/postgres"):   Permission.INSTALL_CREATE,
+    ("POST",   "/api/installs/{install_id}/ingest/mysql"):      Permission.INSTALL_CREATE,
+    # Sources + Destinations: per-install registration with stored
+    # encrypted credentials. Same OPERATOR-callable tier.
+    ("POST",   "/api/installs/{install_id}/data-sources"):          Permission.INSTALL_MUTATE,
+    ("DELETE", "/api/data-sources/{source_id}"):                    Permission.INSTALL_MUTATE,
+    ("POST",   "/api/installs/{install_id}/destinations"):          Permission.INSTALL_MUTATE,
+    ("POST",   "/api/destinations/{destination_id}/provision"):     Permission.INSTALL_MUTATE,
+    ("DELETE", "/api/destinations/{destination_id}"):               Permission.INSTALL_MUTATE,
+    # Data Quality checks — per-install rules.
+    ("POST",   "/api/installs/{install_id}/dq/checks"):  Permission.INSTALL_MUTATE,
+    ("DELETE", "/api/dq/checks/{check_id}"):             Permission.INSTALL_MUTATE,
 }
 
 
