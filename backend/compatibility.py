@@ -337,7 +337,12 @@ async def simulate_upgrade(stack_id: str, proposed: dict[str, str]) -> dict[str,
 
 
 def lock_summary(stack_id: str) -> dict[str, Any] | None:
-    """A small summary of the lock for surfacing in the UI / healthz."""
+    """A summary of the lock for surfacing in the UI / healthz.
+
+    Includes the evidence array so the success-screen Evidence Viewer can
+    show per-attempt verification records (operator, host, smoke results,
+    lakehouse proof rows). Architects need this to trust the certification.
+    """
     lock = load_lock(stack_id)
     if not lock:
         return None
@@ -345,8 +350,16 @@ def lock_summary(stack_id: str) -> dict[str, Any] | None:
         "stack_id": stack_id,
         "version_id": lock.get("version_id"),
         "status": lock.get("status"),
+        "status_notes": lock.get("status_notes"),
         "certified_at": lock.get("certified_at"),
+        "certified_by": lock.get("certified_by"),
+        "certified_on": lock.get("certified_on"),
         "components_pinned": len(lock.get("components", [])),
-        "constraints": len(lock.get("constraints", [])),
-        "incompatible_combinations": len(lock.get("incompatible", [])),
+        "components": lock.get("components", []),
+        "constraints_count": len(lock.get("constraints", [])),
+        "constraints": lock.get("constraints", []),
+        "incompatible_combinations_count": len(lock.get("incompatible", [])),
+        "incompatible": lock.get("incompatible", []),
+        "host_requirements": lock.get("host_requirements", {}),
+        "evidence": lock.get("evidence", []),
     }

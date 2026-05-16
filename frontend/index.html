@@ -1338,6 +1338,43 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       </button>
     </div>
     <div id="ops-output" class="terminal p-4 mt-3 text-xs mono whitespace-pre-wrap min-h-[60px] text-slate-300"></div>
+
+    <!-- ============== ASK STUDIO (AI assistant) ============== -->
+    <h3 class="display-3 mb-4 mt-8">Ask Studio</h3>
+    <div id="ask-card" class="glass p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-slate-300">Grounded over this install's lock file, state &amp; error catalog.</span>
+          <span id="ask-status-badge" class="v04-badge info">checking&#8230;</span>
+        </div>
+        <button id="ask-toggle" class="btn-ghost text-xs" type="button">Collapse</button>
+      </div>
+      <div id="ask-body">
+        <div id="ask-disabled-note" class="text-xs text-amber-300 mb-3 hidden">
+          AI assistant is disabled. Set <span class="mono text-cyan-300">ANTHROPIC_API_KEY</span> and
+          install <span class="mono text-cyan-300">anthropic&gt;=0.40.0</span> on the Studio server to enable.
+        </div>
+        <div id="ask-history"
+             class="mb-3 p-3 rounded border border-white/5 bg-black/20 text-sm space-y-3"
+             style="max-height: 400px; overflow-y: auto;">
+          <div id="ask-empty" class="v04-empty">
+            Ask about install failures, what each component does, sizing recommendations, etc.
+          </div>
+        </div>
+        <div class="flex gap-2 items-start">
+          <textarea id="ask-input" class="input text-sm flex-1" rows="2"
+            placeholder="e.g. Why did finalize fail on this install?"
+            maxlength="2000"></textarea>
+          <button id="ask-send" class="btn-primary text-sm whitespace-nowrap">Send</button>
+        </div>
+        <div class="flex items-center justify-between mt-2">
+          <div id="ask-error" class="text-xs text-rose-300"></div>
+          <div class="text-xs text-slate-500">
+            <span id="ask-char-count">0</span>/2000 &middot; last 5 turns kept
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- ============== INSTALLS LIST ============== -->
@@ -2764,8 +2801,207 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     const ev = document.getElementById("success-evidence");
     ev.textContent = rec.outputs?.evidence_dir ? `evidence captured at ${rec.outputs.evidence_dir}` : "";
     loadDemoQueries(); loadStructuredSmoke(); startHealthPolling(rec.install_id);
+    initAskStudio(rec.install_id);
     // Celebrate — fire confetti once per success (not on every refresh / installs-list re-entry).
     if (!state._confettiFired) { fireConfetti(); state._confettiFired = true; }
+  }
+
+  // ----- Ask Studio (AI assistant) -----
+  // Grounded chat panel on the success screen. Backed by /api/ai/*.
+  // Graceful degradation: if /api/ai/status returns enabled=false, the
+  // input is disabled and a clear note is shown. Nothing crashes.
+  const askState = {
+    installId: null,
+    history: [],         // [{role, content, ts, citations}]
+    enabled: false,
+    model: null,
+    busy: false,
+    inited: false,
+  };
+
+  function _escAsk(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  async function _refreshAskStatus() {
+    const badge = document.getElementById("ask-status-badge");
+    const note = document.getElementById("ask-disabled-note");
+    const sendBtn = document.getElementById("ask-send");
+    const input = document.getElementById("ask-input");
+    if (!badge) return;
+    try {
+      const r = await fetch("/api/ai/status");
+      const j = await r.json();
+      askState.enabled = !!j.enabled;
+      askState.model = j.model || null;
+      if (askState.enabled) {
+        badge.className = "v04-badge ok";
+        badge.textContent = "enabled (" + (j.model || "?") + ")";
+        if (note) note.classList.add("hidden");
+        if (sendBtn) sendBtn.disabled = false;
+        if (input) input.disabled = false;
+      } else {
+        badge.className = "v04-badge warn";
+        badge.textContent = "disabled";
+        if (note) note.classList.remove("hidden");
+        if (sendBtn) sendBtn.disabled = true;
+        if (input) input.disabled = true;
+      }
+    } catch (e) {
+      badge.className = "v04-badge err";
+      badge.textContent = "status unknown";
+      if (sendBtn) sendBtn.disabled = true;
+    }
+  }
+
+  function _renderAskHistory() {
+    const box = document.getElementById("ask-history");
+    if (!box) return;
+    if (!askState.history.length) {
+      box.innerHTML = '<div id="ask-empty" class="v04-empty">Ask about install failures, what each component does, sizing recommendations, etc.</div>';
+      return;
+    }
+    // Keep only last 10 rendered messages.
+    const shown = askState.history.slice(-10);
+    box.innerHTML = shown.map(m => {
+      const isUser = m.role === "user";
+      const align = isUser ? "text-right" : "text-left";
+      const bg = isUser
+        ? "background: rgba(34,211,238,0.08); border:1px solid rgba(34,211,238,0.25);"
+        : "background: rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08);";
+      const role = isUser ? "you" : "studio";
+      const safe = _escAsk(m.content).replace(/\n/g, "<br>");
+      let chips = "";
+      if (!isUser && m.citations && m.citations.length) {
+        chips = '<div class="mt-2 flex flex-wrap gap-1">' +
+          m.citations.map(c => {
+            const label = typeof c === "string" ? c : (c.label || c.kind || "src");
+            return '<span class="v04-badge info" style="font-size:10px">' +
+              _escAsk(label) + '</span>';
+          }).join("") +
+          '</div>';
+      }
+      let actions = "";
+      if (!isUser && m.suggested_actions && m.suggested_actions.length) {
+        actions = '<div class="mt-2 flex flex-wrap gap-2">' +
+          m.suggested_actions.map((a, i) =>
+            '<button class="btn-ghost text-xs" data-ask-action="' + i + '">' +
+            _escAsk(a.label) + '</button>'
+          ).join("") +
+          '</div>';
+      }
+      let conf = "";
+      if (!isUser && m.confidence) {
+        const cls = m.confidence === "high" ? "ok" : (m.confidence === "low" ? "err" : "warn");
+        conf = ' <span class="v04-badge ' + cls + '" style="font-size:10px;margin-left:6px">' +
+          _escAsk(m.confidence) + '</span>';
+      }
+      return '<div class="' + align + '">' +
+        '<div class="text-xs text-slate-500 mb-1">' + role + conf + '</div>' +
+        '<div class="inline-block p-2 rounded text-sm text-slate-100" style="' + bg +
+          ' max-width: 90%; text-align:left;">' + safe + chips + actions + '</div>' +
+        '</div>';
+    }).join("");
+    // Wire suggested-action buttons (last assistant message only — earlier ones get re-rendered).
+    const last = shown[shown.length - 1];
+    if (last && last.role === "assistant" && last.suggested_actions) {
+      box.querySelectorAll('[data-ask-action]').forEach(btn => {
+        const idx = Number(btn.getAttribute("data-ask-action"));
+        const act = last.suggested_actions[idx];
+        if (!act) return;
+        btn.addEventListener("click", () => {
+          if (act.kind === "route" || act.kind === "url") {
+            if (act.target) window.open(act.target, "_blank", "noopener,noreferrer");
+          }
+        });
+      });
+    }
+    box.scrollTop = box.scrollHeight;
+  }
+
+  async function _askSend() {
+    if (askState.busy || !askState.enabled) return;
+    const input = document.getElementById("ask-input");
+    const errBox = document.getElementById("ask-error");
+    if (errBox) errBox.textContent = "";
+    const q = (input.value || "").trim();
+    if (!q) return;
+    askState.busy = true;
+    const sendBtn = document.getElementById("ask-send");
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = "Thinking…"; }
+    // Push user turn locally, render, then call API.
+    askState.history.push({ role: "user", content: q, ts: Date.now() / 1000, citations: [] });
+    input.value = "";
+    _updateAskCharCount();
+    _renderAskHistory();
+    try {
+      const body = {
+        install_id: askState.installId || null,
+        question: q,
+        // Backend caps to last 5 turns; we send the last 10 entries (5 pairs).
+        history: askState.history.slice(-11, -1).map(m => ({
+          role: m.role, content: m.content, ts: m.ts || 0, citations: [],
+        })),
+      };
+      const resp = await api("/api/ai/ask", {
+        method: "POST", body: JSON.stringify(body), silent: true,
+      });
+      askState.history.push({
+        role: "assistant",
+        content: resp.answer || "(empty)",
+        ts: Date.now() / 1000,
+        citations: resp.citations || [],
+        confidence: resp.confidence || "medium",
+        suggested_actions: resp.suggested_actions || [],
+      });
+      _renderAskHistory();
+    } catch (e) {
+      if (errBox) errBox.textContent = "Request failed: " + (e && e.message ? e.message : e);
+    } finally {
+      askState.busy = false;
+      if (sendBtn) { sendBtn.disabled = !askState.enabled; sendBtn.textContent = "Send"; }
+    }
+  }
+
+  function _updateAskCharCount() {
+    const input = document.getElementById("ask-input");
+    const cc = document.getElementById("ask-char-count");
+    if (input && cc) cc.textContent = String((input.value || "").length);
+  }
+
+  function initAskStudio(installId) {
+    askState.installId = installId || null;
+    // Re-render in case we navigated back to a success screen for a different install.
+    _renderAskHistory();
+    if (askState.inited) {
+      _refreshAskStatus();
+      return;
+    }
+    askState.inited = true;
+    const sendBtn = document.getElementById("ask-send");
+    const input = document.getElementById("ask-input");
+    const toggle = document.getElementById("ask-toggle");
+    const body = document.getElementById("ask-body");
+    if (sendBtn) sendBtn.addEventListener("click", _askSend);
+    if (input) {
+      input.addEventListener("input", _updateAskCharCount);
+      input.addEventListener("keydown", (e) => {
+        // Ctrl/Cmd+Enter to send
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+          e.preventDefault();
+          _askSend();
+        }
+      });
+    }
+    if (toggle && body) {
+      toggle.addEventListener("click", () => {
+        const hidden = body.classList.toggle("hidden");
+        toggle.textContent = hidden ? "Expand" : "Collapse";
+      });
+    }
+    _refreshAskStatus();
   }
 
   // ----- confetti burst -----
