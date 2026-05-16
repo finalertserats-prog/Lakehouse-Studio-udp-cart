@@ -7,7 +7,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+import httpx
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -16,6 +17,7 @@ from .config import ROOT, WORK_DIR
 from .events import bus
 from .inspector import inspect
 from .models import InstallRequest, InspectionReport, LogEvent
+from .notifications import NotifyEvent, get_dispatcher, notify
 from .catalog import (
     categories as catalog_categories,
     goals as catalog_goals,
@@ -44,6 +46,8 @@ from .sql_editor import run_user_sql
 from .stack_manifest import list_manifests, load_manifest
 from .state import store
 from .structured_smoke import run_structured_smoke
+from . import ingest as ingest_mod
+from . import table_explorer
 
 app = FastAPI(title="LakeHouse Studio", version="0.1.0")
 
@@ -172,6 +176,9 @@ async def _validate_catalog_on_startup() -> None:
             _COMPAT_PROBLEMS[m.id] = problems
             for p in problems:
                 compat_log.error("compat drift [%s]: %s", m.id, p)
+
+    # Start the notifications dispatcher (mtime-poll config reloader).
+    await get_dispatcher().start()
 
 
 def _require_catalog_ok() -> None:
@@ -712,6 +719,168 @@ async def post_sql_editor(install_id: str, body: SqlEditorRequest):
     return result
 
 
+# ---------- Notifications ----------
+
+@app.get("/api/notifications/config", dependencies=[AuthDep])
+def get_notifications_config():
+    """Current notifications config with secrets scrubbed.
+
+    Any non-empty password / webhook / token field is replaced with the
+    literal string "<configured>" so the UI can show "enabled" without
+    leaking the resolved value.
+    """
+    return get_dispatcher().get_public_config()
+
+
+class NotificationTestRequest(BaseModel):
+    channel: str = Field(min_length=1, max_length=32)
+
+
+@app.post("/api/notifications/test", dependencies=[AuthDep])
+async def post_notifications_test(body: NotificationTestRequest):
+    """Send a synthetic event through exactly one channel for end-to-end verification."""
+    evt = NotifyEvent(
+        event_type="test",
+        severity="info",
+        install_id=None,
+        title="Lakehouse Studio test notification",
+        body=f"Verification ping for channel '{body.channel}'.",
+        ts=time.time(),
+    )
+    ok, detail = await get_dispatcher().send_through(body.channel, evt)
+    return {"ok": ok, "detail": detail}
+
+
+# ---------- CSV ingest + Table Explorer ----------
+
+class IngestRequest(BaseModel):
+    upload_id: str = Field(min_length=1, max_length=64)
+    schema_overrides: list[dict] = Field(default_factory=list)
+    target: dict = Field(default_factory=dict)  # {database, table}
+
+
+def _require_install_ready(install_id: str):
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state != "READY":
+        raise HTTPException(409, f"install is in state {rec.state}; READY required")
+    return rec
+
+
+@app.post("/api/installs/{install_id}/uploads", dependencies=[AuthDep])
+async def post_csv_upload(install_id: str, file: UploadFile = File(...)):
+    """Stream a CSV upload to disk and return a preview of the inferred schema.
+
+    Hard cap LHS_UPLOAD_MAX_MB (default 500 MB). The file is streamed in
+    chunks so we never page the whole thing into memory.
+    """
+    _require_install_ready(install_id)
+
+    if not file.filename:
+        raise HTTPException(400, "filename is required")
+
+    upload_id = f"upl_{secrets.token_hex(6)}"
+    try:
+        saved_path = await ingest_mod.save_csv_upload(
+            install_id=install_id,
+            upload_id=upload_id,
+            file_stream=file.file,
+            filename=file.filename,
+        )
+    except ingest_mod.UploadTooLargeError as e:
+        raise HTTPException(413, str(e))
+    except ingest_mod.UploadInvalidError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        try:
+            await file.close()
+        except Exception:
+            pass
+
+    try:
+        preview = ingest_mod.preview_csv(saved_path)
+    except ingest_mod.UploadInvalidError as e:
+        raise HTTPException(400, f"preview failed: {e}")
+    except Exception as e:
+        raise HTTPException(500, f"preview failed: {type(e).__name__}: {e}")
+
+    return {
+        "upload_id": upload_id,
+        "filename": saved_path.name,
+        "size_bytes": saved_path.stat().st_size,
+        "preview": preview,
+    }
+
+
+@app.post("/api/installs/{install_id}/ingest", dependencies=[AuthDep])
+async def post_ingest(install_id: str, body: IngestRequest):
+    """Kick off (currently: register-then-fail) a CSV ingest job."""
+    _require_install_ready(install_id)
+    try:
+        job = await ingest_mod.kick_off_csv_ingest(
+            install_id=install_id,
+            upload_id=body.upload_id,
+            schema_confirm=body.schema_overrides,
+            target=body.target,
+        )
+    except ingest_mod.UploadInvalidError as e:
+        raise HTTPException(400, str(e))
+    return job.model_dump()
+
+
+@app.get("/api/installs/{install_id}/ingest", dependencies=[AuthDep])
+def list_ingest_jobs(install_id: str):
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    return [j.model_dump() for j in ingest_mod.list_jobs(install_id)]
+
+
+@app.get("/api/installs/{install_id}/ingest/{job_id}", dependencies=[AuthDep])
+def get_ingest_job(install_id: str, job_id: str):
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    job = ingest_mod.get_job(job_id)
+    if not job or job.install_id != install_id:
+        raise HTTPException(404, "ingest job not found")
+    return job.model_dump()
+
+
+@app.get("/api/installs/{install_id}/tables", dependencies=[AuthDep])
+async def get_tables(install_id: str):
+    """List every (namespace, table) pair the Iceberg REST catalog knows about."""
+    _require_install_ready(install_id)
+    try:
+        namespaces = await table_explorer.list_namespaces()
+    except Exception as e:
+        raise HTTPException(502, f"iceberg catalog unreachable: {type(e).__name__}: {e}")
+
+    out: list[dict] = []
+    for ns in namespaces:
+        try:
+            tables = await table_explorer.list_tables(ns)
+        except Exception:
+            continue
+        out.extend(tables)
+    return {"namespaces": namespaces, "tables": out}
+
+
+@app.get("/api/installs/{install_id}/tables/{namespace}/{name}", dependencies=[AuthDep])
+async def get_table_detail(install_id: str, namespace: str, name: str):
+    _require_install_ready(install_id)
+    try:
+        return await table_explorer.get_table_info(namespace, name)
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code if e.response is not None else 502
+        if status == 404:
+            raise HTTPException(404, f"table {namespace}.{name} not found")
+        raise HTTPException(502, f"iceberg catalog error: {status}")
+    except Exception as e:
+        raise HTTPException(502, f"iceberg catalog unreachable: {type(e).__name__}: {e}")
+
+
 @app.on_event("shutdown")
 async def _shutdown():
     import logging
@@ -734,6 +903,11 @@ async def _shutdown():
         store.flush()
     except Exception:
         log.exception("state flush failed")
+    # Stop notifications config-poll task.
+    try:
+        await get_dispatcher().stop()
+    except Exception:
+        log.exception("notify dispatcher stop failed")
 
 
 class ControlRequest(BaseModel):

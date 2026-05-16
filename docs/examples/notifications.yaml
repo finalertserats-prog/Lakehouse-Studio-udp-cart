@@ -1,0 +1,35 @@
+# Lakehouse Studio notifications config (sample).
+#
+# Copy to `work/notifications.yaml` and edit. The dispatcher polls this file's
+# mtime every 5s; saves take effect without restarting the server.
+#
+# SECRETS MUST USE INDIRECTION. Plaintext values for password/webhook fields
+# are rejected at load time. Two indirections are supported:
+#   ${ENV_VAR}     — read from process environment
+#   keyring:name   — read from OS keychain via the `keyring` Python package
+#                    (entry stored under service name "lakehouse-studio")
+
+channels:
+  toast:
+    enabled: true
+
+  slack:
+    enabled: false
+    webhook_url: ${LHS_SLACK_WEBHOOK}
+
+  email:
+    enabled: false
+    smtp_host: smtp.example.com
+    smtp_port: 587
+    username: ""
+    # Set LHS_SMTP_PASSWORD in the environment, or use keyring:smtp
+    password: ${LHS_SMTP_PASSWORD}
+    from: ""
+    to: []
+
+rules:
+  install_completed: [toast, email]
+  install_failed:    [toast, email, slack]
+  smoke_failed:      [slack]
+  service_unhealthy: [toast]
+  backup_failed:     [toast, email, slack]
