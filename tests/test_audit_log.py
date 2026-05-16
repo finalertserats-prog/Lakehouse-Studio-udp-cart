@@ -286,3 +286,91 @@ def test_subscriber_skips_uninteresting_kinds(db_path):
             await sub.stop()
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — RetentionScheduler
+# ---------------------------------------------------------------------------
+
+
+def test_is_scheduler_enabled(monkeypatch):
+    # Default follows LHS_AUDIT_ENABLED
+    monkeypatch.delenv("LHS_AUDIT_ENABLED", raising=False)
+    monkeypatch.delenv("LHS_AUDIT_SCHEDULER_ENABLED", raising=False)
+    assert audit_log.is_scheduler_enabled() is False
+
+    monkeypatch.setenv("LHS_AUDIT_ENABLED", "true")
+    assert audit_log.is_scheduler_enabled() is True
+
+    # Explicit override
+    monkeypatch.setenv("LHS_AUDIT_SCHEDULER_ENABLED", "false")
+    assert audit_log.is_scheduler_enabled() is False
+
+    monkeypatch.delenv("LHS_AUDIT_ENABLED", raising=False)
+    monkeypatch.setenv("LHS_AUDIT_SCHEDULER_ENABLED", "true")
+    assert audit_log.is_scheduler_enabled() is True
+
+
+def test_scheduler_lifecycle_and_prune(db_path, monkeypatch):
+    """Scheduler must register a task, call prune at interval, and stop cleanly."""
+    audit_log.init_audit_db(db_path)
+    monkeypatch.setenv("LHS_AUDIT_RETENTION_INTERVAL_SECONDS", "0.05")
+
+    # insert an old row
+    old_ts = time.time() - (100 * 86400.0)
+    old_entry = audit_log.AuditEntry(
+        ts=old_ts,
+        actor="system",
+        action="install.state_change",
+        resource_type="install",
+        resource_id=_new_install_id(),
+        redacted_payload={"status": "READY"},
+    )
+    asyncio.run(audit_log.write(old_entry, sqlite_path=db_path))
+
+    pre = asyncio.run(audit_log.query(sqlite_path=db_path))
+    assert len(pre) == 1
+
+    async def _run():
+        scheduler = audit_log.RetentionScheduler(sqlite_path=db_path)
+        await scheduler.start()
+        try:
+            # Wait for at least one tick
+            await asyncio.sleep(0.15)
+            # Row should be pruned
+            post = await audit_log.query(sqlite_path=db_path)
+            assert len(post) == 0
+        finally:
+            await scheduler.stop()
+            assert scheduler._task is None
+
+    asyncio.run(_run())
+
+
+def test_scheduler_survives_exception(db_path, monkeypatch):
+    """An exception in prune must not crash the loop."""
+    monkeypatch.setenv("LHS_AUDIT_RETENTION_INTERVAL_SECONDS", "0.05")
+    audit_log.init_audit_db(db_path)
+
+    calls = 0
+    orig_prune = audit_log.retention_prune
+
+    async def _fake_prune(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("synthetic db error")
+        return await orig_prune(*args, **kwargs)
+
+    monkeypatch.setattr(audit_log, "retention_prune", _fake_prune)
+
+    async def _run():
+        scheduler = audit_log.RetentionScheduler(sqlite_path=db_path)
+        await scheduler.start()
+        try:
+            await asyncio.sleep(0.2)
+            assert calls >= 2
+        finally:
+            await scheduler.stop()
+
+    asyncio.run(_run())

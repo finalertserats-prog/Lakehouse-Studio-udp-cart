@@ -95,6 +95,14 @@ def is_enabled() -> bool:
     return raw.strip().lower() in {"true", "1", "yes", "on"}
 
 
+def is_scheduler_enabled() -> bool:
+    """``True`` if ``LHS_AUDIT_SCHEDULER_ENABLED`` is truthy, defaulting to ``is_enabled()``."""
+    raw = os.environ.get("LHS_AUDIT_SCHEDULER_ENABLED")
+    if not raw:
+        return is_enabled()
+    return raw.strip().lower() in {"true", "1", "yes", "on"}
+
+
 def _retention_days() -> int:
     raw = os.environ.get(_RETENTION_ENV)
     if not raw:
@@ -116,6 +124,29 @@ def _db_path() -> Path:
     return WORK_DIR / "audit.sqlite"
 
 
+_BUSY_TIMEOUT_MS = 5000  # 5s — accommodates a concurrent retention purge
+
+
+def _connect(sqlite_path: Path) -> sqlite3.Connection:
+    """Open the audit DB with concurrency-safe pragmas.
+
+    Codex-flagged 2026-05-17: raw ``sqlite3.connect`` with no WAL + no
+    busy_timeout means a concurrent retention purge can produce
+    ``database is locked`` on the subscriber, dropping audit writes.
+    WAL + 5s busy_timeout is the standard hardening combo for a
+    single-process, multi-thread SQLite workload.
+    """
+    con = sqlite3.connect(str(sqlite_path), timeout=_BUSY_TIMEOUT_MS / 1000)
+    try:
+        con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+        con.execute("PRAGMA journal_mode = WAL")
+        con.execute("PRAGMA synchronous = NORMAL")
+    except sqlite3.DatabaseError:
+        # PRAGMAs are best-effort; never let hardening crash the DB open.
+        pass
+    return con
+
+
 def init_audit_db(sqlite_path: Optional[Path] = None) -> Path:
     """Create (idempotent) the ``audit_log`` table at ``WORK_DIR/audit.sqlite``.
 
@@ -133,7 +164,7 @@ def init_audit_db(sqlite_path: Optional[Path] = None) -> Path:
 
     path = Path(sqlite_path) if sqlite_path is not None else _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(path))
+    con = _connect(path)
     try:
         # We deliberately do NOT enable foreign_keys here: the standalone
         # audit DB has no tenants / users tables, and turning on FK checks
@@ -181,7 +212,7 @@ def _row_to_entry(row: sqlite3.Row | tuple) -> AuditEntry:
 def _write_sync(entry: AuditEntry, sqlite_path: Path) -> None:
     """Synchronous insert. Called via ``asyncio.to_thread`` from :func:`write`."""
     payload_json = json.dumps(entry.redacted_payload, default=str)
-    con = sqlite3.connect(str(sqlite_path))
+    con = _connect(sqlite_path)
     try:
         cur = con.cursor()
         # We use the AUTOINCREMENT integer id as the primary key (matches the
@@ -263,7 +294,7 @@ def _query_sync(
     sql += " ORDER BY ts DESC LIMIT ?"
     params.append(max(1, min(int(limit), 5000)))
 
-    con = sqlite3.connect(str(sqlite_path))
+    con = _connect(sqlite_path)
     try:
         cur = con.cursor()
         cur.execute(sql, params)
@@ -309,7 +340,7 @@ async def query(
 
 def _retention_prune_sync(older_than_days: int, sqlite_path: Path) -> int:
     cutoff = time.time() - (older_than_days * 86400.0)
-    con = sqlite3.connect(str(sqlite_path))
+    con = _connect(sqlite_path)
     try:
         cur = con.cursor()
         cur.execute("DELETE FROM audit_log WHERE ts < ?", (cutoff,))
@@ -546,6 +577,65 @@ class AuditSubscriber:
         await write(entry, sqlite_path=self._sqlite_path)
 
 
+class RetentionScheduler:
+    """Background task: periodically prunes old audit log entries."""
+
+    def __init__(self, sqlite_path: Optional[Path] = None):
+        self._sqlite_path = Path(sqlite_path) if sqlite_path is not None else _db_path()
+        self._task: Optional[asyncio.Task] = None
+        self._stop = asyncio.Event()
+
+    def _interval_seconds(self) -> float:
+        raw = os.environ.get("LHS_AUDIT_RETENTION_INTERVAL_SECONDS")
+        if not raw:
+            return 86400.0
+        try:
+            n = float(raw.strip())
+        except ValueError:
+            log.warning("invalid LHS_AUDIT_RETENTION_INTERVAL_SECONDS=%r; falling back to 86400", raw)
+            return 86400.0
+        if n <= 0:
+            log.warning("LHS_AUDIT_RETENTION_INTERVAL_SECONDS=%s must be > 0; falling back to 86400", n)
+            return 86400.0
+        return n
+
+    async def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        # Ensure the DB exists. init_audit_db is idempotent.
+        try:
+            init_audit_db(self._sqlite_path)
+        except Exception:
+            log.exception("audit init_audit_db failed; scheduler disabled")
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run(), name="audit-scheduler")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.sleep(self._interval_seconds())
+            except asyncio.CancelledError:
+                raise
+            if self._stop.is_set():
+                break
+            try:
+                deleted = await retention_prune(_retention_days(), sqlite_path=self._sqlite_path)
+                log.info("audit retention_prune deleted %d rows", deleted)
+            except Exception:
+                log.exception("audit retention_prune failed")
+
+
 # --------------------------------------------------------------------------- #
 # Global singleton                                                            #
 # --------------------------------------------------------------------------- #
@@ -567,3 +657,21 @@ def reset_subscriber_for_tests() -> None:
     one — used by tests that need a fresh queue + DB path."""
     global _GLOBAL_SUBSCRIBER
     _GLOBAL_SUBSCRIBER = None
+
+
+_GLOBAL_SCHEDULER: Optional[RetentionScheduler] = None
+
+
+def get_scheduler() -> RetentionScheduler:
+    """Lazy global accessor — main.py uses this in startup / shutdown."""
+    global _GLOBAL_SCHEDULER
+    if _GLOBAL_SCHEDULER is None:
+        _GLOBAL_SCHEDULER = RetentionScheduler()
+    return _GLOBAL_SCHEDULER
+
+
+def reset_scheduler_for_tests() -> None:
+    """Drop the cached scheduler so the next ``get_scheduler()`` rebuilds
+    one — used by tests that need a fresh DB path."""
+    global _GLOBAL_SCHEDULER
+    _GLOBAL_SCHEDULER = None
