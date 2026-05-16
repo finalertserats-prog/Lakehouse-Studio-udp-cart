@@ -448,16 +448,30 @@ async def enable_monitoring(install_id: str, profile: MonitoringProfile) -> dict
         install_id, profile.include_grafana, profile.prometheus_retention_days,
     )
 
+    # SECURITY: never return the admin secret in the API response (HTTP
+    # bodies hit access logs, browser memory, devtools, sometimes proxies).
+    # Instead write it to a chmod-600 file under the install dir; the user
+    # reads it once and deletes it. The file is the ONLY place outside the
+    # running container that the value exists.
+    secret_path = install_dir / _MONITORING_SUBDIR / "grafana-admin-password.txt"
+    if profile.include_grafana and not user_supplied:
+        _atomic_write(secret_path, admin_password + "\n")
+        try:
+            import stat as _stat
+            secret_path.chmod(_stat.S_IRUSR | _stat.S_IWUSR)  # 600; best-effort on Windows
+        except Exception:
+            pass
+
     return {
         "compose_file_path": str(install_dir / _OVERRIDE_FILENAME),
         "activate_command": activate_command(install_id),
         "grafana_port": _GRAFANA_PORT if profile.include_grafana else None,
         "prometheus_port": _PROMETHEUS_PORT,
         "admin_password_set": True,
-        # Returned ONCE — caller must surface this to the operator and then
-        # discard. Never persisted on the server outside the running Grafana
-        # container's environment.
-        "grafana_admin_password": admin_password if profile.include_grafana else None,
+        # File-based handoff. Operator: `cat <path> && rm <path>`. If they
+        # supplied their own password, this field is null because we didn't
+        # generate one — they already know the value.
+        "grafana_admin_password_file": str(secret_path) if (profile.include_grafana and not user_supplied) else None,
         "grafana_admin_password_user_supplied": user_supplied,
     }
 

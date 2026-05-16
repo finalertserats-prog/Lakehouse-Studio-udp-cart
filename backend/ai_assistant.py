@@ -53,9 +53,25 @@ MODEL_NAME = "claude-haiku-4-5-20251001"
 _MAX_QUESTION_CHARS = 2000
 _MAX_HISTORY_TURNS = 5
 
-# Generation knobs.
-_MAX_OUTPUT_TOKENS = 700      # ~300 words of answer + small JSON-ish padding
-_RESPONSE_TIMEOUT_SEC = 30.0  # client-side timeout for the Anthropic call
+# Generation knobs — operator-tunable via env so admins can scale up for
+# complex queries or scale down for tighter SLOs. Safe fallbacks on any
+# parse error so a typo in env never crashes the AI panel.
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return max(0.5, float(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+_MAX_OUTPUT_TOKENS = _env_int("LHS_AI_MAX_OUTPUT_TOKENS", 700)        # ~300 words + padding
+_RESPONSE_TIMEOUT_SEC = _env_float("LHS_AI_RESPONSE_TIMEOUT_SEC", 30.0)  # Anthropic client timeout
 
 # Cached docs/COMPATIBILITY.md content. Re-read at startup time only.
 _COMPAT_DOC_PATH = ROOT / "docs" / "COMPATIBILITY.md"

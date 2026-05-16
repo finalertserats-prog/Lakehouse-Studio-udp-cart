@@ -319,10 +319,16 @@ def caddy_activate_command(install_id: str) -> str:
 
 
 def caddy_deactivate_command(install_id: str) -> str:
-    """Return the exact teardown command. Brings down the whole stack
-    (not just caddy) because compose can't reconcile the merged graph
-    when one of the override files is removed without a `down` first."""
+    """Return the granular teardown command. Stops + removes ONLY the caddy
+    service so the rest of the stack (MinIO, Iceberg, Spark, StarRocks)
+    keeps serving uninterrupted. Operator can then safely remove the
+    override file via `caddy_tls.disable_caddy_override()`.
+    """
+    # Stop + rm narrowly — `compose down` here would clobber the whole
+    # stack, which is the bug Gemini's v0.5 review flagged.
     return (
         "docker compose -f docker-compose.yml -f docker-compose.tls.yml "
-        "down"
+        "stop caddy && "
+        "docker compose -f docker-compose.yml -f docker-compose.tls.yml "
+        "rm -f caddy"
     )

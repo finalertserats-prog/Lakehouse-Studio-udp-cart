@@ -100,15 +100,31 @@ class DataSourceNotFoundError(LookupError):
 
 _LETTER_RE = re.compile(r"[A-Za-z]")
 _DIGIT_RE = re.compile(r"\d")
+_SPECIAL_RE = re.compile(r"[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]")
+_COMMON_PASSWORDS = {
+    "password", "password123", "admin", "12345678", "qwertyuiop",
+    "letmein", "welcome", "changeme", "iloveyou", "monkey", "dragon",
+    "abc123", "111111", "1q2w3e4r", "sunshine", "princess",
+}
 
 
 def _check_password_strength(password: str) -> None:
-    if len(password) < 8:
-        raise WeakPasswordError("password must be at least 8 characters")
+    """Reject weak DB credentials at the boundary. v0.5 hardened policy
+    per Gemini's review: longer min length, special-char required, common
+    passwords blacklisted."""
+    problems: list[str] = []
+    if len(password) < 12:
+        problems.append("at least 12 characters")
     if not _LETTER_RE.search(password):
-        raise WeakPasswordError("password must contain at least one letter")
+        problems.append("at least one letter")
     if not _DIGIT_RE.search(password):
-        raise WeakPasswordError("password must contain at least one digit")
+        problems.append("at least one digit")
+    if not _SPECIAL_RE.search(password):
+        problems.append("at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)")
+    if password.lower() in _COMMON_PASSWORDS:
+        problems.append("not in the common-password blacklist")
+    if problems:
+        raise WeakPasswordError("password must have: " + "; ".join(problems))
 
 
 # ---------- Fernet key bootstrap ----------

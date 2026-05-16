@@ -19,6 +19,8 @@ so backup.py doesn't have to import the FastAPI module (avoids a cycle).
 from __future__ import annotations
 import asyncio
 import json
+import logging
+import os
 import shutil
 import tarfile
 import time
@@ -40,6 +42,11 @@ _BACKUPS_ROOT = WORK_DIR / "backups"
 _MINIO_CLIENT_CONTAINER = "udp-minio-client"
 _MINIO_ALIAS = "minio"
 _MINIO_BUCKET = "datalake"
+
+_SCHEDULES_FILE = WORK_DIR / "backup_schedules.json"
+_SCHEDULER_TICK_SEC = 60.0
+
+_log = logging.getLogger("lhs.backup.scheduler")
 
 
 class BackupError(ValueError):
@@ -315,8 +322,15 @@ async def restore_backup(
     *,
     running_states: Optional[frozenset[str]] = None,
     install_tasks: Optional[dict] = None,
+    restore_data: bool = True,
 ) -> RestoreResult:
     """Extract a backup over its source install_dir.
+
+    `restore_data=False` skips the MinIO data restore even if the backup is
+    "full" — used by upgrade-executor rollback so we never clobber object-
+    storage contents the user wrote AFTER the backup but BEFORE the rollback.
+    Metadata (compose, .env, scripts) still restores either way; those are
+    the only files the upgrade path could have touched.
 
     Caller (the FastAPI route) passes RUNNING_STATES + _INSTALL_TASKS so we
     refuse to clobber a mid-pipeline install. Pure no-op if the install is
@@ -385,7 +399,7 @@ async def restore_backup(
             _step("extract-metadata", "passed",
                   f"{len(install_members)} entries -> {install_dir}")
 
-            if minio_members and rec.kind == "full":
+            if minio_members and rec.kind == "full" and restore_data:
                 minio_scratch = _backup_dir_for(rec.install_id) / f"restore_{restore_id}.minio"
                 minio_scratch.mkdir(parents=True, exist_ok=True)
                 for m in minio_members:
@@ -400,10 +414,13 @@ async def restore_backup(
                         )
                     tar.extract(m, path=minio_scratch)
                 _step("extract-minio", "passed", f"{len(minio_members)} entries staged")
+            elif rec.kind == "full" and not restore_data:
+                _step("extract-minio", "skipped",
+                      "restore_data=False (upgrade rollback) — preserving live MinIO contents")
             elif rec.kind == "full":
                 _step("extract-minio", "skipped", "no minio_data in tarball")
 
-        if rec.kind == "full" and minio_scratch is not None:
+        if rec.kind == "full" and restore_data and minio_scratch is not None:
             ok, detail = await _mc_mirror_restore(rec.install_id, minio_scratch)
             _step("mc-restore", "passed" if ok else "warning", detail)
 
@@ -453,3 +470,222 @@ async def restore_backup(
     finally:
         if minio_scratch is not None:
             shutil.rmtree(minio_scratch, ignore_errors=True)
+
+
+# ---------- scheduling ----------
+
+
+class BackupSchedule(BaseModel):
+    install_id: str
+    enabled: bool = False
+    interval_hours: int = Field(default=24, ge=1, le=168)
+    kind: Literal["metadata", "full"] = "metadata"
+    last_run_at: Optional[float] = None
+    next_run_at: Optional[float] = None
+
+
+def _read_schedules_file() -> dict[str, dict]:
+    if not _SCHEDULES_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(_SCHEDULES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        # Corrupt schedules file — back it up and start fresh so the scheduler
+        # never wedges on a bad JSON parse.
+        try:
+            _SCHEDULES_FILE.replace(_SCHEDULES_FILE.with_suffix(".json.bak"))
+        except Exception:
+            pass
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
+def _atomic_write_schedules(data: dict[str, dict]) -> None:
+    """tmp-write + replace, with retry on Windows AV/OneDrive flakiness.
+    Mirrors backend/state.py's _atomic_write pattern."""
+    _SCHEDULES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _SCHEDULES_FILE.with_suffix(_SCHEDULES_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    last_err: Optional[Exception] = None
+    delay = 0.1
+    for _ in range(5):
+        try:
+            os.replace(tmp, _SCHEDULES_FILE)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(delay)
+            delay = min(delay * 2, 1.0)
+    if last_err is not None:
+        raise last_err
+
+
+def load_schedule(install_id: str) -> BackupSchedule:
+    """Return the saved schedule for `install_id`, or a disabled default."""
+    raw = _read_schedules_file()
+    entry = raw.get(install_id)
+    if not isinstance(entry, dict):
+        return BackupSchedule(install_id=install_id)
+    try:
+        # Force install_id to match the key so we never return a mismatched record.
+        entry = {**entry, "install_id": install_id}
+        return BackupSchedule(**entry)
+    except Exception:
+        return BackupSchedule(install_id=install_id)
+
+
+def save_schedule(install_id: str, body: dict) -> BackupSchedule:
+    """Upsert a schedule. If enabled, recompute next_run_at = now + interval."""
+    current = load_schedule(install_id)
+    merged = current.model_dump()
+    # Only accept the fields the caller is allowed to change; install_id is
+    # bound to the path param, last_run_at is server-owned.
+    for key in ("enabled", "interval_hours", "kind"):
+        if key in body and body[key] is not None:
+            merged[key] = body[key]
+    merged["install_id"] = install_id
+
+    schedule = BackupSchedule(**merged)
+    if schedule.enabled:
+        now = time.time()
+        # Recompute on every save so a flipped-enabled or shrunk-interval
+        # schedule fires off the new cadence, not the old one.
+        schedule.next_run_at = now + schedule.interval_hours * 3600
+    else:
+        schedule.next_run_at = None
+
+    all_schedules = _read_schedules_file()
+    all_schedules[install_id] = schedule.model_dump()
+    _atomic_write_schedules(all_schedules)
+    return schedule
+
+
+def list_all_schedules() -> list[BackupSchedule]:
+    """Return every persisted schedule. Used by the scheduler loop."""
+    out: list[BackupSchedule] = []
+    raw = _read_schedules_file()
+    for install_id, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            entry = {**entry, "install_id": install_id}
+            out.append(BackupSchedule(**entry))
+        except Exception:
+            continue
+    return out
+
+
+def _persist_run_update(install_id: str, *, last_run_at: float, next_run_at: Optional[float]) -> None:
+    """Patch only the run-timestamp fields on an existing schedule entry.
+
+    Done as a focused read-modify-write so we don't clobber a concurrent
+    save_schedule() that may have toggled enabled/interval between our read
+    of list_all_schedules() and this update.
+    """
+    all_schedules = _read_schedules_file()
+    entry = all_schedules.get(install_id)
+    if not isinstance(entry, dict):
+        return
+    entry["last_run_at"] = last_run_at
+    if next_run_at is None:
+        entry.pop("next_run_at", None)
+    else:
+        entry["next_run_at"] = next_run_at
+    all_schedules[install_id] = entry
+    _atomic_write_schedules(all_schedules)
+
+
+class BackupScheduler:
+    """Async loop that fires scheduled backups.
+
+    Tick interval is _SCHEDULER_TICK_SEC (60s). Each tick scans all schedules
+    and for every enabled one whose next_run_at <= now, calls create_backup.
+    A create_backup exception MUST NOT crash the loop — we wrap it, publish
+    to the bus, and leave next_run_at intact so the next tick retries.
+    """
+
+    def __init__(self) -> None:
+        self._task: Optional[asyncio.Task] = None
+        self._stop = asyncio.Event()
+
+    async def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run_loop(), name="backup-scheduler")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+
+    async def _run_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=_SCHEDULER_TICK_SEC)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self._tick()
+            except Exception:
+                # Catch-all: a malformed schedules file or unexpected I/O error
+                # in _tick must never kill the scheduler task.
+                _log.exception("backup scheduler tick failed")
+
+    async def _tick(self) -> None:
+        now = time.time()
+        for sched in list_all_schedules():
+            if not sched.enabled:
+                continue
+            if sched.next_run_at is None or sched.next_run_at > now:
+                continue
+            await self._fire(sched, now)
+
+    async def _fire(self, sched: BackupSchedule, now: float) -> None:
+        try:
+            await create_backup(sched.install_id, kind=sched.kind)
+        except BackupError as e:
+            # Expected domain failure (install missing, dir gone) — log to the
+            # install's bus so the UI surfaces it, and leave next_run_at intact
+            # so the next tick retries without piling up missed runs.
+            _emit(
+                sched.install_id,
+                f"[backup-scheduler] scheduled backup failed: {e}",
+                stream="stderr",
+            )
+            return
+        except Exception as e:
+            # Unexpected failure (docker hiccup, disk full). Same retry policy:
+            # next_run_at stays put so we try again on the next tick.
+            _emit(
+                sched.install_id,
+                f"[backup-scheduler] scheduled backup error: {type(e).__name__}: {e}",
+                stream="stderr",
+            )
+            _log.exception("scheduled backup raised for install=%s", sched.install_id)
+            return
+        # Success: advance the cursor.
+        next_run = now + sched.interval_hours * 3600
+        try:
+            _persist_run_update(sched.install_id, last_run_at=now, next_run_at=next_run)
+        except Exception:
+            _log.exception("failed to persist schedule cursor for %s", sched.install_id)
+
+
+_GLOBAL_SCHEDULER: Optional[BackupScheduler] = None
+
+
+def get_scheduler() -> BackupScheduler:
+    """Lazy singleton accessor for the global backup scheduler."""
+    global _GLOBAL_SCHEDULER
+    if _GLOBAL_SCHEDULER is None:
+        _GLOBAL_SCHEDULER = BackupScheduler()
+    return _GLOBAL_SCHEDULER

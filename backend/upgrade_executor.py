@@ -425,11 +425,15 @@ async def execute_upgrade(
             _record_step(exec_rec, "rollback-compose-down",
                          "passed" if rc == 0 else "warning",
                          (err or out).strip()[:200])
-            # 2. restore the backup (this overwrites install_dir/* with the snapshot)
+            # 2. restore METADATA ONLY (docker-compose.yml + .env + scripts).
+            # restore_data=False keeps live MinIO contents intact — the upgrade
+            # pipeline never touches object storage, so restoring data could
+            # only DESTROY user writes between backup and rollback.
             restore = await restore_backup(
                 backup_id,
                 running_states=None,  # we already gated upstream; restore must proceed now
                 install_tasks=None,
+                restore_data=False,
             )
             _record_step(exec_rec, "rollback-restore",
                          "passed" if restore.success else "failed",
