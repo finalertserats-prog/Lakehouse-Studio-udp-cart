@@ -170,9 +170,35 @@ categories:
         url: https://iceberg.apache.org
         summary: Open table format with schema evolution, time travel, and hidden partitioning. The de-facto choice for Spark + Trino + StarRocks workflows.
         compatible_with: [iceberg-rest, spark-iceberg, starrocks]
+        logo: "/assets/logos/iceberg.svg"
+        tagline: "Open table format for huge analytic datasets on object storage."
+        what_it_is: >
+          Iceberg is a table format that lives on top of Parquet/ORC/Avro files in
+          object storage. It tracks every change as a snapshot, so the same table
+          can be queried by Spark, Trino, StarRocks, and Flink at the same time
+          without copying data or fighting over metadata.
+        best_for:
+          - "Petabyte tables read by multiple engines at once"
+          - "Audit history via snapshot-based time travel"
+          - "Schema and partition changes without rewriting old data"
+          - "Replacing Hive Metastore-era directory layouts"
+        capabilities:
+          - "ACID inserts, updates, deletes, and merges"
+          - "Time travel by snapshot id or timestamp"
+          - "Hidden partitioning — query by date, scan by partition automatically"
+          - "Schema evolution: add/drop/rename columns without rewrites"
+          - "Partition evolution: change layout without breaking old data"
+          - "Engine-agnostic — Spark, Trino, StarRocks, Flink read the same tables"
+        why_this_version: >
+          Pinned to 1.6.0 because the certified Spark image bundles Iceberg 1.8.1
+          (client) and 1.6.0 on the REST catalog (server) — server-side is
+          guaranteed >= client-side per the lock file's constraint, and 1.6.0 is
+          the highest Iceberg-REST tag available on tabulario/iceberg-rest at
+          certification time.
+        resource_profile_summary: "Format spec — no runtime of its own. Storage cost comes from the underlying Parquet files in MinIO."
     coming_soon:
-      - { name: "Apache Hudi", reason: "Different transactional model; tested combinations TBD" }
-      - { name: "Delta Lake", reason: "Databricks-led; tested combinations TBD" }
+      - { name: "Apache Hudi",  id: "hudi",  logo: "/assets/logos/hudi.svg",  summary: "Streaming-first table format with built-in upsert + incremental pulls.", reason: "Different transactional model; tested combinations TBD" }
+      - { name: "Delta Lake",   id: "delta", logo: "/assets/logos/delta.svg", summary: "Databricks-led table format with strong Spark integration and OPTIMIZE.", reason: "Databricks-led; tested combinations TBD" }
 
   - id: catalog
     label: Table catalog
@@ -191,11 +217,37 @@ categories:
         url: https://iceberg.apache.org/concepts/catalog/
         summary: Spec-compliant REST catalog server. Lightweight, no Postgres dependency, scales horizontally. Works with every modern Iceberg client.
         compatible_with: [iceberg, spark-iceberg, starrocks]
+        logo: "/assets/logos/iceberg-rest.svg"
+        tagline: "Lightweight REST server that hands out Iceberg table metadata."
+        what_it_is: >
+          A reference implementation of the Iceberg REST Catalog spec. Engines
+          ask it "where does table X live, and what's its current snapshot?" over
+          plain HTTP. No Postgres or Hive Metastore behind it — metadata is
+          tracked in object storage; the REST server is a stateless lookup layer.
+        best_for:
+          - "Multi-engine reads against the same Iceberg warehouse"
+          - "Replacing Hive Metastore for new lakehouses"
+          - "Cloud-native deploys where running another Postgres is overhead"
+          - "Local dev where you want a real catalog without a real database"
+        capabilities:
+          - "Implements the Iceberg REST Catalog spec end-to-end"
+          - "Stateless — scale horizontally behind a load balancer"
+          - "No relational DB dependency for warehouse metadata"
+          - "Works with Spark, Trino, StarRocks, Flink, and PyIceberg clients"
+          - "S3-compatible storage backend (MinIO, AWS S3, GCS via interop)"
+          - "Healthcheck patched to use a bash-only TCP probe (image ships without wget)"
+        why_this_version: >
+          Pinned to tabulario/iceberg-rest:1.6.0 because it's the verified tag on
+          Docker Hub that matches the Spark image's Iceberg client lineage. The
+          lock file's spark↔iceberg-rest constraint requires server-side >=
+          client-side, and Spark 3.5.5_1.8.1 ships Iceberg 1.8.1 — making 1.6.0
+          on the REST server the floor that still satisfies the constraint.
+        resource_profile_summary: "Recommended tier: 1 CPU, 2 GB RAM, 5 GB disk. Stateless — metadata lives in object storage, not in the container."
     coming_soon:
-      - { name: "Lakekeeper", reason: "Multi-tenant Iceberg REST; smoke tests pending" }
-      - { name: "Project Nessie", reason: "Branching semantics, git-for-data" }
-      - { name: "Apache Polaris", reason: "Snowflake-incubated open catalog" }
-      - { name: "Hive Metastore", reason: "Legacy support — slated for v0.5" }
+      - { name: "Lakekeeper",     id: "lakekeeper",     logo: "/assets/logos/lakekeeper.svg",     summary: "Multi-tenant Iceberg REST with built-in RBAC and per-table policies.", reason: "Multi-tenant Iceberg REST; smoke tests pending" }
+      - { name: "Project Nessie", id: "nessie",         logo: "/assets/logos/nessie.svg",         summary: "Git-for-data catalog — branches, merges, and point-in-time rollback over Iceberg tables.", reason: "Branching semantics, git-for-data" }
+      - { name: "Apache Polaris", id: "polaris",        logo: "/assets/logos/polaris.svg",        summary: "Snowflake-incubated open catalog with cross-engine credential vending.", reason: "Snowflake-incubated open catalog" }
+      - { name: "Hive Metastore", id: "hive-metastore", logo: "/assets/logos/hive-metastore.svg", summary: "Legacy table catalog from the Hadoop era — still required by some BI tools.", reason: "Legacy support — slated for v0.5" }
 
   - id: object_storage
     label: Object storage
@@ -215,10 +267,37 @@ categories:
         summary: S3-compatible object store you control. Default for the UDP pilot; perfect for dev / on-prem / air-gapped. Swap to managed S3/GCS/Azure for cost-effective production.
         compatible_with: [iceberg-rest, spark-iceberg]
         production_note: For production at scale, migrate to AWS S3 / GCS / Azure Blob — same S3 API, lower operational burden.
+        logo: "/assets/logos/minio.svg"
+        tagline: "Self-hosted S3-compatible object storage you run on your own hardware."
+        what_it_is: >
+          MinIO is a drop-in S3 replacement. It speaks the same API surface as
+          AWS S3, so any tool that writes Parquet to S3 (Spark, Iceberg, Trino)
+          works against MinIO unchanged. Default substrate for the UDP pilot
+          because it runs on a laptop, an on-prem cluster, or an air-gapped
+          server with no cloud account required.
+        best_for:
+          - "Local dev — full S3 surface without an AWS account"
+          - "Air-gapped / on-prem deployments inside customer infrastructure"
+          - "Single-node demos that need to look like production"
+          - "Edge sites pushing data back to a central lakehouse"
+        capabilities:
+          - "S3 API parity — same auth, same path semantics, same listing behaviour"
+          - "Erasure coding for single-node and multi-node fault tolerance"
+          - "Bucket policies, versioning, and lifecycle rules"
+          - "Healthcheck via bundled `mc ready local` (no extra sidecar)"
+          - "Web console on port 9001 for browsing buckets and objects"
+          - "Server-side encryption, audit logs, and IAM-style users"
+        why_this_version: >
+          Pinned to RELEASE.2025-04-22T22-12-26Z because that's the exact tag
+          the install + bootstrap + smoke loop was certified against on
+          2026-05-16 (Windows Docker Desktop, evidence id
+          2026-05-16-windows-docker-desktop in the lock file). The image bundles
+          the matching `mc` client used by the bucket-creation init container.
+        resource_profile_summary: "Recommended tier: 2 CPU, 4 GB RAM, 50 GB disk. Disk grows with your data — plan for the size of your largest table plus headroom."
     coming_soon:
-      - { name: "AWS S3", reason: "Most common production target — config wizard pending" }
-      - { name: "Google GCS", reason: "Same S3 API surface; needs creds-handling UI" }
-      - { name: "Azure Blob Storage", reason: "Same S3 API surface; needs creds-handling UI" }
+      - { name: "AWS S3",             id: "aws-s3",       summary: "Most common production target — config wizard pending.",                                                  reason: "Most common production target — config wizard pending" }
+      - { name: "Google GCS",         id: "gcs",          summary: "Google's object store. Same S3 surface via interop; needs creds-handling UI.",                            reason: "Same S3 API surface; needs creds-handling UI" }
+      - { name: "Azure Blob Storage", id: "azure-blob",   summary: "Azure's object store. Same S3 surface via interop; needs creds-handling UI.",                             reason: "Same S3 API surface; needs creds-handling UI" }
 
   - id: processing
     label: Processing engine
@@ -237,10 +316,37 @@ categories:
         url: https://spark.apache.org
         summary: Industry-standard processing engine with first-class Iceberg support. Includes a Jupyter notebook UI for interactive exploration.
         compatible_with: [iceberg, iceberg-rest, minio]
+        logo: "/assets/logos/spark-iceberg.svg"
+        tagline: "Distributed processing engine bundled with first-class Iceberg support."
+        what_it_is: >
+          Spark is the workhorse for ETL, batch transforms, and big joins. This
+          image bundles Spark 3.5.5 with the matching Iceberg 1.8.1 runtime jar
+          pre-wired, plus a Jupyter notebook UI on port 8888 so you can write
+          PySpark against your Iceberg tables interactively from minute one.
+        best_for:
+          - "Bootstrapping raw / curated / analytics layers on a lakehouse"
+          - "Heavy joins and aggregations that don't fit in serving-engine memory"
+          - "Notebook-driven exploration of Iceberg tables on S3 / MinIO"
+          - "ETL pipelines that need to read and write the same Iceberg warehouse"
+        capabilities:
+          - "Pre-bundled Iceberg 1.8.1 runtime — no manual jar wrangling"
+          - "PySpark, Scala, SQL, and R interfaces"
+          - "Reads and writes Iceberg, Parquet, ORC, JSON, CSV out of the box"
+          - "Path-style S3 addressing pre-configured for MinIO compatibility"
+          - "Jupyter UI on port 8888 with a sample notebook"
+          - "Spark UI on port 4040 for query plans and stage timings"
+        why_this_version: >
+          Pinned to tabulario/spark-iceberg:3.5.5_1.8.1 because the previously
+          documented 3.5.1_1.5.2 tag was REMOVED from Docker Hub after UDP
+          shipped — every fresh install broke at `docker compose up`. 3.5.5_1.8.1
+          is verified present via `docker manifest inspect`, and its bundled
+          Iceberg 1.8.1 satisfies the spark↔iceberg-rest server-side-newer
+          constraint.
+        resource_profile_summary: "Recommended tier: 4 CPU, 8 GB RAM, 20 GB disk. RAM dominates — Spark spills to disk under pressure but slows sharply."
     coming_soon:
-      - { name: "Trino", reason: "Federated SQL; planned for v0.4" }
-      - { name: "Apache Flink", reason: "Streaming-first; planned for v0.5" }
-      - { name: "Dremio", reason: "BI-focused lakehouse engine" }
+      - { name: "Trino",        id: "trino",  logo: "/assets/logos/trino.svg",  summary: "Federated SQL engine — query Iceberg, Postgres, Kafka, and more in one statement.", reason: "Federated SQL; planned for v0.4" }
+      - { name: "Apache Flink", id: "flink",  logo: "/assets/logos/flink.svg",  summary: "Streaming compute with an Iceberg sink for low-latency CDC pipelines.",          reason: "Streaming-first; planned for v0.5" }
+      - { name: "Dremio",       id: "dremio", logo: "/assets/logos/dremio.svg", summary: "BI-focused lakehouse engine with semantic layer and reflections.",                reason: "BI-focused lakehouse engine" }
 
   - id: serving
     label: Analytics / serving engine
@@ -259,10 +365,38 @@ categories:
         url: https://starrocks.io
         summary: MPP analytics database with native Iceberg external catalog. Reads Iceberg tables directly without copying data — single-digit-second query latency.
         compatible_with: [iceberg, iceberg-rest]
+        logo: "/assets/logos/starrocks.svg"
+        tagline: "MPP analytics engine that reads Iceberg tables directly, no copies."
+        what_it_is: >
+          StarRocks is a columnar MPP database tuned for sub-second BI queries.
+          It speaks the Iceberg REST catalog natively, so dashboards hit the
+          same Parquet files Spark just wrote — no separate warehouse to sync,
+          no nightly copy job. Runs as two services: a Frontend (FE) that
+          plans queries and a Backend (BE) that executes them.
+        best_for:
+          - "Sub-second BI dashboards on Iceberg tables"
+          - "Ad-hoc SQL exploration over an existing lakehouse"
+          - "Replacing Druid / ClickHouse without leaving the lakehouse format"
+          - "Concurrent users — MPP scales horizontally on the BE tier"
+        capabilities:
+          - "Native Iceberg external catalog — no data movement"
+          - "Vectorised execution with cost-based query planning"
+          - "MySQL wire protocol — any MySQL client / BI tool connects"
+          - "Materialized views with automatic rewrite for repeat queries"
+          - "Bitmap and bloom-filter indexes on hot columns"
+          - "FE+BE separation — scale planning and execution independently"
+        why_this_version: >
+          Pinned to 3.3.12 (both FE and BE) because earlier 3.3.x releases
+          ignored Iceberg REST catalog property propagation into the S3 FileIO
+          layer — a deal-breaker for any non-AWS S3 endpoint like MinIO. The
+          fix landed in StarRocks PR #55416, first available in 3.3.12. The
+          floating `3.3-latest` tag is explicitly forbidden in the lock file
+          because it has historically resolved to a pre-3.3.12 build.
+        resource_profile_summary: "Recommended tier: FE 2 CPU / 4 GB / 10 GB + BE 4 CPU / 8 GB / 50 GB. BE storage grows with cached query results."
     coming_soon:
-      - { name: "ClickHouse", reason: "OLAP serving alternative; pending Iceberg-via-external-catalog validation" }
-      - { name: "Trino", reason: "Same component as processing — could play both roles" }
-      - { name: "Apache Druid", reason: "Real-time analytics; planned for v0.6" }
+      - { name: "ClickHouse",   id: "clickhouse", logo: "/assets/logos/clickhouse.svg", summary: "Column-store OLAP engine with extreme single-table scan speed.",                            reason: "OLAP serving alternative; pending Iceberg-via-external-catalog validation" }
+      - { name: "Trino",        id: "trino",      logo: "/assets/logos/trino.svg",      summary: "Same engine as the processing slot — can answer dashboard queries too.",                    reason: "Same component as processing — could play both roles" }
+      - { name: "Apache Druid", id: "druid",      logo: "/assets/logos/druid.svg",      summary: "Real-time analytics database for streaming ingestion plus historical drill-down.",          reason: "Real-time analytics; planned for v0.6" }
 
   - id: orchestration
     label: Orchestrator (optional)
@@ -271,8 +405,8 @@ categories:
     optional: true
     components: []
     coming_soon:
-      - { name: "Dagster", reason: "Asset-first; the doc's recommended choice — v0.4" }
-      - { name: "Apache Airflow", reason: "Industry standard; v0.4 with Postgres auto-add" }
+      - { name: "Dagster",        id: "dagster", logo: "/assets/logos/dagster.svg", summary: "Asset-first orchestrator — pipelines defined as the data they produce.", reason: "Asset-first; the doc's recommended choice — v0.4" }
+      - { name: "Apache Airflow", id: "airflow", logo: "/assets/logos/airflow.svg", summary: "Industry-standard DAG scheduler with the largest operator ecosystem.",    reason: "Industry standard; v0.4 with Postgres auto-add" }
 
   - id: observability
     label: Observability (optional)
@@ -281,5 +415,6 @@ categories:
     optional: true
     components: []
     coming_soon:
-      - { name: "Prometheus + Grafana", reason: "Bundled monitoring; v0.4" }
-      - { name: "Loki", reason: "Log aggregation; v0.5" }
+      - { name: "Prometheus", id: "prometheus", logo: "/assets/logos/prometheus.svg", summary: "Pull-based metrics scraping with a multi-dimensional time-series store.", reason: "Bundled monitoring; v0.4" }
+      - { name: "Grafana",    id: "grafana",    logo: "/assets/logos/grafana.svg",    summary: "Dashboards over Prometheus, Loki, and Iceberg — one query UI for everything.", reason: "Bundled monitoring; v0.4" }
+      - { name: "Loki",       id: "loki",       logo: "/assets/logos/loki.svg",       summary: "Log aggregation with Prometheus-style label indexing.",                   reason: "Log aggregation; v0.5" }

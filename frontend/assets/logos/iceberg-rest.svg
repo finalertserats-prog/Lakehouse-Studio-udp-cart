@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Iceberg REST Catalog">
+  <title>Iceberg REST Catalog</title>
+  <defs>
+    <linearGradient id="rest-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b3a66"/>
+      <stop offset="100%" stop-color="#2e89c9"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="10" fill="url(#rest-bg)"/>
+  <!-- small iceberg mark -->
+  <polygon points="10,42 16,30 22,42" fill="#e9f4ff" opacity="0.9"/>
+  <polygon points="20,42 28,26 36,42" fill="#cfe6f8" opacity="0.9"/>
+  <line x1="6" y1="42" x2="38" y2="42" stroke="#cfe6f8" stroke-width="0.8" opacity="0.6"/>
+  <!-- REST badge -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+     font-weight="700" fill="#ffffff">
+    <text x="42" y="26" font-size="9" text-anchor="middle">REST</text>
+    <text x="42" y="40" font-size="7" text-anchor="middle" opacity="0.85">/v1</text>
+  </g>
+  <!-- catalog dots -->
+  <circle cx="50" cy="48" r="1.6" fill="#9ec9ec"/>
+  <circle cx="44" cy="48" r="1.6" fill="#9ec9ec"/>
+  <circle cx="38" cy="48" r="1.6" fill="#9ec9ec"/>
+</svg>

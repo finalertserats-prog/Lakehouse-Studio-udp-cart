@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Apache Iceberg">
+  <title>Apache Iceberg</title>
+  <defs>
+    <linearGradient id="ice-water" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#0b3a66"/>
+      <stop offset="100%" stop-color="#1f6fb3"/>
+    </linearGradient>
+    <linearGradient id="ice-berg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e9f4ff"/>
+      <stop offset="100%" stop-color="#9ec9ec"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="10" fill="url(#ice-water)"/>
+  <!-- underwater portion -->
+  <polygon points="6,40 18,28 30,38 44,24 58,40 58,56 6,56"
+           fill="#13558f" opacity="0.55"/>
+  <!-- visible iceberg peaks -->
+  <polygon points="14,40 24,16 34,40" fill="url(#ice-berg)" stroke="#cfe6f8" stroke-width="0.8"/>
+  <polygon points="32,40 44,22 56,40" fill="url(#ice-berg)" stroke="#cfe6f8" stroke-width="0.8"/>
+  <polygon points="24,16 28,26 22,30" fill="#ffffff" opacity="0.55"/>
+  <polygon points="44,22 48,32 42,34" fill="#ffffff" opacity="0.55"/>
+  <!-- waterline -->
+  <line x1="4" y1="40" x2="60" y2="40" stroke="#9ec9ec" stroke-width="1" opacity="0.7"/>
+</svg>

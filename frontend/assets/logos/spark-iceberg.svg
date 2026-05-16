@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Apache Spark + Iceberg">
+  <title>Apache Spark + Iceberg</title>
+  <defs>
+    <linearGradient id="spark-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2a1d0e"/>
+      <stop offset="100%" stop-color="#5a3416"/>
+    </linearGradient>
+    <linearGradient id="spark-flame" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#e25a1c"/>
+      <stop offset="100%" stop-color="#ffb14a"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="10" fill="url(#spark-bg)"/>
+  <!-- Spark-style swooshes -->
+  <path d="M30 8 C 22 22, 34 26, 26 38 C 22 44, 30 50, 24 58"
+        fill="none" stroke="url(#spark-flame)" stroke-width="3" stroke-linecap="round"/>
+  <path d="M40 10 C 32 24, 44 28, 36 40 C 32 46, 40 52, 34 58"
+        fill="none" stroke="url(#spark-flame)" stroke-width="3" stroke-linecap="round" opacity="0.85"/>
+  <!-- Iceberg cap, signalling the integration -->
+  <polygon points="44,42 50,30 56,42" fill="#e9f4ff" opacity="0.9"/>
+  <line x1="40" y1="42" x2="58" y2="42" stroke="#cfe6f8" stroke-width="0.8" opacity="0.6"/>
+</svg>
