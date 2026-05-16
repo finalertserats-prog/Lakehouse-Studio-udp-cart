@@ -380,6 +380,25 @@
 <div class="aurora"><div class="blob"></div></div>
 <div class="grid-bg"></div>
 
+<!-- Auth-token modal (hidden by default; takes over for window.prompt) -->
+<div id="auth-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center" style="background: rgba(7,6,26,0.78); backdrop-filter: blur(8px);">
+  <div class="glass-strong relative w-full max-w-md mx-4 p-8" style="border-radius: 22px;">
+    <div class="text-xs uppercase tracking-widest text-cyan-300 mb-2">Authentication</div>
+    <div class="display-3 mb-2" id="auth-modal-title">Studio requires an auth token</div>
+    <div class="text-sm text-slate-400 mb-5" id="auth-modal-sub">Paste the value of <span class="mono text-cyan-300">LHS_AUTH_TOKEN</span> from the server console.</div>
+    <input id="auth-modal-input" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+      class="input mono" placeholder="paste your token…" />
+    <div id="auth-modal-error" class="text-xs text-rose-300 mt-2 h-4"></div>
+    <div class="flex items-center justify-end gap-3 mt-5">
+      <button id="auth-modal-cancel" class="btn-ghost text-sm">Cancel</button>
+      <button id="auth-modal-submit" class="btn-primary text-sm">Continue</button>
+    </div>
+    <div class="text-xs text-slate-500 mt-4">
+      The token is stored in your browser only. <span class="text-slate-600">Note: in v0.3 the token sits in localStorage — see README for the cookie-auth migration plan.</span>
+    </div>
+  </div>
+</div>
+
 <!-- Top status bar (fixed) -->
 <div class="statusbar"><div class="dot" id="status-dot"></div><span class="mono" id="status-text">studio · v0.3</span></div>
 
@@ -1002,6 +1021,45 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   function authToken() { return localStorage.getItem("lhs_token") || ""; }
   function setAuthToken(v) { if (v) localStorage.setItem("lhs_token", v); else localStorage.removeItem("lhs_token"); }
 
+  // ----- auth-token modal -----
+  // Promise-returning replacement for window.prompt — styled to match the
+  // Cosmic theme, password-masked, escape-to-cancel, enter-to-submit.
+  function askAuthToken(opts = {}) {
+    return new Promise((resolve) => {
+      const modal = document.getElementById("auth-modal");
+      const input = document.getElementById("auth-modal-input");
+      const submit = document.getElementById("auth-modal-submit");
+      const cancel = document.getElementById("auth-modal-cancel");
+      const errEl = document.getElementById("auth-modal-error");
+      const title = document.getElementById("auth-modal-title");
+      const sub = document.getElementById("auth-modal-sub");
+
+      title.textContent = opts.title || "Studio requires an auth token";
+      sub.innerHTML = opts.sub
+        || `Paste the value of <span class="mono text-cyan-300">LHS_AUTH_TOKEN</span> from the server console.`;
+      errEl.textContent = opts.error || "";
+      input.value = "";
+      modal.classList.remove("hidden");
+      setTimeout(() => input.focus(), 50);
+
+      function cleanup() {
+        modal.classList.add("hidden");
+        submit.removeEventListener("click", onSubmit);
+        cancel.removeEventListener("click", onCancel);
+        input.removeEventListener("keydown", onKey);
+      }
+      function onSubmit() { cleanup(); resolve(input.value.trim() || null); }
+      function onCancel() { cleanup(); resolve(null); }
+      function onKey(e) {
+        if (e.key === "Enter") { e.preventDefault(); onSubmit(); }
+        else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+      }
+      submit.addEventListener("click", onSubmit);
+      cancel.addEventListener("click", onCancel);
+      input.addEventListener("keydown", onKey);
+    });
+  }
+
   // ----- toast / error UX -----
   function showToast(message, kind = "error") {
     let el = document.getElementById("lhs-toast");
@@ -1041,15 +1099,19 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     }
     if (r.status === 401) {
       if (_tokenRetries >= MAX_TOKEN_RETRIES) {
-        setAuthToken("");  // clear bad token so user isn't stuck
+        setAuthToken("");  // clear bad value so user isn't stuck
         if (!silent) showToast("Authentication failed. Reload the page and try again.");
         throw new Error("auth required (max retries exceeded)");
       }
       _tokenRetries++;
-      setAuthToken("");  // clear any stale/bad token first
-      const t = prompt(`This Studio requires an auth token (attempt ${_tokenRetries}/${MAX_TOKEN_RETRIES}). Paste your LHS_AUTH_TOKEN:`);
-      if (t && t.trim()) {
-        setAuthToken(t.trim());
+      setAuthToken("");  // clear any stale/bad value first
+      const t = await askAuthToken({
+        title: _tokenRetries === 1 ? "Studio requires an auth token" : "That value didn't work — try again",
+        sub: `Attempt ${_tokenRetries} of ${MAX_TOKEN_RETRIES}. Paste the value of <span class="mono text-cyan-300">LHS_AUTH_TOKEN</span> from the server console.`,
+        error: _tokenRetries > 1 ? "Previous attempt returned 401." : "",
+      });
+      if (t) {
+        setAuthToken(t);
         return api(path, opts);
       }
       if (!silent) showToast("Auth cancelled.");
