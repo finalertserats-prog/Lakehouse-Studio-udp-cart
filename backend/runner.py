@@ -341,34 +341,73 @@ class UDPRunner:
 
     # ---------- top-level orchestration ----------
 
-    async def run(self, env_overrides: dict[str, str]) -> None:
+    # Ordered sequence: (step_id, state_to_enter_before_running, callable_factory).
+    # Each callable_factory takes the runner + overrides and returns a coroutine.
+    _PIPELINE: list[tuple[str, str]] = [
+        ("prepare",   "CLONING_REPO"),
+        ("clone",     "CLONING_REPO"),
+        ("env",       "WRITING_ENV"),
+        ("doctor",    "RUNNING_DOCTOR"),
+        ("start",     "STARTING_STACK"),
+        ("bootstrap", "BOOTSTRAPPING"),
+        ("smoke",     "SMOKE_TESTING"),
+        ("finalize",  "READY"),
+    ]
+
+    # Steps the user is allowed to Skip (the install can still complete).
+    SKIPPABLE = frozenset({"smoke", "finalize"})
+
+    async def _execute_step(self, step_id: str, env_overrides: dict[str, str]) -> bool:
+        """Dispatch a single step. Used by both initial run and retry."""
+        if step_id == "prepare":   return await self._step_prepare()
+        if step_id == "clone":     return await self._step_clone()
+        if step_id == "env":       return await self._step_env(env_overrides)
+        if step_id == "doctor":    return await self._step_cmd("doctor", "doctor")
+        if step_id == "start":     return await self._step_cmd("start", "start")
+        if step_id == "bootstrap": return await self._step_cmd("bootstrap", "bootstrap")
+        if step_id == "smoke":     return await self._step_cmd("smoke", "smoke")
+        if step_id == "finalize":  return await self._step_finalize()
+        raise ValueError(f"unknown step: {step_id}")
+
+    def _step_index(self, step_id: str) -> int:
+        for i, (sid, _) in enumerate(self._PIPELINE):
+            if sid == step_id: return i
+        return -1
+
+    async def run(self, env_overrides: dict[str, str], *, start_at: str = "prepare") -> None:
+        """Run the pipeline starting at `start_at` (default = beginning).
+
+        On the first run this drives all steps. On a Retry, the caller passes
+        the failed step id as start_at; on Skip, the caller passes the NEXT
+        step id; rollback runs ./udp clean instead.
+        """
         try:
             self._set_state("INSPECTING")  # caller did the inspection already
             self._set_state("READY_TO_INSTALL")
 
-            self._set_state("CLONING_REPO")
-            if not await self._step_prepare(): return self._fail("prepare failed")
-            if self._cancel: return self._fail("cancelled")
-            if not await self._step_clone(): return self._fail("clone failed")
+            start_idx = self._step_index(start_at)
+            if start_idx < 0:
+                return self._fail(f"unknown start step: {start_at}")
 
-            self._set_state("WRITING_ENV")
-            if not await self._step_env(env_overrides): return self._fail("env write failed")
+            for step_id, state in self._PIPELINE[start_idx:]:
+                if self._cancel:
+                    return self._fail("cancelled")
+                # Don't downgrade state — but READY is the terminal of finalize
+                if state != "READY":
+                    self._set_state(state)
+                ok = await self._execute_step(step_id, env_overrides)
+                if not ok:
+                    # finalize failing means evidence didn't write, stack is still up
+                    if step_id == "finalize":
+                        self._set_state("READY")
+                        self._emit("state", status="READY")
+                        return
+                    return self._fail(f"{step_id} failed")
 
-            self._set_state("RUNNING_DOCTOR")
-            if not await self._step_cmd("doctor", "doctor"): return self._fail("doctor failed")
-
-            self._set_state("STARTING_STACK")
-            if not await self._step_cmd("start", "start"): return self._fail("docker compose up failed")
-
-            self._set_state("BOOTSTRAPPING")
-            if not await self._step_cmd("bootstrap", "bootstrap"): return self._fail("bootstrap failed")
-
-            self._set_state("SMOKE_TESTING")
-            if not await self._step_cmd("smoke", "smoke"): return self._fail("smoke test failed")
-
-            await self._step_finalize()
             self._set_state("READY")
             self._emit("state", status="READY")
+        except asyncio.CancelledError:
+            self._fail("cancelled")
         except Exception as e:
             self._fail(f"unexpected: {e}")
 
@@ -380,6 +419,66 @@ class UDPRunner:
 
 def make_steps(stack: StackManifest) -> list[StepStatus]:
     return _build_steps(stack)
+
+
+def next_step_id(stack: StackManifest, step_id: str) -> str | None:
+    pipeline = [sid for sid, _ in UDPRunner._PIPELINE]
+    try:
+        i = pipeline.index(step_id)
+    except ValueError:
+        return None
+    return pipeline[i + 1] if i + 1 < len(pipeline) else None
+
+
+async def retry_install(stack: StackManifest, install_id: str, host: str, install_dir: Path,
+                        env_overrides: dict[str, str], start_at: str) -> None:
+    """Resume a failed install from `start_at`. Resets the chosen step (and
+    everything after) to pending before re-running so the UI updates cleanly.
+    """
+    rec = store.get(install_id)
+    if not rec:
+        return
+    # Reset everything from start_at onward to pending
+    pipeline = [sid for sid, _ in UDPRunner._PIPELINE]
+    if start_at not in pipeline:
+        return
+    cutover = pipeline.index(start_at)
+    for s in rec.steps:
+        if s.id in pipeline and pipeline.index(s.id) >= cutover:
+            s.status = "pending"
+            s.started_at = None
+            s.finished_at = None
+            s.exit_code = None
+            s.message = None
+    rec.error = None
+    store._persist()
+    runner = UDPRunner(stack, install_id, host, install_dir)
+    await runner.run(env_overrides, start_at=start_at)
+
+
+def mark_step_skipped(install_id: str, step_id: str) -> str | None:
+    """Mark a step as skipped (only allowed for SKIPPABLE steps). Return the next step id, or None."""
+    if step_id not in UDPRunner.SKIPPABLE:
+        return None
+    rec = store.get(install_id)
+    if not rec:
+        return None
+    for s in rec.steps:
+        if s.id == step_id:
+            s.status = "skipped"
+            s.message = "user-skipped"
+            break
+    store._persist()
+    return next_step_id_for(step_id)
+
+
+def next_step_id_for(step_id: str) -> str | None:
+    pipeline = [sid for sid, _ in UDPRunner._PIPELINE]
+    try:
+        i = pipeline.index(step_id)
+    except ValueError:
+        return None
+    return pipeline[i + 1] if i + 1 < len(pipeline) else None
 
 
 async def run_command(install_id: str, install_dir: Path, host: str, stack: StackManifest, cmd_name: str) -> int:

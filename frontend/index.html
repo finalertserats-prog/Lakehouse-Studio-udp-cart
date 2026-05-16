@@ -5,6 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LakeHouse Studio</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      safelist: [
+        // dynamic color palette classes used by inspect, score, ops UI
+        'text-emerald-300','text-cyan-300','text-amber-300','text-rose-300','text-slate-300',
+        'bg-emerald-500','bg-cyan-500','bg-amber-500','bg-rose-500',
+        'bg-emerald-700/40','bg-cyan-700/30','bg-amber-700/40','bg-rose-700/40',
+        'border-emerald-500','border-cyan-500','border-amber-500','border-rose-500',
+        'text-emerald-200','text-cyan-200','text-amber-200','text-rose-200',
+        'text-emerald-400','text-cyan-400','text-amber-400','text-rose-400',
+      ],
+    };
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
@@ -83,6 +96,8 @@
     <p class="text-slate-400 mb-6">How big does the server need to be? We sized each tier from the components in your stack plus host overhead, then matched real VPS plans.</p>
     <div id="sizing-tiers" class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6"></div>
 
+    <div id="stack-score" class="rounded-2xl border border-slate-800 bg-slate-900 p-5 mb-6"></div>
+
     <div class="rounded-2xl border border-slate-800 bg-slate-900 p-5 mb-6">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-lg font-semibold">Custom size</h3>
@@ -158,11 +173,14 @@
       </div>
       <div id="install-state" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-800">…</div>
     </div>
+    <div id="install-diagnose" class="hidden rounded-xl border border-rose-800/40 bg-rose-950/30 p-5 mb-4"></div>
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div class="lg:col-span-1">
         <div class="rounded-xl border border-slate-800 bg-slate-900 p-2">
           <div id="step-list" class="space-y-1"></div>
         </div>
+        <div id="failure-controls" class="hidden rounded-xl border border-slate-800 bg-slate-900 p-3 mt-3 space-y-2"></div>
       </div>
       <div class="lg:col-span-2">
         <div class="rounded-xl border border-slate-800 bg-black/70 h-[460px] flex flex-col">
@@ -209,6 +227,12 @@
     </div>
 
     <div id="success-evidence" class="text-xs text-slate-500 mono mb-4"></div>
+
+    <div class="flex items-center justify-between mb-3 mt-8">
+      <h3 class="text-lg font-semibold">Smoke tests</h3>
+      <button id="btn-rerun-smoke" class="text-xs text-cyan-400 hover:text-cyan-300">↻ re-run</button>
+    </div>
+    <div id="smoke-results" class="rounded-xl border border-slate-800 bg-slate-900 p-4 mb-6"></div>
 
     <h3 class="text-lg font-semibold mb-3 mt-8">Try a demo query</h3>
     <div class="rounded-xl border border-slate-800 bg-slate-900 p-4 mb-2">
@@ -337,6 +361,40 @@
     await refreshProviders();
   }
 
+  function renderStackScore() {
+    const t = state.sizing.tiers[state.selectedTier];
+    const s = t.score;
+    if (!s) return;
+    const el = document.getElementById("stack-score");
+    const palette = s.overall >= 80 ? 'emerald' : (s.overall >= 70 ? 'cyan' : (s.overall >= 60 ? 'amber' : 'rose'));
+    const bars = s.breakdown.map(d => {
+      const c = d.score >= 80 ? 'emerald' : (d.score >= 60 ? 'amber' : 'rose');
+      return `
+        <div class="space-y-1">
+          <div class="flex items-baseline justify-between text-xs">
+            <span class="text-slate-300">${esc(d.label)}</span>
+            <span class="mono text-${c}-300">${d.score} / 100</span>
+          </div>
+          <div class="h-1.5 rounded bg-slate-800 overflow-hidden">
+            <div class="h-full bg-${c}-500" style="width: ${d.score}%"></div>
+          </div>
+          <div class="text-xs text-slate-500">${esc(d.note)}</div>
+        </div>
+      `;
+    }).join("");
+    el.innerHTML = `
+      <div class="flex items-baseline justify-between mb-3">
+        <div>
+          <div class="text-xs uppercase tracking-widest text-slate-400 mb-1">Stack score · tier '${esc(state.selectedTier)}'</div>
+          <div class="text-3xl font-bold text-${palette}-300">${s.overall} <span class="text-base text-slate-400 font-normal">/ 100</span></div>
+          <div class="text-sm text-${palette}-300 font-medium">${esc(s.grade)}</div>
+        </div>
+        <div class="max-w-md text-sm text-slate-400 text-right">${esc(s.headline)}</div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">${bars}</div>
+    `;
+  }
+
   function renderTiers() {
     const wrap = document.getElementById("sizing-tiers");
     wrap.innerHTML = "";
@@ -369,11 +427,13 @@
       div.addEventListener("click", async () => {
         state.selectedTier = name;
         renderTiers();
+        renderStackScore();
         setCustomSize(t.totals);
         await refreshProviders();
       });
       wrap.appendChild(div);
     });
+    renderStackScore();
   }
 
   function setCustomSize(totals) {
@@ -542,6 +602,91 @@
         el.appendChild(div);
       }
     }
+    renderFailureControls(rec);
+  }
+
+  // Steps that can be Skipped (server-side check; this is a UI guard).
+  const SKIPPABLE_STEPS = new Set(["smoke", "finalize"]);
+
+  function renderFailureControls(rec) {
+    const wrap = document.getElementById("failure-controls");
+    const diag = document.getElementById("install-diagnose");
+    if (rec.state !== "FAILED") {
+      wrap.classList.add("hidden");
+      diag.classList.add("hidden");
+      return;
+    }
+    const failed = rec.steps.find(s => s.status === "failed");
+    if (!failed) { wrap.classList.add("hidden"); return; }
+    wrap.classList.remove("hidden");
+    wrap.innerHTML = `
+      <div class="text-xs text-slate-400 mb-1">Failed: <span class="mono text-rose-300">${esc(failed.title)}</span></div>
+      <button id="btn-retry" class="w-full px-3 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-sm font-medium">↻ Retry this step</button>
+      ${SKIPPABLE_STEPS.has(failed.id) ? `<button id="btn-skip" class="w-full px-3 py-1.5 rounded bg-amber-700 hover:bg-amber-600 text-sm">↷ Skip and continue</button>` : `<div class="text-xs text-slate-500 px-1">(this step is required — cannot be skipped)</div>`}
+      <button id="btn-rollback" class="w-full px-3 py-1.5 rounded bg-rose-900/60 hover:bg-rose-800 text-sm">⊘ Rollback (clean)</button>
+    `;
+    document.getElementById("btn-retry").addEventListener("click", () => retryStep(failed.id));
+    const sk = document.getElementById("btn-skip");
+    if (sk) sk.addEventListener("click", () => skipStep(failed.id));
+    document.getElementById("btn-rollback").addEventListener("click", () => rollbackInstall());
+
+    loadDiagnosis();
+  }
+
+  async function loadDiagnosis() {
+    const diag = document.getElementById("install-diagnose");
+    try {
+      const r = await api(`/api/installs/${state.installId}/diagnose`);
+      const e = r.explanation;
+      if (!e) { diag.classList.add("hidden"); return; }
+      diag.classList.remove("hidden");
+      diag.innerHTML = `
+        <div class="flex items-start gap-3">
+          <div class="text-rose-300 text-xl">⚠</div>
+          <div class="flex-1">
+            <div class="text-rose-200 font-semibold mb-1">${esc(e.title)} <span class="text-xs text-rose-400">[${esc(e.category)}]</span></div>
+            <div class="text-sm text-rose-100/80 mb-2">${esc(e.why)}</div>
+            <div class="text-sm text-slate-200 mb-1"><span class="text-rose-300 font-medium">Fix:</span></div>
+            <pre class="text-xs mono text-slate-300 bg-black/30 p-3 rounded whitespace-pre-wrap">${esc(e.fix)}</pre>
+            ${e.retryable ? '<div class="text-xs text-emerald-300 mt-2">✓ Safe to retry after applying the fix.</div>' : '<div class="text-xs text-amber-300 mt-2">⚠ Not safely retryable — consider Rollback.</div>'}
+          </div>
+        </div>`;
+    } catch (err) {
+      diag.classList.add("hidden");
+    }
+  }
+
+  async function retryStep(stepId) {
+    try {
+      openLogStream(state.installId);
+      await api(`/api/installs/${state.installId}/steps/retry`, {
+        method: "POST",
+        body: JSON.stringify({ step_id: stepId, env_overrides: {} }),
+      });
+      setTimeout(() => refreshInstall(state.installId), 1000);
+    } catch (e) { alert(e.message); }
+  }
+
+  async function skipStep(stepId) {
+    if (!confirm(`Skip the "${stepId}" step and continue? The stack will be marked READY but this check did not pass.`)) return;
+    try {
+      openLogStream(state.installId);
+      await api(`/api/installs/${state.installId}/steps/skip`, {
+        method: "POST",
+        body: JSON.stringify({ step_id: stepId, env_overrides: {} }),
+      });
+      setTimeout(() => refreshInstall(state.installId), 1000);
+    } catch (e) { alert(e.message); }
+  }
+
+  async function rollbackInstall() {
+    if (!confirm("This will run ./udp clean and REMOVE all UDP Docker volumes (data loss). Continue?")) return;
+    try {
+      openLogStream(state.installId);
+      const r = await api(`/api/installs/${state.installId}/steps/rollback`, { method: "POST" });
+      alert(`Rollback finished with exit code ${r.exit_code}`);
+      refreshInstall(state.installId);
+    } catch (e) { alert(e.message); }
   }
 
   function setStateBadge(s) {
@@ -675,7 +820,53 @@
       ev.textContent = "";
     }
     loadDemoQueries();
+    loadStructuredSmoke();
   }
+
+  async function loadStructuredSmoke() {
+    const el = document.getElementById("smoke-results");
+    el.innerHTML = `<div class="text-xs text-slate-500">Running…</div>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/smoke-structured`, { method: "POST" });
+      renderStructuredSmoke(r);
+    } catch (e) {
+      el.innerHTML = `<div class="text-rose-400 text-xs">${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderStructuredSmoke(r) {
+    const el = document.getElementById("smoke-results");
+    if (r.error) {
+      el.innerHTML = `<div class="text-rose-400 text-xs">${esc(r.error)}</div>`;
+      return;
+    }
+    const palette = { passed: 'emerald', warning: 'amber', failed: 'rose' };
+    const c = palette[r.overall] || 'slate';
+    const header = `
+      <div class="flex items-center justify-between mb-3 pb-3 border-b border-slate-800">
+        <div>
+          <div class="text-xs uppercase tracking-widest text-${c}-300 mb-1">Overall · ${esc(r.overall)}</div>
+          <div class="text-sm text-slate-300">${r.passed} passed · ${r.warning} warnings · ${r.failed} failed · ${r.total} total</div>
+        </div>
+      </div>`;
+    const items = (r.checks || []).map(ch => {
+      const cp = palette[ch.status] || 'slate';
+      const icon = ch.status === 'passed' ? '✓' : (ch.status === 'warning' ? '⚠' : '✗');
+      return `
+        <div class="flex items-start gap-3 px-3 py-2 rounded hover:bg-slate-800/40">
+          <div class="text-${cp}-400 text-base mt-0.5">${icon}</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm mono text-slate-200">${esc(ch.name)}</div>
+            <div class="text-xs text-slate-400">${esc(ch.message)}</div>
+            ${ch.evidence ? `<div class="text-xs text-slate-600 mono mt-1 break-words">${esc(ch.evidence)}</div>` : ''}
+          </div>
+          <div class="text-xs text-slate-500">${ch.duration_ms}ms</div>
+        </div>`;
+    }).join("");
+    el.innerHTML = header + `<div class="space-y-1">${items}</div>`;
+  }
+
+  document.getElementById("btn-rerun-smoke").addEventListener("click", () => loadStructuredSmoke());
 
   async function loadDemoQueries() {
     const btnWrap = document.getElementById("demo-query-buttons");

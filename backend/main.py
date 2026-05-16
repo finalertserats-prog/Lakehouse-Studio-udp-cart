@@ -16,12 +16,16 @@ from .events import bus
 from .inspector import inspect
 from .models import InstallRequest, InspectionReport
 from .demo_query import list_queries, run_demo_query
+from .error_explainer import explain as explain_error
 from .paths import InstallDirError, validate_install_dir
 from .providers import match_plans, cheapest_overall
-from .runner import UDPRunner, make_steps, run_command
+from .runner import UDPRunner, make_steps, mark_step_skipped, retry_install, run_command
+from .scorer import score_stack
 from .sizer import size_stack
+from .sql_editor import run_user_sql
 from .stack_manifest import list_manifests, load_manifest
 from .state import store
+from .structured_smoke import run_structured_smoke
 
 app = FastAPI(title="LakeHouse Studio", version="0.1.0")
 
@@ -83,7 +87,7 @@ def get_stacks():
 
 @app.get("/api/stacks/{stack_id}/sizing", dependencies=[AuthDep])
 def get_stack_sizing(stack_id: str):
-    """Per-tier resource totals + matched VPS plans + cheapest overall."""
+    """Per-tier resource totals + matched VPS plans + cheapest overall + score."""
     try:
         m = load_manifest(stack_id)
     except KeyError:
@@ -97,8 +101,18 @@ def get_stack_sizing(stack_id: str):
             **tier,
             "matched_providers": matches,
             "cheapest_overall": cheapest,
+            "score": score_stack(m, tier=tier_name),
         }
     return out
+
+
+@app.get("/api/stacks/{stack_id}/score", dependencies=[AuthDep])
+def get_stack_score(stack_id: str, tier: str = "recommended"):
+    try:
+        m = load_manifest(stack_id)
+    except KeyError:
+        raise HTTPException(404, f"Stack {stack_id} not found")
+    return score_stack(m, tier=tier)
 
 
 @app.get("/api/stacks/{stack_id}", dependencies=[AuthDep])
@@ -181,6 +195,112 @@ async def cancel_install(install_id: str):
         raise HTTPException(404, "no running install task")
     task.cancel()
     return {"cancelled": True}
+
+
+class StepActionRequest(BaseModel):
+    step_id: str
+    env_overrides: dict[str, str] = {}
+
+
+@app.post("/api/installs/{install_id}/steps/retry", dependencies=[AuthDep])
+async def post_step_retry(install_id: str, body: StepActionRequest):
+    """Resume a failed install from the given step. Resets that step + everything after to pending."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state not in ("FAILED",):
+        raise HTTPException(409, f"retry only valid from FAILED; current state is {rec.state}")
+    if install_id in _INSTALL_TASKS and not _INSTALL_TASKS[install_id].done():
+        raise HTTPException(409, "install task is still running")
+    try:
+        m = load_manifest(rec.stack_id)
+    except KeyError:
+        raise HTTPException(404, "stack not found")
+
+    install_dir = Path(rec.install_dir)
+
+    async def _wrap() -> None:
+        try:
+            await retry_install(m, install_id, rec.host, install_dir, body.env_overrides, body.step_id)
+        finally:
+            _INSTALL_TASKS.pop(install_id, None)
+
+    task = asyncio.create_task(_wrap(), name=f"retry:{install_id}:{body.step_id}")
+    _INSTALL_TASKS[install_id] = task
+    return {"resumed_at": body.step_id}
+
+
+@app.post("/api/installs/{install_id}/steps/skip", dependencies=[AuthDep])
+async def post_step_skip(install_id: str, body: StepActionRequest):
+    """Skip a non-critical step and continue from the next one."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state not in ("FAILED",):
+        raise HTTPException(409, f"skip only valid from FAILED; current state is {rec.state}")
+    if install_id in _INSTALL_TASKS and not _INSTALL_TASKS[install_id].done():
+        raise HTTPException(409, "install task is still running")
+    next_id = mark_step_skipped(install_id, body.step_id)
+    if next_id is None:
+        raise HTTPException(400, f"step '{body.step_id}' is not skippable or unknown")
+
+    try:
+        m = load_manifest(rec.stack_id)
+    except KeyError:
+        raise HTTPException(404, "stack not found")
+    install_dir = Path(rec.install_dir)
+
+    async def _wrap() -> None:
+        try:
+            await retry_install(m, install_id, rec.host, install_dir, body.env_overrides, next_id)
+        finally:
+            _INSTALL_TASKS.pop(install_id, None)
+
+    task = asyncio.create_task(_wrap(), name=f"skip:{install_id}:{body.step_id}")
+    _INSTALL_TASKS[install_id] = task
+    return {"skipped": body.step_id, "resumed_at": next_id}
+
+
+@app.post("/api/installs/{install_id}/steps/rollback", dependencies=[AuthDep])
+async def post_step_rollback(install_id: str):
+    """Run ./udp clean to tear down the stack and remove volumes."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    try:
+        m = load_manifest(rec.stack_id)
+    except KeyError:
+        raise HTTPException(404, "stack not found")
+    install_dir = Path(rec.install_dir)
+    rc = await run_command(install_id, install_dir, rec.host, m, "clean")
+    if rc == 0:
+        store.update_state(install_id, "CLEANED")
+    return {"exit_code": rc}
+
+
+@app.post("/api/installs/{install_id}/smoke-structured", dependencies=[AuthDep])
+async def post_structured_smoke(install_id: str):
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    return await run_structured_smoke()
+
+
+@app.get("/api/installs/{install_id}/diagnose", dependencies=[AuthDep])
+def diagnose_install(install_id: str):
+    """Inspect a failed install and produce an actionable explanation."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state not in ("FAILED",):
+        return {"explanation": None, "note": f"state is {rec.state}; diagnose is only useful for FAILED"}
+    # Find failed step + collect log tail from the event bus
+    failed_step = next((s.id for s in rec.steps if s.status == "failed"), None)
+    exit_code = next((s.exit_code for s in rec.steps if s.status == "failed"), None)
+    history = bus.history(install_id)
+    log_tail = [e.line for e in history if e.kind == "log" and e.line]
+    explanation = explain_error(failed_step, log_tail, exit_code)
+    return {"explanation": explanation}
 
 
 @app.get("/api/demo-queries", dependencies=[AuthDep])
