@@ -1,33 +1,44 @@
-# Upgrade candidates for udp-local-v0.2
-# =====================================
-# Sibling to the lock file. Hand-curated for v0.4 — every candidate
-# tag MUST have been confirmed via `docker manifest inspect` before
-# landing here. Loader rejects unknown tags at validate time.
+# LAKEHOUSE STUDIO UPGRADE CANDIDATES
+# ===================================
+# Sibling to udp-local-v0.2.lock.yaml. Hand-curated for v0.4 — every
+# candidate tag MUST have been confirmed via `docker manifest inspect`
+# before landing here. The Upgrade Planner reads this file to populate
+# the "what could I bump?" surface — it does NOT apply anything.
 #
-# A successful simulate_upgrade returns a verdict; it never mutates
-# the lock file in place. Promotion goes through a PR with a fresh
-# evidence block in the lock file.
+# A successful simulate_upgrade returns a verdict only; promotion to
+# the lock file goes through a PR with a fresh evidence block.
 
 schema_version: "1.0"
 stack_id: udp-local-v0.2
 
 candidates:
   - component_id: starrocks-fe
-    tag: "3.3.13"
+    tag: "3.3.14"
     source: hand_curated
     discovered_at: "2026-05-16"
-    notes: |
-      Newer 3.3.x bump. Verified on Docker Hub. Keeps PR #55416 fix
-      (Iceberg REST FileIO propagation). Pair with starrocks-be:3.3.13
-      to satisfy the FE/BE same-version constraint.
+    notes: "Newer 3.3.x bump — verified present on starrocks/fe-ubuntu."
 
   - component_id: starrocks-be
-    tag: "3.3.13"
+    tag: "3.3.14"
+    source: hand_curated
+    discovered_at: "2026-05-16"
+    notes: "Match FE bump — FE/BE constraint requires identical minor+patch."
+
+  - component_id: iceberg-rest
+    tag: "latest"
     source: hand_curated
     discovered_at: "2026-05-16"
     notes: |
-      Match FE bump. Verified on Docker Hub.
+      Upstream tabulario/iceberg-rest has shipped no tagged release
+      newer than the locked 1.6.0 — `latest` is the only newer-pointing
+      reference that resolves on Docker Hub. Exploratory candidate;
+      any execute step must resolve `latest` to its underlying digest
+      before pinning, because the lock policy forbids floating tags.
 
-# Cached feasibility verdicts. Append-only — every entry has an
-# evidence link (install_id or PR ref).
+# Cached pairwise feasibility verdicts. Format:
+#   - components: {id: tag, id: tag}
+#     verdict: pass | fail | unknown
+#     verified_at: ISO timestamp
+#     evidence: short note (install_id or PR ref)
+# Empty until simulate_upgrade runs with persisted evidence.
 pairwise_tested: []
