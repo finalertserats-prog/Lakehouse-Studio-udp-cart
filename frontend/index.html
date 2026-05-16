@@ -221,12 +221,32 @@
   document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => navigate(b.dataset.nav)));
   document.getElementById("btn-start").addEventListener("click", () => { loadStacks().then(() => navigate("stacks")); });
 
+  // ----- escape helper -----
+  function esc(s) {
+    if (s == null) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  // ----- auth -----
+  function authToken() { return localStorage.getItem("lhs_token") || ""; }
+  function setAuthToken(v) { if (v) localStorage.setItem("lhs_token", v); else localStorage.removeItem("lhs_token"); }
+
   // ----- api helpers -----
   async function api(path, opts = {}) {
-    const r = await fetch(path, {
-      headers: { "Content-Type": "application/json" },
-      ...opts,
-    });
+    const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+    const tok = authToken();
+    if (tok) headers["Authorization"] = "Bearer " + tok;
+    const r = await fetch(path, { ...opts, headers });
+    if (r.status === 401) {
+      const t = prompt("This Studio requires an auth token. Paste your LHS_AUTH_TOKEN:");
+      if (t) { setAuthToken(t.trim()); return api(path, opts); }
+      throw new Error("auth required");
+    }
     if (!r.ok) {
       const t = await r.text();
       throw new Error(`${r.status} ${r.statusText}: ${t}`);
@@ -242,15 +262,15 @@
     state.stacks.forEach(s => {
       const div = document.createElement("div");
       div.className = "rounded-xl border border-slate-800 bg-slate-900 p-5 hover:border-cyan-700 cursor-pointer transition";
-      const comps = s.components.map(c => `<span class="px-2 py-0.5 rounded bg-slate-800 text-xs mono">${c.name} ${c.version || ''}</span>`).join("");
+      const comps = s.components.map(c => `<span class="px-2 py-0.5 rounded bg-slate-800 text-xs mono">${esc(c.name)} ${esc(c.version || '')}</span>`).join("");
       div.innerHTML = `
         <div class="flex items-center justify-between mb-2">
-          <div class="font-semibold text-lg">${s.name}</div>
-          <span class="px-2 py-0.5 rounded text-xs font-medium ${s.maturity === 'certified' ? 'bg-emerald-700/40 text-emerald-300' : 'bg-amber-700/40 text-amber-300'}">${s.maturity || 'pilot'} · v${s.version || '?'}</span>
+          <div class="font-semibold text-lg">${esc(s.name)}</div>
+          <span class="px-2 py-0.5 rounded text-xs font-medium ${s.maturity === 'certified' ? 'bg-emerald-700/40 text-emerald-300' : 'bg-amber-700/40 text-amber-300'}">${esc(s.maturity || 'pilot')} · v${esc(s.version || '?')}</span>
         </div>
-        <div class="text-sm text-slate-400 mb-3">${s.description || ''}</div>
+        <div class="text-sm text-slate-400 mb-3">${esc(s.description || '')}</div>
         <div class="flex flex-wrap gap-1 mb-4">${comps}</div>
-        <div class="text-xs text-slate-500">Min RAM ${s.requirements.minimum_ram_gb || '?'} GB · Ports ${(s.ports.required || []).join(', ')}</div>
+        <div class="text-xs text-slate-500">Min RAM ${esc(s.requirements.minimum_ram_gb || '?')} GB · Ports ${(s.ports.required || []).join(', ')}</div>
       `;
       div.addEventListener("click", () => {
         state.selected = s;
@@ -313,9 +333,9 @@
       el.innerHTML = `
         <div class="mt-0.5">${statusBadge(c.status)}</div>
         <div class="flex-1 min-w-0">
-          <div class="font-medium mono text-sm">${c.name}</div>
-          <div class="text-xs text-slate-400 break-words">${c.message}</div>
-          ${c.detail ? `<div class="text-xs text-slate-600 mono mt-1 break-words">${c.detail}</div>` : ''}
+          <div class="font-medium mono text-sm">${esc(c.name)}</div>
+          <div class="text-xs text-slate-400 break-words">${esc(c.message)}</div>
+          ${c.detail ? `<div class="text-xs text-slate-600 mono mt-1 break-words">${esc(c.detail)}</div>` : ''}
         </div>
       `;
       grid.appendChild(el);
@@ -345,6 +365,15 @@
     document.getElementById("install-meta").textContent = `${rec.install_id} · ${rec.stack_id} · ${rec.host}`;
     setStateBadge(rec.state);
     renderSteps(rec.steps);
+    if (rec.error) {
+      const el = document.getElementById("log-stream");
+      if (el && el.children.length === 0) {
+        const div = document.createElement("div");
+        div.className = "log-line text-rose-400";
+        div.textContent = "ERROR: " + rec.error;
+        el.appendChild(div);
+      }
+    }
   }
 
   function setStateBadge(s) {
@@ -369,7 +398,7 @@
       else if (s.status === "skipped") { icon = "↷"; color = "text-slate-500"; }
       else { icon = "○"; color = "text-slate-500"; }
       div.className = "flex items-center gap-3 px-3 py-2 rounded " + (s.status === "running" ? "step-running" : "");
-      div.innerHTML = `<div class="w-6 text-center ${color} font-mono">${icon}</div><div class="text-sm flex-1">${s.title}</div>`;
+      div.innerHTML = `<div class="w-6 text-center ${color} font-mono">${icon}</div><div class="text-sm flex-1">${esc(s.title)}</div>`;
       list.appendChild(div);
     });
   }
@@ -389,7 +418,15 @@
     const logEl = document.getElementById("log-stream");
     logEl.innerHTML = "";
     state.ws.onmessage = (msg) => {
-      const evt = JSON.parse(msg.data);
+      let evt;
+      try { evt = JSON.parse(msg.data); }
+      catch (e) {
+        const div = document.createElement("div");
+        div.className = "log-line text-rose-400";
+        div.textContent = "[malformed event from server]";
+        logEl.appendChild(div);
+        return;
+      }
       handleEvent(evt, logEl);
     };
     state.ws.onclose = () => {
@@ -443,9 +480,9 @@
     urls.innerHTML = "";
     Object.values(rec.outputs?.urls || {}).forEach(u => {
       const a = document.createElement("a");
-      a.href = u.url; a.target = "_blank";
+      a.href = u.url; a.target = "_blank"; a.rel = "noopener noreferrer";
       a.className = "flex items-center justify-between px-4 py-3 rounded-xl border border-slate-800 bg-slate-900 hover:border-cyan-700";
-      a.innerHTML = `<div><div class="font-medium">${u.label}</div><div class="text-xs text-slate-500 mono break-all">${u.url}</div></div><div class="text-cyan-400">→</div>`;
+      a.innerHTML = `<div><div class="font-medium">${esc(u.label)}</div><div class="text-xs text-slate-500 mono break-all">${esc(u.url)}</div></div><div class="text-cyan-400">→</div>`;
       urls.appendChild(a);
     });
     const conns = document.getElementById("success-conns");
@@ -453,7 +490,14 @@
     Object.entries(rec.outputs?.connections || {}).forEach(([k, v]) => {
       const div = document.createElement("div");
       div.className = "px-4 py-2 rounded-lg border border-slate-800 bg-slate-900 mono text-sm flex justify-between items-center";
-      div.innerHTML = `<div><span class="text-slate-500 mr-2">${k}</span>${v}</div><button class="text-xs text-cyan-400" onclick="navigator.clipboard.writeText(${JSON.stringify(v)})">copy</button>`;
+      const txt = document.createElement("div");
+      const lbl = document.createElement("span"); lbl.className = "text-slate-500 mr-2"; lbl.textContent = k;
+      const val = document.createElement("span"); val.textContent = v;
+      txt.appendChild(lbl); txt.appendChild(val);
+      const btn = document.createElement("button");
+      btn.className = "text-xs text-cyan-400"; btn.textContent = "copy";
+      btn.addEventListener("click", () => navigator.clipboard.writeText(v));
+      div.appendChild(txt); div.appendChild(btn);
       conns.appendChild(div);
     });
     const ev = document.getElementById("success-evidence");
@@ -498,10 +542,10 @@
       const ts = new Date(rec.created_at * 1000).toLocaleString();
       div.innerHTML = `
         <div class="flex items-center justify-between mb-1">
-          <div class="font-medium mono text-sm">${rec.install_id}</div>
-          <div class="text-xs px-2 py-0.5 rounded ${rec.state==='READY' ? 'bg-emerald-700/40 text-emerald-300' : rec.state==='FAILED' ? 'bg-rose-700/40 text-rose-300' : 'bg-slate-700 text-slate-300'}">${rec.state}</div>
+          <div class="font-medium mono text-sm">${esc(rec.install_id)}</div>
+          <div class="text-xs px-2 py-0.5 rounded ${rec.state==='READY' ? 'bg-emerald-700/40 text-emerald-300' : rec.state==='FAILED' ? 'bg-rose-700/40 text-rose-300' : 'bg-slate-700 text-slate-300'}">${esc(rec.state)}</div>
         </div>
-        <div class="text-xs text-slate-400">${rec.stack_id} · host ${rec.host} · ${ts}</div>
+        <div class="text-xs text-slate-400">${esc(rec.stack_id)} · host ${esc(rec.host)} · ${esc(ts)}</div>
       `;
       div.addEventListener("click", () => {
         state.installId = rec.install_id;

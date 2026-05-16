@@ -47,16 +47,21 @@ def _check_docker_daemon() -> InspectionCheck:
         return InspectionCheck(
             name="docker_daemon", status="failed", message="docker CLI not installed"
         )
-    code, out = _run(["docker", "info", "--format", "{{.ServerVersion}}"], timeout=15)
+    # `docker version --format` returns daemon version much faster than `info`.
+    code, out = _run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=8)
     if code == 0 and out:
         return InspectionCheck(
-            name="docker_daemon", status="passed", message=f"daemon up (server v{out.splitlines()[0]})"
+            name="docker_daemon", status="passed", message=f"daemon up (v{out.splitlines()[0]})"
         )
+    # Fallback to ping
+    code2, out2 = _run(["docker", "info", "--format", "{{.ServerVersion}}"], timeout=10)
+    if code2 == 0 and out2:
+        return InspectionCheck(
+            name="docker_daemon", status="passed", message=f"daemon up (v{out2.splitlines()[0]})"
+        )
+    msg = "Docker daemon not reachable. Start Docker Desktop / dockerd."
     return InspectionCheck(
-        name="docker_daemon",
-        status="failed",
-        message="Docker daemon not reachable",
-        detail=out[:300] or "Start Docker Desktop and retry.",
+        name="docker_daemon", status="failed", message=msg, detail=(out or out2)[:300]
     )
 
 

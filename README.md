@@ -24,10 +24,10 @@ The architecture mirrors the founding spec (Presentation / Orchestration / Intel
 
 Verified on Windows 11 with Docker Desktop + Git Bash.
 
-## Quick start
+## Quick start — local
 
 ```powershell
-# Windows
+# Windows (PowerShell)
 powershell -ExecutionPolicy Bypass -File .\run.ps1
 ```
 
@@ -36,13 +36,45 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 bash run.sh
 ```
 
-The script:
+The script: creates `.venv/`, installs deps, boots uvicorn on `127.0.0.1:7878`. Open <http://127.0.0.1:7878> and click **Start Pilot Install**.
 
-1. Creates `.venv/` if missing.
-2. `pip install -r requirements.txt`.
-3. Boots `uvicorn backend.main:app` on `127.0.0.1:7878`.
+## Quick start — VPS (recommended for real pilots)
 
-Open <http://127.0.0.1:7878> and click **Start Pilot Install**.
+UDP needs ~50 GB disk + Docker; install Studio + UDP on the VPS together rather than driving from a laptop.
+
+```bash
+# 1. On the VPS (Ubuntu 22.04+ recommended):
+sudo apt update && sudo apt install -y python3.11 python3.11-venv git docker.io docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER && newgrp docker   # logout/login if needed
+
+# 2. Clone Studio
+git clone https://github.com/finalertserats-prog/Lakehouse-Studio-udp-cart.git
+cd Lakehouse-Studio-udp-cart
+
+# 3. Generate an auth token + bind to all interfaces
+export LHS_AUTH_TOKEN=$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')
+export LHS_BIND=0.0.0.0
+export LHS_HOST=<your-vps-public-hostname-or-ip>
+echo "Studio auth token: $LHS_AUTH_TOKEN"   # save this; paste it in browser
+
+# 4. Run
+bash run.sh
+```
+
+Then on your laptop browser: `http://<VPS_IP>:7878` — Studio prompts for the token on first request. In the install flow, set **Host** to your VPS's public hostname/IP so the success-screen URLs (MinIO, Spark, StarRocks) work from your laptop.
+
+**Security note:** UDP exposes services on ports 9000/9001/8181/8888/8030/9030. By default these are bound to all interfaces on the VPS. Restrict via firewall (`ufw`) or VPN before exposing publicly.
+
+## Configuration
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `LHS_HOST` | `127.0.0.1` | Hostname shown to user in URLs |
+| `LHS_BIND` | `$LHS_HOST` | Interface uvicorn binds to. Set `0.0.0.0` on a VPS. |
+| `LHS_PORT` | `7878` | Studio HTTP port |
+| `LHS_AUTH_TOKEN` | _(unset)_ | If set, all API requests require `Authorization: Bearer <token>`. **Required when binding to non-loopback.** |
+| `LHS_WORK_DIR` | `./work` | Where UDP gets cloned by default |
 
 ## Layout
 
