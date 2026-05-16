@@ -58,9 +58,63 @@ from . import backup as backup_mod
 from . import monitoring as monitoring_mod
 from . import tls_wizard as tls_mod
 from . import caddy_tls as caddy_mod
+from . import jdbc_extras as jdbc_mod
 from . import upgrade_executor as upgrade_exec_mod
+from . import rbac_auth as rbac_mod
+from . import data_quality as dq_mod
+from . import audit_log
 
 app = FastAPI(title="LakeHouse Studio", version="0.1.0")
+
+
+# ---------- API versioning (PDD Section 5.1.3) ----------
+#
+# Every existing route is reachable under BOTH `/api/...` and `/api/v1/...`.
+# The un-versioned path is preserved for backward compatibility with the
+# current frontend; the versioned path is the forward-compatible surface
+# for future API consumers. When v2 lands, /api/v1/ keeps working as-is
+# and the un-versioned /api/ continues to alias to v1 until a deprecation
+# period elapses.
+#
+# Implementation: a pure ASGI middleware that rewrites the scope path
+# from `/api/v1/...` to `/api/...` BEFORE Starlette's router matches.
+# Zero duplicate route registrations — `len(app.routes)` is unchanged
+# and OpenAPI still reflects the canonical un-versioned set.
+#
+# Both HTTP and WebSocket scopes carry "path" — the rewrite is identical
+# for both, so a single ASGI middleware handles them in one place.
+# (`@app.middleware("http")` would skip WebSocket handshakes entirely.)
+
+_V1_PREFIX = "/api/v1/"
+_API_PREFIX = "/api/"
+
+
+class V1AliasMiddleware:
+    """Rewrite `/api/v1/<rest>` -> `/api/<rest>` for HTTP and WebSocket scopes.
+
+    Pure ASGI middleware so the rewrite applies to BOTH http and websocket
+    scope types. Lifespan and any other scope types pass through untouched.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path.startswith(_V1_PREFIX):
+                rewritten = _API_PREFIX + path[len(_V1_PREFIX):]
+                # Build a shallow copy so we never mutate an upstream scope
+                # dict that something else might hold a reference to.
+                scope = dict(scope)
+                scope["path"] = rewritten
+                if "raw_path" in scope and scope["raw_path"] is not None:
+                    scope["raw_path"] = rewritten.encode("latin-1")
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(V1AliasMiddleware)
+
 
 FRONTEND_DIR = ROOT / "frontend"
 
@@ -132,8 +186,27 @@ def _make_install_task_wrapper(install_id: str, coro_factory):
 AUTH_TOKEN: Optional[str] = os.environ.get("LHS_AUTH_TOKEN") or None
 
 
-def _require_auth(authorization: Optional[str] = Header(default=None),
-                  x_studio_token: Optional[str] = Header(default=None)):
+async def _require_auth(request: Request,
+                        authorization: Optional[str] = Header(default=None),
+                        x_studio_token: Optional[str] = Header(default=None)):
+    # OPT-IN RBAC path. When LHS_RBAC_ENABLED is truthy, the per-user token
+    # store in backend/rbac_auth.py takes over. Token -> User lookup, then a
+    # per-route permission check against the v1 ROUTE_PERMISSIONS map. The
+    # legacy single-token path below stays the default — flipping the env
+    # var is the only way to enable RBAC, and the route surface is unchanged.
+    if rbac_mod.is_rbac_enabled():
+        user = await rbac_mod.authenticate(authorization, x_studio_token)
+        if user is None:
+            raise HTTPException(401, "auth required")
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", request.url.path)
+        allowed = await rbac_mod.require_permission(user, route_path, request.method)
+        if not allowed:
+            raise HTTPException(403, "forbidden")
+        # Stash the user on request.state for downstream handlers (audit log
+        # wiring is a follow-on; nothing reads this yet).
+        request.state.rbac_user = user
+        return
     if not AUTH_TOKEN:
         return  # auth disabled
     presented = None
@@ -201,6 +274,21 @@ async def _validate_catalog_on_startup() -> None:
 
     # Start the notifications dispatcher (mtime-poll config reloader).
     await get_dispatcher().start()
+
+    # Start the backup scheduler (60s-tick loop firing enabled schedules).
+    await backup_mod.get_scheduler().start()
+
+    # Start the audit subscriber if the operator enabled it. Opt-in via
+    # LHS_AUDIT_ENABLED=true; default behaviour is unchanged.
+    if audit_log.is_enabled():
+        try:
+            audit_log.init_audit_db()
+            await audit_log.get_subscriber().start()
+        except Exception:
+            import logging
+            logging.getLogger("lhs.audit").exception(
+                "audit subscriber failed to start; continuing without audit"
+            )
 
 
 def _require_catalog_ok() -> None:
@@ -891,6 +979,68 @@ async def post_caddy_disable(install_id: str):
     }
 
 
+# ---------- JDBC driver extras (opt-in side-load for Postgres / MySQL ingest) ----------
+#
+# Same override-file pattern as the Caddy TLS sidecar above: write a
+# docker-compose.jdbc.yml override into the install_dir, return the
+# activate command, never touch the base compose file or the install
+# pipeline. The override declares a one-shot init container that
+# downloads the requested JDBC jars into a named docker volume; the
+# spark service mounts that volume so Spark sees the drivers on its
+# classpath. Required to unblock the real Postgres/MySQL ingest path.
+
+
+@app.post("/api/installs/{install_id}/jdbc/enable", dependencies=[AuthDep])
+async def post_jdbc_enable(install_id: str, body: jdbc_mod.JdbcExtrasProfile):
+    """Write the docker-compose.jdbc.yml override into the install_dir.
+
+    Refuses if the install is mid-pipeline (RUNNING_STATES) -- layering an
+    override on a workspace that's still being cloned/started races docker
+    compose. Returns the override path, the activate command, and the
+    pinned driver versions so the operator can verify what will be
+    downloaded.
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state in RUNNING_STATES:
+        raise HTTPException(
+            409,
+            f"cannot enable JDBC extras while install state is {rec.state}; "
+            f"wait for it to reach a terminal state first",
+        )
+    try:
+        return await jdbc_mod.enable_jdbc_extras(install_id, body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/installs/{install_id}/jdbc/disable", dependencies=[AuthDep])
+async def post_jdbc_disable(install_id: str):
+    """Remove the docker-compose.jdbc.yml override from the install_dir.
+
+    Refuses if the install is mid-pipeline. The caller is responsible for
+    running the returned deactivate command FIRST -- the route does not
+    stop the jdbc-extras init container itself (same lifecycle-control
+    contract as the Caddy / monitoring sidecars). The named volume
+    holding the downloaded jars is intentionally retained so re-enabling
+    skips the download.
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state in RUNNING_STATES:
+        raise HTTPException(
+            409,
+            f"cannot disable JDBC extras while install state is {rec.state}; "
+            f"wait for it to reach a terminal state first",
+        )
+    try:
+        return await jdbc_mod.disable_jdbc_extras(install_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ---------- Prometheus + Grafana monitoring sidecar (opt-in operational tooling) ----------
 #
 # Same pattern as the Caddy TLS sidecar above: write a docker-compose
@@ -1000,6 +1150,33 @@ async def delete_backup_route(backup_id: str):
     except backup_mod.BackupError as e:
         raise HTTPException(404, str(e))
     return None
+
+
+class BackupScheduleUpdateRequest(BaseModel):
+    enabled: bool
+    interval_hours: int = Field(default=24, ge=1, le=168)
+    kind: str = Field(default="metadata", pattern=r"^(metadata|full)$")
+
+
+@app.get("/api/installs/{install_id}/backups/schedule", dependencies=[AuthDep])
+def get_install_backup_schedule(install_id: str):
+    """Return the persisted auto-backup schedule for this install,
+    or a disabled default if none has been saved yet."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    return backup_mod.load_schedule(install_id).model_dump()
+
+
+@app.put("/api/installs/{install_id}/backups/schedule", dependencies=[AuthDep])
+def put_install_backup_schedule(install_id: str, body: BackupScheduleUpdateRequest):
+    """Upsert the auto-backup schedule. Enabling (or re-saving while enabled)
+    recomputes next_run_at = now + interval_hours."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    schedule = backup_mod.save_schedule(install_id, body.model_dump())
+    return schedule.model_dump()
 
 
 @app.post("/api/installs/{install_id}/steps/rollback", dependencies=[AuthDep])
@@ -1176,6 +1353,50 @@ async def post_notifications_test(body: NotificationTestRequest):
     )
     ok, detail = await get_dispatcher().send_through(body.channel, evt)
     return {"ok": ok, "detail": detail}
+
+
+# ---------- Audit Log ----------
+
+@app.get("/api/audit", dependencies=[AuthDep])
+async def get_audit(
+    actor: Optional[str] = None,
+    action: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 200,
+):
+    """Query the persisted audit log.
+
+    Returns ``503`` when ``LHS_AUDIT_ENABLED`` is not set — surfaces the
+    opt-in nature so callers know to enable the feature rather than getting
+    a confusing empty list.
+
+    ``since`` accepts either a unix timestamp (float seconds) or an ISO-8601
+    datetime string. Limit is clamped server-side to 5000.
+    """
+    if not audit_log.is_enabled():
+        raise HTTPException(503, {
+            "error": "audit log disabled",
+            "hint": "set LHS_AUDIT_ENABLED=true and restart the server",
+        })
+    since_ts: Optional[float] = None
+    if since is not None and since != "":
+        try:
+            since_ts = float(since)
+        except ValueError:
+            from datetime import datetime
+            try:
+                since_ts = datetime.fromisoformat(since).timestamp()
+            except ValueError:
+                raise HTTPException(400, f"invalid 'since' value {since!r}; expected float seconds or ISO-8601")
+    entries = await audit_log.query(
+        actor=actor,
+        action=action,
+        resource_type=resource_type,
+        since_ts=since_ts,
+        limit=limit,
+    )
+    return [e.model_dump() for e in entries]
 
 
 # ---------- AI Assistant ("Ask Studio") ----------
@@ -1366,6 +1587,30 @@ async def post_ingest_postgres(install_id: str, body: PostgresIngestRequest):
     return job.model_dump()
 
 
+class MysqlIngestRequest(BaseModel):
+    source_id: str = Field(min_length=1, max_length=64)
+    table_name: str = Field(min_length=1, max_length=256)
+    target: dict = Field(default_factory=dict)  # {database, table}
+
+
+@app.post("/api/installs/{install_id}/ingest/mysql", dependencies=[AuthDep])
+async def post_ingest_mysql(install_id: str, body: MysqlIngestRequest):
+    """Kick off a MySQL -> Iceberg ingest job. v0.5.1 is a stub that walks
+    the IngestJob lifecycle and ends with a 'pending v0.5.1' message —
+    Spark image needs `mysql-connector-j-X.jar` first."""
+    _require_install_ready(install_id)
+    try:
+        job = await ingest_mod.kick_off_mysql_ingest(
+            install_id=install_id,
+            source_id=body.source_id,
+            table_name=body.table_name,
+            target=body.target,
+        )
+    except ingest_mod.UploadInvalidError as e:
+        raise HTTPException(400, str(e))
+    return job.model_dump()
+
+
 @app.get("/api/installs/{install_id}/tables", dependencies=[AuthDep])
 async def get_tables(install_id: str):
     """List every (namespace, table) pair the Iceberg REST catalog knows about."""
@@ -1399,6 +1644,188 @@ async def get_table_detail(install_id: str, namespace: str, name: str):
         raise HTTPException(502, f"iceberg catalog unreachable: {type(e).__name__}: {e}")
 
 
+# ---------- Data Quality checks (additive, READY-only) ----------
+#
+# Lightweight per-table assertions. Every check translates to a single
+# read-only SELECT routed through `sql_editor.run_user_sql`, which only
+# accepts SELECT/SHOW/DESCRIBE/EXPLAIN/WITH. Identifiers (namespace, table,
+# column) are validated at the API boundary against the same _IDENT_RE
+# (`^[A-Za-z0-9_.\-]{1,128}$`) that table_explorer uses — that strict
+# allowlist is the SQL-injection moat. Persistence: WORK_DIR/dq_checks.json
+# + WORK_DIR/dq_results.json (debounced atomic write, mirrors state.py).
+
+
+class DQCheckCreateRequest(BaseModel):
+    namespace: str = Field(min_length=1, max_length=128)
+    table: str = Field(min_length=1, max_length=128)
+    kind: str = Field(min_length=1, max_length=32)
+    column: Optional[str] = Field(default=None, max_length=128)
+    expected: Optional[float] = None
+    enabled: bool = True
+
+
+@app.post("/api/installs/{install_id}/dq/checks", dependencies=[AuthDep])
+async def post_dq_check(install_id: str, body: DQCheckCreateRequest):
+    """Create a Data Quality check for a table in an installed stack.
+
+    Refuses unless the install is in state READY. Validates the
+    kind/column/expected requirement matrix and the identifier allowlist
+    (`^[A-Za-z0-9_.\\-]{1,128}$`) at the boundary. Any rejected identifier
+    raises 400; the SQL templates downstream only ever see allowlisted
+    identifiers.
+    """
+    _require_install_ready(install_id)
+    try:
+        check = await dq_mod.create_check(install_id, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return check.model_dump()
+
+
+@app.get("/api/installs/{install_id}/dq/checks", dependencies=[AuthDep])
+async def get_dq_checks(install_id: str):
+    """List all DQ checks registered against this install (newest first)."""
+    _require_install_ready(install_id)
+    checks = await dq_mod.list_checks(install_id)
+    return [c.model_dump() for c in checks]
+
+
+@app.delete("/api/dq/checks/{check_id}", status_code=204, dependencies=[AuthDep])
+async def delete_dq_check(check_id: str):
+    """Remove a DQ check. 404 if it doesn't exist. Past DQResults are
+    retained but become orphans (list_results filters by install ownership,
+    so they fall out of the per-install result view)."""
+    try:
+        await dq_mod.delete_check(check_id)
+    except KeyError:
+        raise HTTPException(404, f"dq check {check_id!r} not found")
+    return None
+
+
+@app.post("/api/dq/checks/{check_id}/run", dependencies=[AuthDep])
+async def post_dq_check_run(check_id: str):
+    """Execute a DQ check now. Builds + runs the read-only SELECT, compares
+    the observed COUNT(*) to the threshold, persists a DQResult, and
+    returns it. Refuses if the owning install isn't READY."""
+    check = await dq_mod.get_check(check_id)
+    if check is None:
+        raise HTTPException(404, f"dq check {check_id!r} not found")
+    rec = store.get(check.install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state != "READY":
+        raise HTTPException(409, f"install is in state {rec.state}; READY required")
+    try:
+        result = await dq_mod.run_check(check_id)
+    except KeyError:
+        raise HTTPException(404, f"dq check {check_id!r} not found")
+    return result.model_dump()
+
+
+@app.get("/api/installs/{install_id}/dq/results", dependencies=[AuthDep])
+async def get_dq_results(
+    install_id: str,
+    check_id: Optional[str] = None,
+    limit: int = 20,
+):
+    """Recent DQResults for an install, optionally filtered by check_id."""
+    _require_install_ready(install_id)
+    results = await dq_mod.list_results(install_id, check_id=check_id, limit=limit)
+    return [r.model_dump() for r in results]
+
+
+# ---------- RBAC (opt-in admin surface) ----------
+#
+# These routes are present on the running app at all times, but they only do
+# anything useful when LHS_RBAC_ENABLED is truthy. When RBAC is off, every
+# request through _require_auth resolves the legacy single-token path and
+# request.state.rbac_user is never set — so anything that requires a real
+# RBAC user returns 503. That keeps the install-time experience identical
+# for operators who never opt in.
+
+
+def _require_rbac_enabled() -> None:
+    if not rbac_mod.is_rbac_enabled():
+        raise HTTPException(503, "RBAC is not enabled on this install")
+
+
+def _require_rbac_user(request: Request) -> "rbac_mod.User":
+    user = getattr(request.state, "rbac_user", None)
+    if user is None:
+        # AuthDep should have set this when RBAC is on. If it's missing
+        # something is wrong with the wiring — treat as unauthenticated.
+        raise HTTPException(401, "auth required")
+    return user
+
+
+def _require_role(user: "rbac_mod.User", allowed: set[str]) -> None:
+    if user.role not in allowed:
+        raise HTTPException(403, "forbidden")
+
+
+class RbacUserCreateRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    role: str = Field(min_length=1, max_length=32)
+
+    @field_validator("role")
+    @classmethod
+    def _role_known(cls, v: str) -> str:
+        from .v1.rbac import BUILTIN_ROLES
+        if v not in BUILTIN_ROLES:
+            raise ValueError(f"unknown role {v!r}; valid: {sorted(BUILTIN_ROLES)}")
+        return v
+
+
+@app.post("/api/rbac/users", dependencies=[AuthDep])
+async def post_rbac_user(request: Request, body: RbacUserCreateRequest):
+    """Create a new RBAC user. OWNER only. Returns the plaintext token ONCE."""
+    _require_rbac_enabled()
+    user = _require_rbac_user(request)
+    _require_role(user, {"OWNER"})
+    try:
+        created, plaintext = await rbac_mod.create_user(body.email, body.role)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "user": created.model_dump(),
+        # Surfaced exactly once. The DB never stores plaintext.
+        "api_token": plaintext,
+        "warning": "store this token now — it will not be shown again",
+    }
+
+
+@app.get("/api/rbac/users", dependencies=[AuthDep])
+async def get_rbac_users(request: Request):
+    """List RBAC users. OWNER + ADMIN."""
+    _require_rbac_enabled()
+    user = _require_rbac_user(request)
+    _require_role(user, {"OWNER", "ADMIN"})
+    users = await rbac_mod.list_users()
+    return {"users": [u.model_dump() for u in users]}
+
+
+@app.delete("/api/rbac/users/{user_id}", status_code=204, dependencies=[AuthDep])
+async def delete_rbac_user(user_id: str, request: Request):
+    """Delete an RBAC user. OWNER only. Cannot self-delete."""
+    _require_rbac_enabled()
+    user = _require_rbac_user(request)
+    _require_role(user, {"OWNER"})
+    if user.user_id == user_id:
+        raise HTTPException(400, "an OWNER cannot delete themselves")
+    deleted = await rbac_mod.delete_user(user_id)
+    if not deleted:
+        raise HTTPException(404, f"user {user_id} not found")
+    return None
+
+
+@app.get("/api/rbac/me", dependencies=[AuthDep])
+async def get_rbac_me(request: Request):
+    """Return the calling user's RBAC identity. Any authenticated role."""
+    _require_rbac_enabled()
+    user = _require_rbac_user(request)
+    return {"user": user.model_dump()}
+
+
 @app.on_event("shutdown")
 async def _shutdown():
     import logging
@@ -1426,6 +1853,18 @@ async def _shutdown():
         await get_dispatcher().stop()
     except Exception:
         log.exception("notify dispatcher stop failed")
+    # Stop backup scheduler tick loop.
+    try:
+        await backup_mod.get_scheduler().stop()
+    except Exception:
+        log.exception("backup scheduler stop failed")
+    # Stop the audit subscriber if it was enabled. Idempotent — safe to call
+    # even if start() was never invoked or already failed.
+    if audit_log.is_enabled():
+        try:
+            await audit_log.get_subscriber().stop()
+        except Exception:
+            log.exception("audit subscriber stop failed")
 
 
 class ControlRequest(BaseModel):
@@ -1540,6 +1979,109 @@ async def ws_logs(websocket: WebSocket, install_id: str):
         logging.getLogger("lhs.ws").exception("ws handler crashed for install %s", install_id)
     finally:
         await bus.unsubscribe(install_id, q)
+
+
+# ---------- Per-service Docker logs (snapshot + WS stream) ----------
+#
+# Read-only viewer over `docker compose logs <service>` for an installed
+# stack. The snapshot route is hard-capped at 500 lines and 10s wall-clock;
+# the WebSocket mirrors the existing /logs WS auth (origin guard + close
+# codes) so the UI's reconnect logic treats both streams identically.
+
+def _manifest_service_names(rec) -> set[str]:
+    """Return the set of compose service names declared by an install's
+    manifest. Falls back to component ids when service_name is missing."""
+    try:
+        m = load_manifest(rec.stack_id)
+    except KeyError:
+        return set()
+    out: set[str] = set()
+    for comp in m.components:
+        out.add(comp.get("service_name") or comp.get("id"))
+    return {s for s in out if s}
+
+
+@app.get("/api/installs/{install_id}/services/{service_name}/logs", dependencies=[AuthDep])
+async def get_service_logs_route(
+    install_id: str,
+    service_name: str,
+    tail: int = 200,
+    since: Optional[str] = None,
+):
+    """Snapshot the last N lines of one service's docker compose logs.
+
+    404 if install not found. 400 if service_name is not declared in the
+    install's manifest OR contains characters outside [A-Za-z0-9_-].
+    Hard 500-line cap, 10s wall-clock timeout — see service_logs.MAX_TAIL /
+    SNAPSHOT_TIMEOUT_SEC. Failures (docker missing, exit non-zero, timeout)
+    come back as 200 with an `error` field so the UI can render the message
+    without bouncing through a separate error path.
+    """
+    from .service_logs import _validate_service_name, get_service_logs
+
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    services = _manifest_service_names(rec)
+    if not services:
+        raise HTTPException(404, "stack not found")
+    try:
+        _validate_service_name(service_name, services)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return await get_service_logs(Path(rec.install_dir), service_name, tail=tail, since=since)
+
+
+@app.websocket("/api/installs/{install_id}/services/{service_name}/logs/stream")
+async def ws_service_logs(websocket: WebSocket, install_id: str, service_name: str):
+    """Live-tail one service's docker compose logs over a WebSocket.
+
+    Mirrors /api/installs/{install_id}/logs for auth + close codes so the
+    frontend's reconnect loop works unchanged:
+      * Origin guard (1008 on cross-origin) — same allow-list as /logs.
+      * 4001 if install_id is unknown.
+      * 4002 if service_name fails validation (charset OR not in manifest).
+    On success we accept the socket then stream decoded log lines as raw
+    text frames (one frame per line). Cancellation tears down the docker
+    subprocess via stream_service_logs's finally clause.
+    """
+    from .service_logs import _validate_service_name, stream_service_logs
+
+    origin = websocket.headers.get("origin", "")
+    host_hdr = websocket.headers.get("host", "")
+    if origin:
+        from urllib.parse import urlparse
+        parsed = urlparse(origin)
+        allowed_hosts = {host_hdr, "localhost", "127.0.0.1"}
+        if parsed.hostname not in allowed_hosts and parsed.netloc != host_hdr:
+            await websocket.close(code=1008)
+            return
+
+    rec = store.get(install_id)
+    if not rec:
+        await websocket.close(code=4001)
+        return
+    services = _manifest_service_names(rec)
+    try:
+        _validate_service_name(service_name, services)
+    except ValueError:
+        await websocket.close(code=4002)
+        return
+
+    await websocket.accept()
+    try:
+        async for line in stream_service_logs(Path(rec.install_dir), service_name):
+            try:
+                await websocket.send_text(line)
+            except Exception:
+                return
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        import logging
+        logging.getLogger("lhs.ws").exception(
+            "ws service-logs handler crashed for install %s svc %s", install_id, service_name
+        )
 
 
 # ---------- Frontend ----------

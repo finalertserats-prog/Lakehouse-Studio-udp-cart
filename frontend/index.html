@@ -1146,6 +1146,42 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     <!-- ============== V0.4 CARDS ============== -->
     <h3 class="display-3 mb-4 mt-8">Stack operations <span class="text-sm font-normal text-slate-400 ml-2">(v0.4)</span></h3>
 
+    <!-- 0. Service logs (collapsed) -->
+    <div class="glass p-5 mb-4" data-card="service_logs">
+      <div class="card-head flex items-center justify-between cursor-pointer" onclick="toggleCard(this, 'service_logs')">
+        <h3 class="display-3 flex items-center gap-3">
+          Service logs
+          <span class="text-xs px-2 py-0.5 rounded-full bg-slate-500/15 border border-slate-500/30 text-slate-400">docker compose</span>
+        </h3>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="card-body mt-4 hidden">
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <label class="text-xs text-slate-400 mono">service</label>
+          <select id="svclogs-service" class="input mono text-sm" style="width: auto; padding: 6px 12px;">
+            <option value="">loading&#8230;</option>
+          </select>
+          <label class="text-xs text-slate-400 mono">tail</label>
+          <select id="svclogs-tail" class="input mono text-sm" style="width: auto; padding: 6px 12px;">
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="500">500</option>
+            <option value="1000">1000 (capped at 500)</option>
+          </select>
+          <button id="btn-svclogs-fetch" class="btn-primary text-sm">Fetch</button>
+          <label class="text-xs text-slate-300 ml-2 flex items-center gap-2 cursor-pointer">
+            <input id="svclogs-stream-toggle" type="checkbox" class="accent-cyan-400">
+            Stream live
+          </label>
+          <span id="svclogs-status" class="text-xs text-slate-500 mono ml-auto"></span>
+        </div>
+        <div id="svclogs-error" class="text-xs text-rose-300 mb-2 hidden"></div>
+        <div id="svclogs-output" class="terminal p-4 text-xs mono min-h-[200px] max-h-[500px] overflow-auto text-slate-300">
+          <div class="text-slate-500 italic">Pick a service and hit Fetch &#8212; or toggle Stream live for a follow tail.</div>
+        </div>
+      </div>
+    </div>
+
     <!-- 1. Backups & restore (expanded by default) -->
     <div class="glass p-5 mb-4" data-card="backups">
       <div class="card-head flex items-center justify-between cursor-pointer" onclick="toggleCard(this, 'backups')">
@@ -4181,7 +4217,126 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     evidence: () => { loadEvidence(); },
     gitops:   () => { bindGitopsCard(); },
     schedule: () => { bindScheduleCard(); loadSchedule(); },
+    service_logs: () => { bindServiceLogsCard(); loadServiceLogsServices(); },
   };
+
+  // ===== Service logs (per-service docker compose logs viewer) =====
+  // Snapshot via GET /api/installs/{id}/services/{svc}/logs?tail=...
+  // Live tail via WS /api/installs/{id}/services/{svc}/logs/stream
+  const _svcLogs = { ws: null, services: [] };
+
+  function bindServiceLogsCard() {
+    const btnFetch = document.getElementById("btn-svclogs-fetch");
+    const toggle = document.getElementById("svclogs-stream-toggle");
+    if (btnFetch && !btnFetch._bound) {
+      btnFetch._bound = true;
+      btnFetch.addEventListener("click", () => fetchServiceLogs());
+    }
+    if (toggle && !toggle._bound) {
+      toggle._bound = true;
+      toggle.addEventListener("change", () => {
+        if (toggle.checked) startServiceLogsStream();
+        else stopServiceLogsStream();
+      });
+    }
+  }
+
+  async function loadServiceLogsServices() {
+    const sel = document.getElementById("svclogs-service");
+    if (!sel || !state.installId) return;
+    try {
+      const h = await api(`/api/installs/${state.installId}/health`, { silent: true });
+      _svcLogs.services = (h.services || []).map(s => s.service_name).filter(Boolean);
+      if (!_svcLogs.services.length) {
+        sel.innerHTML = `<option value="">(no services)</option>`;
+        return;
+      }
+      sel.innerHTML = _svcLogs.services.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+    } catch (e) {
+      sel.innerHTML = `<option value="">(failed to load: ${esc(e.message)})</option>`;
+    }
+  }
+
+  function _svcLogsAppend(out, line, cls) {
+    const div = document.createElement("div");
+    div.className = "log-line " + (cls || "text-slate-300");
+    div.textContent = line;
+    out.appendChild(div);
+    out.scrollTop = out.scrollHeight;
+  }
+
+  async function fetchServiceLogs() {
+    const sel = document.getElementById("svclogs-service");
+    const tailSel = document.getElementById("svclogs-tail");
+    const out = document.getElementById("svclogs-output");
+    const errEl = document.getElementById("svclogs-error");
+    const statusEl = document.getElementById("svclogs-status");
+    if (!sel || !out) return;
+    errEl.classList.add("hidden");
+    const svc = sel.value;
+    if (!svc) { errEl.textContent = "Pick a service first."; errEl.classList.remove("hidden"); return; }
+    const tail = parseInt(tailSel?.value || "200", 10);
+    statusEl.textContent = "fetching…";
+    out.innerHTML = "";
+    try {
+      const r = await api(`/api/installs/${state.installId}/services/${encodeURIComponent(svc)}/logs?tail=${tail}`);
+      if (r.error) {
+        _svcLogsAppend(out, `[error] ${r.error}`, "text-rose-400");
+        statusEl.textContent = "error";
+        return;
+      }
+      (r.lines || []).forEach(ln => _svcLogsAppend(out, ln));
+      const truncNote = r.truncated ? " (truncated — capped at 500)" : "";
+      statusEl.textContent = `${(r.lines || []).length} line(s)${truncNote}`;
+    } catch (e) {
+      errEl.textContent = `Failed: ${e.message}`;
+      errEl.classList.remove("hidden");
+      statusEl.textContent = "";
+    }
+  }
+
+  function startServiceLogsStream() {
+    stopServiceLogsStream();
+    const sel = document.getElementById("svclogs-service");
+    const out = document.getElementById("svclogs-output");
+    const statusEl = document.getElementById("svclogs-status");
+    const errEl = document.getElementById("svclogs-error");
+    if (!sel || !state.installId) return;
+    const svc = sel.value;
+    if (!svc) { errEl.textContent = "Pick a service first."; errEl.classList.remove("hidden"); return; }
+    errEl.classList.add("hidden");
+    out.innerHTML = "";
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const url = `${proto}://${location.host}/api/installs/${state.installId}/services/${encodeURIComponent(svc)}/logs/stream`;
+    let ws;
+    try { ws = new WebSocket(url); }
+    catch (e) { errEl.textContent = `WS open failed: ${e.message}`; errEl.classList.remove("hidden"); return; }
+    _svcLogs.ws = ws;
+    statusEl.textContent = `streaming ${svc}…`;
+    ws.onmessage = (msg) => {
+      if (ws !== _svcLogs.ws) return;
+      _svcLogsAppend(out, msg.data);
+    };
+    ws.onclose = (ev) => {
+      if (ws !== _svcLogs.ws) return;
+      statusEl.textContent = `stream closed (code ${ev.code})`;
+      const toggle = document.getElementById("svclogs-stream-toggle");
+      if (toggle) toggle.checked = false;
+      _svcLogs.ws = null;
+    };
+    ws.onerror = () => {
+      if (ws !== _svcLogs.ws) return;
+      statusEl.textContent = "stream error";
+    };
+  }
+
+  function stopServiceLogsStream() {
+    const ws = _svcLogs.ws;
+    if (ws) {
+      _svcLogs.ws = null;
+      try { ws.close(1000, "client stop"); } catch {}
+    }
+  }
 
   // ===== Evidence Viewer =====
   async function loadEvidence() {
