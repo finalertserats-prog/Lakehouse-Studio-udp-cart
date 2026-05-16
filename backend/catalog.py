@@ -194,6 +194,12 @@ def recommended_sets() -> dict[str, Any]:
     return dict(load_catalog().get("recommended_sets", {}))
 
 
+def destinations() -> list[dict[str, Any]]:
+    """Top-level catalog list of downstream destination kinds (BI tools etc).
+    Symmetric to components — what the user CAN configure as a destination."""
+    return list(load_catalog().get("destinations", []) or [])
+
+
 def component_index() -> dict[str, dict[str, Any]]:
     """Map component_id → component dict (enriched with category_id)."""
     out: dict[str, dict[str, Any]] = {}

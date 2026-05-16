@@ -20,6 +20,7 @@ from .models import InstallRequest, InspectionReport, LogEvent
 from .notifications import NotifyEvent, get_dispatcher, notify
 from .catalog import (
     categories as catalog_categories,
+    destinations as catalog_destinations,
     goals as catalog_goals,
     recommended_sets as catalog_recommended_sets,
     validate_catalog,
@@ -316,8 +317,15 @@ def auth_status():
 
 @app.get("/api/catalog", dependencies=[AuthDep, CatalogOk])
 def get_catalog():
-    """Component catalog: categories + their pickable components + alternates marked coming-soon."""
-    return {"categories": catalog_categories(), "goals": catalog_goals(), "recommended_sets": catalog_recommended_sets()}
+    """Component catalog: categories + their pickable components + alternates
+    marked coming-soon + downstream destinations (BI tools the user can
+    connect AFTER the lakehouse is built)."""
+    return {
+        "categories": catalog_categories(),
+        "goals": catalog_goals(),
+        "recommended_sets": catalog_recommended_sets(),
+        "destinations": catalog_destinations(),
+    }
 
 
 @app.get("/api/goals", dependencies=[AuthDep, CatalogOk])
