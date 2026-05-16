@@ -35,6 +35,7 @@ from .compatibility import (
     validate_against_catalog,
 )
 from .health import get_stack_health
+from .gitops_export import build_export
 from .compliance import get_compliance, validate_compliance
 from .templates import get_template_detail, list_templates, validate_templates
 from .demo_query import list_queries, run_demo_query
@@ -680,6 +681,30 @@ async def post_step_skip(install_id: str, body: StepActionRequest):
     task = asyncio.create_task(wrapped(), name=f"skip:{install_id}:{body.step_id}")
     _INSTALL_TASKS[install_id] = task
     return {"skipped": body.step_id, "resumed_at": next_id}
+
+
+@app.get("/api/installs/{install_id}/export", dependencies=[AuthDep])
+def get_install_export(install_id: str):
+    """Download the deployed stack as a GitOps bundle (.tar.gz).
+
+    Contents: post-patched docker-compose.yml + SCRUBBED .env (secrets
+    replaced with `<rotate-me>`) + Studio's scripts/ + the stack manifest
+    + the compatibility lock file + a README. Bring it up on any host
+    with `docker compose up -d` (after rotating the secrets).
+    """
+    from fastapi.responses import Response
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    install_dir = Path(rec.install_dir)
+    if not install_dir.exists():
+        raise HTTPException(409, "install_dir missing — nothing to export")
+    blob, fname = build_export(install_id, install_dir, rec.stack_id, rec.lake_name)
+    return Response(
+        content=blob,
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @app.post("/api/installs/{install_id}/uninstall", dependencies=[AuthDep])
