@@ -23,6 +23,11 @@ _STUDIO_BOOTSTRAP_SH = r"""#!/usr/bin/env bash
 # doesn't ship. This version uses only MinIO + Iceberg-REST + Spark + StarRocks.
 set -euo pipefail
 
+# Prevent Git Bash on Windows from converting Unix-style /home/... paths
+# into C:/Program Files/Git/home/... before passing them to docker exec.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 echo "[studio-bootstrap] waiting for Iceberg REST..."
 for i in $(seq 1 60); do
   if curl -fsS http://localhost:8181/v1/config >/dev/null 2>&1; then
@@ -44,11 +49,33 @@ docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e \
   "ALTER SYSTEM ADD BACKEND 'starrocks-be:9050';" 2>&1 | grep -v "already exists" || true
 
 echo "[studio-bootstrap] running Spark bootstrap job (REST-catalog)..."
-docker exec udp-spark spark-submit /home/iceberg/jobs/bootstrap_demo_lake.py
+# Use double-leading-slash on the path so Git Bash on Windows definitively
+# doesn't path-convert it. Linux/macOS bash treats // as / so this is safe.
+docker exec udp-spark spark-submit //home/iceberg/jobs/bootstrap_demo_lake.py
 
-echo "[studio-bootstrap] creating StarRocks REST catalog..."
-docker exec -i udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root \
-  < sql/starrocks/00b_create_iceberg_rest_catalog.sql
+echo "[studio-bootstrap] creating StarRocks REST catalog (3.3.12+ props)..."
+# StarRocks 3.3.12+ fixed PR #55416 — Iceberg REST catalog properties now
+# correctly propagate to the S3 FileIO. Required additions vs earlier 3.3.x:
+#   - iceberg.catalog.warehouse: explicit warehouse path
+#   - iceberg.catalog.vended-credentials-enabled=false: MinIO can't vend
+#   - aws.s3.enable_ssl=false: plain HTTP MinIO
+docker exec -i udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root <<'SQL'
+DROP CATALOG IF EXISTS iceberg_rest_catalog;
+CREATE EXTERNAL CATALOG iceberg_rest_catalog
+PROPERTIES (
+    "type" = "iceberg",
+    "iceberg.catalog.type" = "rest",
+    "iceberg.catalog.uri" = "http://iceberg-rest:8181",
+    "iceberg.catalog.warehouse" = "s3://datalake/warehouse",
+    "iceberg.catalog.vended-credentials-enabled" = "false",
+    "aws.s3.endpoint" = "http://minio:9000",
+    "aws.s3.enable_ssl" = "false",
+    "aws.s3.enable_path_style_access" = "true",
+    "aws.s3.region" = "us-east-1",
+    "aws.s3.access_key" = "admin",
+    "aws.s3.secret_key" = "udp_admin_12345"
+);
+SQL
 
 echo "[studio-bootstrap] creating app_analytics views (REST-backed)..."
 docker exec -i udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root <<'SQL'
@@ -60,6 +87,36 @@ FROM iceberg_rest_catalog.curated.demo_customer_summary;
 SQL
 
 echo "[studio-bootstrap] complete"
+"""
+
+
+_STUDIO_SMOKE_SH = r"""#!/usr/bin/env bash
+# Studio-owned smoke test. Replaces UDP's scripts/smoke-test.sh because that
+# script also hard-requires hive-metastore. Validates the same things:
+#   - Iceberg raw + curated tables readable from Spark (via REST catalog)
+#   - StarRocks can SHOW CATALOGS, SHOW DATABASES, and query the
+#     app_analytics view
+set -euo pipefail
+
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
+echo "[studio-smoke] checking Iceberg REST..."
+curl -fsS http://localhost:8181/v1/config >/dev/null || { echo "iceberg-rest unreachable"; exit 1; }
+echo "  iceberg-rest OK"
+
+echo "[studio-smoke] checking StarRocks FE..."
+docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "SELECT 1" >/dev/null || { echo "starrocks-fe unreachable"; exit 1; }
+echo "  starrocks-fe OK"
+
+echo "[studio-smoke] running Spark Iceberg smoke job..."
+docker exec udp-spark spark-submit //home/iceberg/jobs/smoke_test_iceberg.py
+
+echo "[studio-smoke] StarRocks queries..."
+docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e \
+  "SHOW CATALOGS; SHOW DATABASES; SELECT COUNT(*) AS customer_summary_rows FROM app_analytics.demo_customer_summary;"
+
+echo "[studio-smoke] passed"
 """
 
 
@@ -369,16 +426,48 @@ class UDPRunner:
             flags=re.MULTILINE,
         )
 
-        # Patch StarRocks FE startup to set priority_networks BEFORE start_fe.sh.
-        # Without this, FE on Docker Desktop gets a non-deterministic IP that
-        # doesn't match the meta/image/ROLE record, and FE refuses to elect
-        # itself leader — staying in INIT forever (the mysql port never binds).
-        # UDP's BE already has the equivalent patch; FE is missing it.
+        # Patch StarRocks FE startup with:
+        #   - priority_networks (FE refuses leader election on Docker Desktop
+        #     without it because the IP changes between restarts)
+        #   - AWS_REGION / AWS_ENDPOINT_URL_S3 / etc env vars (empirically
+        #     needed even on 3.3.12 — catalog property propagation doesn't
+        #     fully cover the SDK default-credentials/region/endpoint chain
+        #     when querying Iceberg-on-MinIO)
+        # Same env vars also injected into BE in _patch_compose_be (below).
         fe_old = r"/opt/starrocks/fe/bin/start_fe.sh --daemon"
-        fe_new = (r'echo "priority_networks = 172.16.0.0/12" >> /opt/starrocks/fe/conf/fe.conf'
-                  r' && /opt/starrocks/fe/bin/start_fe.sh --daemon')
+        fe_new = (
+            r'echo "priority_networks = 172.16.0.0/12" >> /opt/starrocks/fe/conf/fe.conf'
+            '\n        export AWS_REGION=us-east-1'
+            '\n        export AWS_ACCESS_KEY_ID=admin'
+            '\n        export AWS_SECRET_ACCESS_KEY=udp_admin_12345'
+            '\n        export AWS_ENDPOINT_URL_S3=http://minio:9000'
+            '\n        export AWS_S3_US_EAST_1_REGIONAL_ENDPOINT=regional'
+            '\n        /opt/starrocks/fe/bin/start_fe.sh --daemon'
+        )
         if fe_old in text and fe_new not in text:
             text = text.replace(fe_old, fe_new, 1)
+
+        # Same env-var injection for BE (it needs the SDK config too for any
+        # actual S3 read during query execution).
+        be_old = r"/opt/starrocks/be/bin/start_be.sh --daemon"
+        be_new = (
+            r'echo "priority_networks = 172.16.0.0/12" >> /opt/starrocks/be/conf/be.conf'
+            '\n        export AWS_REGION=us-east-1'
+            '\n        export AWS_ACCESS_KEY_ID=admin'
+            '\n        export AWS_SECRET_ACCESS_KEY=udp_admin_12345'
+            '\n        export AWS_ENDPOINT_URL_S3=http://minio:9000'
+            '\n        export AWS_S3_US_EAST_1_REGIONAL_ENDPOINT=regional'
+            '\n        /opt/starrocks/be/bin/start_be.sh --daemon'
+        )
+        # Note: UDP's compose already has `echo "priority_networks..." >> be.conf`
+        # before `start_be.sh --daemon`. To avoid double-prepending, match the
+        # original line WITHOUT our priority_networks prefix.
+        be_existing_re = re.compile(
+            r'echo "priority_networks = 172\.16\.0\.0/12" >> /opt/starrocks/be/conf/be\.conf\s*\n\s*'
+            r'/opt/starrocks/be/bin/start_be\.sh --daemon'
+        )
+        if be_existing_re.search(text):
+            text = be_existing_re.sub(be_new, text, count=1)
 
         # Downgrade `condition: service_healthy` → `condition: service_started`.
         # Several UDP images ship broken healthchecks (iceberg-rest's check
@@ -433,18 +522,20 @@ class UDPRunner:
             self._log("env", "stdout", "spark-defaults.conf: repointed 'udp' catalog from HMS to REST")
 
     def _write_studio_bootstrap(self) -> None:
-        """Drop a Studio-owned bootstrap script into the install dir's scripts/
-        directory. Replaces UDP's bootstrap.sh which hard-requires
-        hive-metastore. Studio's script uses ONLY the services we ship:
+        """Drop Studio-owned bootstrap + smoke scripts into the install dir's
+        scripts/ directory. Replace UDP's equivalents which hard-require
+        hive-metastore. Studio's scripts use ONLY the services we ship:
         MinIO + Iceberg REST + Spark + StarRocks."""
         scripts_dir = self.install_dir / "scripts"
         scripts_dir.mkdir(parents=True, exist_ok=True)
-        script = scripts_dir / "lhs-bootstrap.sh"
-        script.write_text(_STUDIO_BOOTSTRAP_SH, encoding="utf-8")
-        try:
-            script.chmod(0o755)
-        except Exception:
-            pass
+        for name, body in (("lhs-bootstrap.sh", _STUDIO_BOOTSTRAP_SH),
+                           ("lhs-smoke.sh",     _STUDIO_SMOKE_SH)):
+            path = scripts_dir / name
+            path.write_text(body, encoding="utf-8")
+            try:
+                path.chmod(0o755)
+            except Exception:
+                pass
 
     async def _step_env(self, overrides: dict[str, str]) -> bool:
         self._step_start("env")

@@ -51,8 +51,11 @@ components:
   - id: starrocks-fe
     name: StarRocks Frontend
     category: serving
-    version: 3.3-latest
-    image: starrocks/fe-ubuntu:3.3-latest
+    # 3.3.12 includes PR #55416 which fixes Iceberg REST catalog property
+    # propagation to S3 FileIO. Earlier 3.3.x ignored aws.s3.endpoint for
+    # non-AWS S3-compatible stores like MinIO.
+    version: "3.3.12"
+    image: starrocks/fe-ubuntu:3.3.12
     service_name: starrocks-fe
     ports: [8030, 9020, 9030]
     resource_profiles:
@@ -62,8 +65,8 @@ components:
   - id: starrocks-be
     name: StarRocks Backend
     category: serving
-    version: 3.3-latest
-    image: starrocks/be-ubuntu:3.3-latest
+    version: "3.3.12"
+    image: starrocks/be-ubuntu:3.3.12
     service_name: starrocks-be
     ports: [8040, 8060, 9050, 9060]
     resource_profiles:
@@ -119,7 +122,9 @@ commands:
   # dependency on hive-metastore. Written into the install_dir by the
   # env step. See backend/runner.py:_STUDIO_BOOTSTRAP_SH.
   bootstrap: { argv: ["bash", "scripts/lhs-bootstrap.sh"],  timeout: 900 }
-  smoke:     { argv: ["./udp", "smoke-test"], timeout: 600 }
+  # Studio's own smoke test (not UDP's) — skips hive-metastore wait,
+  # uses REST catalog. See backend/runner.py:_STUDIO_SMOKE_SH.
+  smoke:     { argv: ["bash", "scripts/lhs-smoke.sh"],  timeout: 600 }
   status:    { argv: ["./udp", "status"],     timeout: 30 }
   stop:      { argv: ["./udp", "stop"],       timeout: 120 }
   clean:     { argv: ["./udp", "clean"],      timeout: 180 }

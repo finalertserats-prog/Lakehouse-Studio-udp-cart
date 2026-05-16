@@ -145,7 +145,7 @@ categories:
     components:
       - id: starrocks
         name: StarRocks (FE + BE)
-        version: "3.3"
+        version: "3.3.12"
         maturity: ga
         recommended: true
         badges: [Recommended, Stable]
