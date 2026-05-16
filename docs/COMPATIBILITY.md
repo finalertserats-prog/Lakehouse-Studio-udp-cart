@@ -78,13 +78,34 @@ The distinction in one line:
 
 **Promotion TODO list** (to reach `pilot-stable`):
 
-1. **Write `scripts/lhs-trino-bootstrap.sh`** — must seed `raw`/`curated`/`analytics` schemas through Trino SQL (`CREATE SCHEMA iceberg.raw ...`, `INSERT INTO ...`) instead of PySpark. The script must write `/etc/trino/catalog/iceberg.properties` inside the trino container with `iceberg.catalog.type=rest`, `iceberg.rest-catalog.uri=$ICEBERG_REST_URI`, `fs.s3.enabled=true`, `s3.path-style-access=true`, `s3.endpoint=$S3_ENDPOINT`, `s3.aws-access-key=$AWS_ACCESS_KEY_ID`, `s3.aws-secret-key=$AWS_SECRET_ACCESS_KEY`.
-2. **Write `scripts/lhs-trino-smoke.sh`** — must round-trip a row through Trino (write via `INSERT INTO iceberg.curated.demo`) and verify it reads back from BOTH Trino AND StarRocks against the same Iceberg-REST catalog. Mirror the shape of `lhs-smoke.sh` so the harness can reuse its result-parsing.
-3. **Run end-to-end on Windows + Docker Desktop** — full pipeline `prepare → clone → env → doctor → start → bootstrap → smoke → finalize`. Capture host metadata (Docker version, RAM, CPU cores) and per-step result. Append as the first `evidence[]` entry in `udp-trino-local-v0.1.lock.yaml`.
-4. **Run end-to-end on Linux Docker** — same as above. Append as a second `evidence[]` entry. Both required because the v0.2 stack already established that the Windows AWS-SDK→MinIO path has a UnknownHostException quirk; the Trino candidate could hit the same or a different OS-specific issue, and we need to know which side of the line it falls on before promotion.
-5. **Decide Trino JVM heap config** for the `recommended` resource profile (10 GB RAM) — without an explicit `-Xmx` in `JAVA_OPTS`, Trino defaults to a fraction of container RAM that may not match the operator's expectation. Document the chosen value in the manifest's `env_defaults` and the lock file's `host_requirements`.
-6. **Wire `backend/runner.py`** to route `udp-trino-local-v0.1` installs through the new scripts WITHOUT perturbing the v0.2 pipeline. The frozen-runner constraint says step 5 of the promotion gate cannot regress v0.2 — add an opt-in branch keyed on `manifest.id`, never a default-flow change.
-7. **Flip the lock file's `status:`** from `candidate` to `pilot-stable` and update `status_notes` with the evidence ids. Bump `version_id` from `0.1.0` to `0.1.1` (or higher, semver applies — patch for evidence-only promotion, minor for any constraint relaxation).
+1. ~~**Write `scripts/lhs-trino-bootstrap.sh`**~~ — DONE 2026-05-16.
+   Ships via `backend/runner.py`'s `_STUDIO_TRINO_BOOTSTRAP_SH` constant
+   and is written into `install_dir/scripts/` at install time. Writes
+   `/etc/trino/catalog/iceberg.properties` inside the trino container
+   with the `iceberg.catalog.type=rest` / REST-URI / S3 endpoint set,
+   restarts trino, seeds `raw` + `curated` tables via Trino SQL, then
+   wires StarRocks's REST catalog at the same endpoint.
+2. ~~**Write `scripts/lhs-trino-smoke.sh`**~~ — DONE 2026-05-16.
+   Ships via `backend/runner.py`'s `_STUDIO_TRINO_SMOKE_SH` constant.
+   Round-trips a SELECT through Trino on the curated table, then queries
+   the SAME table from StarRocks via the shared Iceberg-REST catalog.
+   Output shape mirrors v0.2's smoke for harness parsing.
+3. **Run end-to-end on Windows + Docker Desktop** — full pipeline `prepare → clone → env → doctor → start → bootstrap → smoke → finalize`. Capture host metadata (Docker version, RAM, CPU cores) and per-step result. Append as the first `evidence[]` entry in `udp-trino-local-v0.1.lock.yaml`. **STILL OPEN.**
+4. **Run end-to-end on Linux Docker** — same as above. Append as a second `evidence[]` entry. Both required because the v0.2 stack already established that the Windows AWS-SDK→MinIO path has a UnknownHostException quirk; the Trino candidate could hit the same or a different OS-specific issue, and we need to know which side of the line it falls on before promotion. **STILL OPEN.**
+5. ~~**Decide Trino JVM heap config**~~ — DONE 2026-05-17.
+   Defaults landed in the manifest's `env_defaults`:
+   `TRINO_JAVA_OPTS = "-Xms3G -Xmx3G -XX:+UseG1GC ..."`,
+   `TRINO_QUERY_MAX_MEMORY_PER_NODE = "1.5GB"`,
+   `TRINO_QUERY_MAX_MEMORY = "1.5GB"`. Reasoning: 10 GB host budget
+   split as Trino 4 GB / StarRocks ~4 GB / OS + MinIO + Iceberg-REST
+   ~2 GB. Pinning `-Xms == -Xmx` avoids container-OOM during JVM
+   ramp-up. The 1.5 GB per-query cap (50% of heap) addresses Iceberg
+   planning OOMs on Trino's default ~2 GB heap.
+6. ~~**Wire `backend/runner.py`**~~ — DONE 2026-05-16. Runner uses
+   `_STUDIO_SCRIPT_SETS` dispatch keyed on `stack.id`, so the v0.2
+   path is unchanged and the Trino path writes its own script pair
+   into `install_dir/scripts/`.
+7. **Flip the lock file's `status:`** from `candidate` to `pilot-stable` and update `status_notes` with the evidence ids. Bump `version_id` from `0.1.0` to `0.1.1` (or higher, semver applies — patch for evidence-only promotion, minor for any constraint relaxation). **Pending items 3 + 4.**
 
 Until item 7 ships, `udp-trino-local-v0.1` stays a candidate. The /healthz endpoint will continue emitting the `recommended_set 'udp-trino-recommended': warning — stack 'udp-trino-local-v0.1' lock status is 'candidate'` line, by design.
 
