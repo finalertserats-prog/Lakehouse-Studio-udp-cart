@@ -52,6 +52,7 @@
       --rose:      #f43f5e;
     }
     html, body { background: var(--bg); color: var(--ink); }
+    html { scroll-padding-top: 140px; }  /* clear sticky header (73px) + stepper (~55px) on anchor scroll */
     body {
       font-family: 'Inter', system-ui, sans-serif;
       min-height: 100vh;
@@ -536,7 +537,7 @@
 </header>
 
 <!-- Stepper (only shown during a flow; hidden on Welcome / Installs) -->
-<div id="stepper" class="hidden sticky top-[73px] z-10" style="background: linear-gradient(180deg, rgba(7,6,26,0.75), rgba(7,6,26,0.2)); backdrop-filter: blur(12px); border-bottom: 1px solid var(--hairline);">
+<div id="stepper" class="hidden sticky top-[73px] z-30" style="background: rgba(7,6,26,0.94); backdrop-filter: blur(16px) saturate(160%); border-bottom: 1px solid var(--hairline); box-shadow: 0 4px 24px -8px rgba(0,0,0,0.6);">
   <div class="max-w-7xl mx-auto px-6 py-3 flex items-center gap-4 overflow-x-auto">
     <div class="step-pill" data-step="goal">1. Goal</div>
     <div class="step-arrow">→</div>
