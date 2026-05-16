@@ -647,8 +647,9 @@
 
   <!-- ============== SUCCESS ============== -->
   <section id="screen-success" class="screen hidden fade-up">
-    <div class="success-hero p-10 mb-8 relative">
+    <div class="success-hero p-10 mb-8 relative overflow-hidden">
       <div class="success-burst"></div>
+      <canvas id="confetti-canvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
       <div class="relative">
         <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-emerald-300 text-xs font-semibold tracking-wider bg-emerald-500/10 border border-emerald-500/30 mb-4">
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
@@ -1246,6 +1247,69 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     const ev = document.getElementById("success-evidence");
     ev.textContent = rec.outputs?.evidence_dir ? `evidence captured at ${rec.outputs.evidence_dir}` : "";
     loadDemoQueries(); loadStructuredSmoke();
+    // Celebrate — fire confetti once per success (not on every refresh / installs-list re-entry).
+    if (!state._confettiFired) { fireConfetti(); state._confettiFired = true; }
+  }
+
+  // ----- confetti burst -----
+  function fireConfetti() {
+    const canvas = document.getElementById("confetti-canvas");
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+
+    const colors = ["#22d3ee", "#a855f7", "#ec4899", "#34d399", "#f59e0b", "#f9a8d4"];
+    const COUNT = 110;
+    const particles = [];
+    // Two bursts — one from each top corner — feels less symmetrical
+    for (let i = 0; i < COUNT; i++) {
+      const fromLeft = i < COUNT / 2;
+      const angle = fromLeft
+        ? Math.PI * (0.15 + Math.random() * 0.30)   // upward-right
+        : Math.PI * (0.55 + Math.random() * 0.30);  // upward-left
+      const speed = 6 + Math.random() * 8;
+      particles.push({
+        x: fromLeft ? w * 0.10 : w * 0.90,
+        y: h * 0.20,
+        vx: Math.cos(angle) * speed,
+        vy: -Math.sin(angle) * speed,
+        size: 4 + Math.random() * 6,
+        color: colors[(Math.random() * colors.length) | 0],
+        spin: (Math.random() - 0.5) * 0.4,
+        rot: Math.random() * Math.PI,
+        shape: Math.random() < 0.5 ? "rect" : "circle",
+        life: 1,
+      });
+    }
+
+    const gravity = 0.25;
+    const drag = 0.992;
+    const t0 = performance.now();
+    function frame(now) {
+      const elapsed = now - t0;
+      ctx.clearRect(0, 0, w, h);
+      let alive = 0;
+      for (const p of particles) {
+        p.vx *= drag; p.vy = p.vy * drag + gravity;
+        p.x += p.vx; p.y += p.vy; p.rot += p.spin;
+        // Fade in the last 1s
+        p.life = elapsed > 2500 ? Math.max(0, 1 - (elapsed - 2500) / 1200) : 1;
+        if (p.y < h + 40 && p.life > 0.02) alive++;
+        ctx.save();
+        ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        if (p.shape === "rect") ctx.fillRect(-p.size/2, -p.size/3, p.size, p.size * 0.6);
+        else { ctx.beginPath(); ctx.arc(0, 0, p.size/2, 0, Math.PI * 2); ctx.fill(); }
+        ctx.restore();
+      }
+      if (alive > 0 && elapsed < 4500) requestAnimationFrame(frame);
+      else ctx.clearRect(0, 0, w, h);
+    }
+    requestAnimationFrame(frame);
   }
 
   async function loadStructuredSmoke() {
