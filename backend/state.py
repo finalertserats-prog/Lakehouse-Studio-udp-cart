@@ -84,6 +84,10 @@ class StateStore:
         host: str,
         install_dir: str,
         steps: list[StepStatus],
+        *,
+        lake_name: Optional[str] = None,
+        goal: Optional[str] = None,
+        cart: Optional[list[str]] = None,
     ) -> InstallRecord:
         with self._lock:
             now = time.time()
@@ -97,6 +101,9 @@ class StateStore:
                 created_at=now,
                 updated_at=now,
                 steps=steps,
+                lake_name=lake_name,
+                goal=goal,
+                cart=cart or [],
             )
             self._records[install_id] = record
             self._persist_locked()

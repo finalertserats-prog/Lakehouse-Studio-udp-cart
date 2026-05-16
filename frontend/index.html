@@ -329,6 +329,41 @@
     .display-2 { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: clamp(1.75rem, 3.2vw, 2.5rem); line-height: 1.1; letter-spacing: -0.02em; }
     .display-3 { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.015em; }
 
+    /* ---------------- STEPPER ---------------- */
+    .step-pill {
+      padding: 6px 12px; border-radius: 999px;
+      font-size: 12px; font-weight: 500; white-space: nowrap;
+      color: var(--ink-faint);
+      border: 1px solid var(--hairline);
+      background: rgba(255,255,255,0.02);
+      transition: all .25s ease;
+    }
+    .step-pill.done {
+      color: var(--emerald); border-color: rgba(52,211,153,0.35); background: rgba(52,211,153,0.08);
+    }
+    .step-pill.current {
+      color: var(--ink); border-color: rgba(34,211,238,0.55);
+      background: linear-gradient(120deg, rgba(34,211,238,0.10), rgba(168,85,247,0.10));
+      box-shadow: 0 0 18px -4px rgba(34,211,238,0.5);
+    }
+    .step-arrow { color: var(--ink-faint); font-size: 12px; opacity: 0.5; }
+
+    /* ---------------- CART SIDEBAR ---------------- */
+    .cat-card {
+      padding: 20px; border-radius: 14px; transition: all .25s ease;
+      background: var(--glass); border: 1px solid var(--hairline);
+    }
+    .cat-card.added { border-color: rgba(52,211,153,0.35); background: rgba(52,211,153,0.05); }
+    .cat-card.locked { opacity: 0.5; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 6px;
+      font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+      margin-right: 6px;
+    }
+    .badge-rec { background: rgba(34,211,238,0.15); color: #67e8f9; }
+    .badge-stable { background: rgba(52,211,153,0.15); color: #6ee7b7; }
+    .badge-exp { background: rgba(245,158,11,0.15); color: #fcd34d; }
+
     /* selection */
     ::selection { background: rgba(168,85,247,0.4); color: white; }
 
@@ -396,6 +431,27 @@
     </nav>
   </div>
 </header>
+
+<!-- Stepper (only shown during a flow; hidden on Welcome / Installs) -->
+<div id="stepper" class="hidden sticky top-[73px] z-10" style="background: linear-gradient(180deg, rgba(7,6,26,0.75), rgba(7,6,26,0.2)); backdrop-filter: blur(12px); border-bottom: 1px solid var(--hairline);">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex items-center gap-4 overflow-x-auto">
+    <div class="step-pill" data-step="goal">1. Goal</div>
+    <div class="step-arrow">→</div>
+    <div class="step-pill" data-step="build">2. Build</div>
+    <div class="step-arrow">→</div>
+    <div class="step-pill" data-step="name">3. Name</div>
+    <div class="step-arrow">→</div>
+    <div class="step-pill" data-step="sizing">4. Size</div>
+    <div class="step-arrow">→</div>
+    <div class="step-pill" data-step="server">5. Connect</div>
+    <div class="step-arrow">→</div>
+    <div class="step-pill" data-step="inspect">6. Pre-flight</div>
+    <div class="step-arrow">→</div>
+    <div class="step-pill" data-step="install">7. Install</div>
+    <div class="step-arrow">→</div>
+    <div class="step-pill" data-step="success">8. Ready</div>
+  </div>
+</div>
 
 <main class="max-w-7xl mx-auto px-6 py-10 relative z-10">
 
@@ -513,7 +569,88 @@
     </div>
   </section>
 
-  <!-- ============== STACKS ============== -->
+  <!-- ============== GOAL ============== -->
+  <section id="screen-goal" class="screen hidden fade-up">
+    <div class="mb-8">
+      <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 1 · Intent</div>
+      <h2 class="display-2 grad-text-soft inline-block">What are you building?</h2>
+      <p class="text-slate-400 mt-2">Pick the use case closest to yours. We pre-select sensible defaults; you'll still choose components on the next screen.</p>
+    </div>
+    <div id="goal-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+  </section>
+
+  <!-- ============== BUILD (cart) ============== -->
+  <section id="screen-build" class="screen hidden fade-up">
+    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3 flex items-center gap-1" onclick="navigate('goal')"><span>←</span> Back to goal</button>
+    <div class="mb-6 flex items-baseline justify-between">
+      <div>
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 2 · Catalog</div>
+        <h2 class="display-2 grad-text-soft inline-block">Build your lakehouse</h2>
+        <p class="text-slate-400 mt-2">Pick a component for each category. The cart on the right validates compatibility live.</p>
+      </div>
+      <div class="flex gap-2">
+        <button id="btn-cart-reset" class="btn-ghost text-sm">↻ Reset cart</button>
+        <button id="btn-cart-recommend" class="btn-ghost text-sm">✨ Use recommended</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- categories: 2/3 -->
+      <div class="lg:col-span-2 space-y-4" id="catalog-list"></div>
+
+      <!-- cart sidebar: 1/3, sticky -->
+      <aside class="lg:col-span-1">
+        <div class="glass p-6 sticky top-32">
+          <div class="text-xs uppercase tracking-widest text-slate-400 mb-3">Your cart</div>
+          <div class="flex items-baseline gap-2 mb-1">
+            <span class="display-2 grad-text" id="cart-score">0</span>
+            <span class="text-slate-400 text-sm">/ 100</span>
+          </div>
+          <div class="text-xs text-slate-500 mb-4" id="cart-verdict">empty — start picking components</div>
+          <div class="score-bar mb-5"><div class="score-fill mid" id="cart-score-bar" style="width: 0%"></div></div>
+
+          <div class="text-xs uppercase tracking-widest text-slate-400 mb-2">Components</div>
+          <div id="cart-list" class="space-y-1.5 mb-5"></div>
+
+          <div id="cart-next-pick" class="hidden text-xs glass p-3 mb-5"></div>
+
+          <div id="cart-warnings" class="hidden space-y-1 mb-5 text-xs"></div>
+
+          <button id="btn-build-continue" class="btn-primary w-full" disabled>Validate &amp; continue →</button>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============== NAME YOUR LAKEHOUSE ============== -->
+  <section id="screen-name" class="screen hidden fade-up">
+    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3 flex items-center gap-1" onclick="navigate('build')"><span>←</span> Back to build</button>
+    <div class="mb-8">
+      <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 3 · Identity</div>
+      <h2 class="display-2 grad-text-soft inline-block">Name your lakehouse</h2>
+      <p class="text-slate-400 mt-2">This name shows up everywhere — install logs, success screen, day-2 ops. Something short and atmospheric works best.</p>
+    </div>
+    <div class="glass p-10 max-w-2xl">
+      <label class="block text-xs uppercase tracking-widest text-slate-400 mb-3">Lakehouse name</label>
+      <div class="flex items-center gap-3">
+        <input id="input-lake-name" placeholder="e.g. ocean" class="input mono text-2xl font-display" maxlength="32" style="padding: 14px 18px;" />
+        <button id="btn-suggest-name" class="btn-ghost text-sm whitespace-nowrap" title="Get a suggestion">✨ Suggest</button>
+      </div>
+      <div id="name-feedback" class="text-xs text-slate-500 mt-3 h-4"></div>
+
+      <div class="mt-6 text-xs text-slate-500">
+        <div class="mb-2">Try one of these:</div>
+        <div id="name-pills" class="flex flex-wrap gap-2"></div>
+      </div>
+
+      <div class="flex items-center gap-3 mt-10">
+        <button id="btn-name-continue" class="btn-primary" disabled>Continue to sizing →</button>
+        <button class="btn-ghost" onclick="navigate('build')">Back</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== STACKS (legacy / hidden in new flow) ============== -->
   <section id="screen-stacks" class="screen hidden fade-up">
     <div class="mb-8">
       <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 1 · Catalog</div>
@@ -655,13 +792,16 @@
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
           STACK READY
         </div>
-        <h2 class="display-1">
+        <h2 class="display-1" id="success-headline">
           <span class="text-white">Your lakehouse</span><br>
           <span class="grad-text">is live.</span>
         </h2>
-        <p class="text-slate-300 mt-4 text-lg">Demo data loaded. Smoke tests passed. Connect to any service below.</p>
+        <p class="text-slate-300 mt-4 text-lg" id="success-sub">Demo data loaded. Smoke tests passed. Connect to any service below.</p>
       </div>
     </div>
+
+    <h3 class="display-3 mb-4 mt-2" id="first-action-title">Start using your lakehouse</h3>
+    <div id="first-action-grid" class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8"></div>
 
     <h3 class="display-3 mb-4 mt-2">Service URLs</h3>
     <div id="success-urls" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8"></div>
@@ -746,7 +886,33 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     ws: null,
     host: "localhost",
     installDir: "",
+    goal: null,
+    cart: [],
+    cartValidation: null,
+    lakeName: "",
+    catalog: null,
   };
+
+  // Phase mapping for the top stepper
+  const SCREEN_TO_STEP = {
+    goal: "goal", build: "build", name: "name", sizing: "sizing",
+    server: "server", inspect: "inspect", install: "install", success: "success",
+  };
+  const STEPPER_ORDER = ["goal","build","name","sizing","server","inspect","install","success"];
+
+  function setStepper(currentScreen) {
+    const bar = document.getElementById("stepper");
+    const step = SCREEN_TO_STEP[currentScreen];
+    if (!step) { bar.classList.add("hidden"); return; }
+    bar.classList.remove("hidden");
+    const i = STEPPER_ORDER.indexOf(step);
+    document.querySelectorAll(".step-pill").forEach(el => {
+      const j = STEPPER_ORDER.indexOf(el.dataset.step);
+      el.classList.remove("done", "current");
+      if (j < i) el.classList.add("done");
+      else if (j === i) el.classList.add("current");
+    });
+  }
 
   // ----- routing -----
   function navigate(screen) {
@@ -754,17 +920,17 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     const el = document.getElementById("screen-" + screen);
     if (el) {
       el.classList.remove("hidden");
-      // Re-trigger fade-up animation
       el.classList.remove("fade-up"); void el.offsetWidth; el.classList.add("fade-up");
     }
     document.querySelectorAll(".nav-btn").forEach(b => {
       b.classList.toggle("bg-white/10", b.dataset.nav === screen);
     });
+    setStepper(screen);
     if (screen === "installs") loadInstalls();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => navigate(b.dataset.nav)));
-  document.getElementById("btn-start").addEventListener("click", () => { loadStacks().then(() => navigate("stacks")); });
+  document.getElementById("btn-start").addEventListener("click", () => { loadGoals().then(() => navigate("goal")); });
 
   // ----- escape helper -----
   function esc(s) {
@@ -856,6 +1022,236 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     });
   }
 
+  // ===========================================================
+  // ----- GOAL screen (step 1) -----
+  // ===========================================================
+  async function loadGoals() {
+    if (!state.catalog) state.catalog = await api("/api/catalog");
+    const list = document.getElementById("goal-list"); list.innerHTML = "";
+    const iconMap = { laptop: "💻", building: "🏛", sparkles: "✨", chart: "📊", shield: "🛡" };
+    (state.catalog.goals || []).forEach(g => {
+      const div = document.createElement("div");
+      div.className = "glass glass-hover spot p-6 cursor-pointer";
+      const intended = (g.intended_for || []).map(i => `<span class="badge badge-stable">${esc(i)}</span>`).join("");
+      div.innerHTML = `
+        <div class="text-3xl mb-3">${iconMap[g.icon] || "•"}</div>
+        <div class="display-3 mb-1">${esc(g.label)}</div>
+        <div class="text-sm text-slate-400 mb-3 leading-relaxed">${esc(g.summary)}</div>
+        <div class="flex flex-wrap gap-1">${intended}</div>
+        <div class="text-xs text-cyan-300 mt-4 flex items-center gap-1">Choose <span>→</span></div>
+      `;
+      div.addEventListener("click", async () => {
+        state.goal = g.id;
+        // Preload the recommended cart for this goal (UDP for all goals in pilot)
+        const rec = await api("/api/cart/recommended");
+        state.cart = []; // start empty so the user can pick — but show the recommendation prominently
+        await loadBuild();
+        navigate("build");
+      });
+      list.appendChild(div);
+    });
+  }
+
+  // ===========================================================
+  // ----- BUILD / CART screen (step 2) -----
+  // ===========================================================
+  async function loadBuild() {
+    if (!state.catalog) state.catalog = await api("/api/catalog");
+    renderCatalog();
+    await refreshCartValidation();
+  }
+
+  function renderCatalog() {
+    const wrap = document.getElementById("catalog-list"); wrap.innerHTML = "";
+    (state.catalog.categories || []).forEach((cat) => {
+      const inCart = (cat.components || []).find(c => state.cart.includes(c.id));
+      const card = document.createElement("div");
+      card.className = "cat-card spot" + (inCart ? " added" : "");
+      const optionalTag = cat.optional ? `<span class="text-xs text-slate-500 ml-2">(optional)</span>` : "";
+      const comps = (cat.components || []).length ? (cat.components.map(comp => {
+        const added = state.cart.includes(comp.id);
+        const badges = (comp.badges || []).map(b => {
+          const cls = b === "Recommended" ? "badge-rec" : b === "Stable" ? "badge-stable" : "badge-exp";
+          return `<span class="badge ${cls}">${esc(b)}</span>`;
+        }).join("");
+        return `
+          <div class="flex items-start gap-4 p-4 rounded-lg ${added ? 'bg-emerald-500/8 border border-emerald-500/25' : 'bg-white/[0.02] border border-white/5'} mb-2">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-baseline gap-2 mb-1 flex-wrap">
+                <span class="font-semibold text-slate-100">${esc(comp.name)}</span>
+                <span class="text-xs mono text-slate-500">v${esc(comp.version || '?')}</span>
+                ${badges}
+              </div>
+              <div class="text-sm text-slate-400 mb-2 leading-relaxed">${esc(comp.summary || '')}</div>
+              ${comp.production_note ? `<div class="text-xs text-amber-300/80 italic">⚠ ${esc(comp.production_note)}</div>` : ''}
+              <div class="text-xs text-slate-500 mt-2">${esc(comp.license || '')} · ${esc(comp.maintainer || '')} · <a href="${esc(comp.url || '#')}" target="_blank" class="text-cyan-400 hover:underline">project ↗</a></div>
+            </div>
+            <button class="cart-btn ${added ? 'btn-ghost' : 'btn-primary'} text-sm whitespace-nowrap" data-comp="${esc(comp.id)}">${added ? '✓ Added · remove' : 'Add to cart'}</button>
+          </div>
+        `;
+      }).join("")) : `<div class="text-sm text-slate-500 italic px-4 py-3">No options yet — coming in v0.4+.</div>`;
+      const soon = (cat.coming_soon || []).map(s => `<span class="text-xs px-2 py-1 rounded-md bg-white/[0.03] border border-white/5 text-slate-500" title="${esc(s.reason || '')}">${esc(s.name)} <span class="text-slate-600">(soon)</span></span>`).join("");
+      card.innerHTML = `
+        <div class="flex items-baseline justify-between mb-2">
+          <div>
+            <div class="text-xs uppercase tracking-widest text-slate-500 mb-1">${cat.order}. ${esc(cat.label)}${optionalTag}</div>
+            <div class="text-sm text-slate-400">${esc(cat.description || '')}</div>
+          </div>
+        </div>
+        <div class="mt-3">${comps}</div>
+        ${soon ? `<div class="mt-3 pt-3 border-t border-white/5"><div class="text-xs text-slate-500 mb-2">Coming soon:</div><div class="flex flex-wrap gap-1.5">${soon}</div></div>` : ''}
+      `;
+      wrap.appendChild(card);
+    });
+    // Wire add/remove buttons
+    wrap.querySelectorAll(".cart-btn").forEach(b => {
+      b.addEventListener("click", async () => {
+        const id = b.dataset.comp;
+        if (state.cart.includes(id)) state.cart = state.cart.filter(x => x !== id);
+        else state.cart = [...state.cart, id];
+        renderCatalog();
+        await refreshCartValidation();
+      });
+    });
+  }
+
+  async function refreshCartValidation() {
+    const v = await api("/api/cart/validate", { method: "POST", body: JSON.stringify({ cart: state.cart }) });
+    state.cartValidation = v;
+    renderCartSidebar(v);
+  }
+
+  function renderCartSidebar(v) {
+    document.getElementById("cart-score").textContent = "0";
+    animateCount(document.getElementById("cart-score"), 0, v.score, 600);
+    const bar = document.getElementById("cart-score-bar");
+    bar.style.width = `${v.score}%`;
+    bar.classList.remove("good", "mid", "bad");
+    bar.classList.add(v.score >= 80 ? "good" : v.score >= 50 ? "mid" : "bad");
+
+    const verdictMap = {
+      compatible: "✓ all components compatible",
+      warning: "⚠ partial — keep going",
+      incompatible: "✗ has incompatible items",
+    };
+    document.getElementById("cart-verdict").textContent = verdictMap[v.compatibility] || "";
+
+    // Cart list
+    const idx = {};
+    (state.catalog.categories || []).forEach(cat => (cat.components || []).forEach(c => idx[c.id] = { ...c, category: cat.label }));
+    const list = document.getElementById("cart-list"); list.innerHTML = "";
+    if (!v.components_in_cart.length) {
+      list.innerHTML = `<div class="text-xs text-slate-500 italic">empty — add components from the catalog</div>`;
+    } else {
+      v.components_in_cart.forEach(id => {
+        const c = idx[id] || { name: id, category: "?" };
+        const div = document.createElement("div");
+        div.className = "flex items-center justify-between text-xs";
+        div.innerHTML = `<span class="text-emerald-300">✓</span><span class="flex-1 ml-2 text-slate-300">${esc(c.name)}</span><span class="text-slate-500">${esc(c.category)}</span>`;
+        list.appendChild(div);
+      });
+    }
+    // Show missing categories too
+    (v.missing_categories || []).forEach(catId => {
+      const cat = (state.catalog.categories || []).find(c => c.id === catId);
+      if (!cat) return;
+      const div = document.createElement("div");
+      div.className = "flex items-center justify-between text-xs opacity-60";
+      div.innerHTML = `<span class="text-slate-500">○</span><span class="flex-1 ml-2 text-slate-500">${esc(cat.label)}</span><span class="text-slate-600">pending</span>`;
+      list.appendChild(div);
+    });
+
+    // Next pick
+    const np = document.getElementById("cart-next-pick");
+    if (v.recommendations && v.recommendations.length) {
+      const r = v.recommendations[0];
+      np.classList.remove("hidden");
+      np.innerHTML = `<div class="text-slate-400 mb-1">Suggested next pick</div><div class="text-slate-200"><span class="text-cyan-300">→</span> ${esc(r.component_name)} <span class="text-slate-500">(${esc(r.category_label)})</span></div>`;
+    } else { np.classList.add("hidden"); }
+
+    // Warnings
+    const w = document.getElementById("cart-warnings");
+    if (v.warnings && v.warnings.length) {
+      w.classList.remove("hidden");
+      w.innerHTML = v.warnings.map(msg => `<div class="text-amber-300">⚠ ${esc(msg)}</div>`).join("");
+    } else { w.classList.add("hidden"); }
+
+    // Continue button
+    const btn = document.getElementById("btn-build-continue");
+    btn.disabled = !v.complete || v.compatibility === "incompatible";
+  }
+
+  document.getElementById("btn-cart-reset").addEventListener("click", async () => {
+    state.cart = []; renderCatalog(); await refreshCartValidation();
+  });
+  document.getElementById("btn-cart-recommend").addEventListener("click", async () => {
+    const r = await api("/api/cart/recommended");
+    state.cart = r.cart; renderCatalog(); await refreshCartValidation();
+  });
+  document.getElementById("btn-build-continue").addEventListener("click", async () => {
+    if (!state.cartValidation?.complete) return;
+    // Load sizing for the underlying stack (UDP)
+    await loadNameScreen();
+    navigate("name");
+  });
+
+  // ===========================================================
+  // ----- NAME YOUR LAKEHOUSE screen (step 3) -----
+  // ===========================================================
+  async function loadNameScreen() {
+    // Pre-fill some pill suggestions
+    const r = await api("/api/lake-names/suggest?n=6");
+    const pills = document.getElementById("name-pills"); pills.innerHTML = "";
+    (r.suggestions || []).forEach(n => {
+      const b = document.createElement("button");
+      b.className = "px-2.5 py-1 rounded-md bg-white/5 hover:bg-cyan-500/15 border border-white/5 text-slate-300 text-xs mono transition";
+      b.textContent = n;
+      b.addEventListener("click", () => { document.getElementById("input-lake-name").value = n; validateName(); });
+      pills.appendChild(b);
+    });
+    // Pre-fill input with one if empty
+    if (!state.lakeName) {
+      const one = await api("/api/lake-names/suggest");
+      document.getElementById("input-lake-name").value = one.suggestions[0] || "";
+      validateName();
+    } else {
+      document.getElementById("input-lake-name").value = state.lakeName;
+      validateName();
+    }
+  }
+
+  async function validateName() {
+    const v = (document.getElementById("input-lake-name").value || "").trim();
+    state.lakeName = v;
+    const fb = document.getElementById("name-feedback");
+    const btn = document.getElementById("btn-name-continue");
+    if (!v) { fb.textContent = "pick a name to continue"; btn.disabled = true; return; }
+    const r = await api("/api/lake-names/validate", { method: "POST", body: JSON.stringify({ name: v }) });
+    if (r.valid) {
+      fb.innerHTML = `<span class="text-emerald-300">✓ '${esc(r.normalized)}' looks good</span>`;
+      btn.disabled = false;
+      state.lakeName = r.normalized;
+    } else {
+      fb.innerHTML = `<span class="text-rose-300">✗ ${esc(r.reason || 'invalid')}</span>`;
+      btn.disabled = true;
+    }
+  }
+
+  document.getElementById("input-lake-name").addEventListener("input", () => validateName());
+  document.getElementById("btn-suggest-name").addEventListener("click", async () => {
+    const r = await api("/api/lake-names/suggest");
+    document.getElementById("input-lake-name").value = r.suggestions[0] || "";
+    validateName();
+  });
+  document.getElementById("btn-name-continue").addEventListener("click", async () => {
+    if (!state.lakeName) return;
+    // Pretend we already picked the UDP stack — it's the only one our cart maps to in v0.3
+    state.selected = { id: "udp-local-v0.2" };
+    navigate("sizing");
+    await loadSizing("udp-local-v0.2");
+  });
+
+  // ===========================================================
   // ----- sizing -----
   async function loadSizing(stackId) {
     const data = await api(`/api/stacks/${stackId}/sizing`);
@@ -1061,6 +1457,9 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     if (!state.inspectReport?.recommended) return;
     const body = { stack_id: state.selected.id, host: state.host };
     if (state.installDir) body.install_dir = state.installDir;
+    if (state.lakeName) body.lake_name = state.lakeName;
+    if (state.goal) body.goal = state.goal;
+    if (state.cart && state.cart.length) body.cart = state.cart;
     const rec = await api("/api/installs", { method: "POST", body: JSON.stringify(body) });
     state.installId = rec.install_id;
     state.installRecord = rec;
@@ -1222,6 +1621,19 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   function showSuccess() {
     const rec = state.installRecord; if (!rec) return;
     navigate("success");
+    // Personalize headline with lake name
+    const name = rec.lake_name || state.lakeName || null;
+    const headline = document.getElementById("success-headline");
+    if (name) {
+      headline.innerHTML = `<span class="grad-text">${esc(name)}</span><br><span class="text-white">is live.</span>`;
+      document.getElementById("success-sub").textContent = `Demo data loaded. Smoke tests passed. Welcome to ${name}.`;
+      document.getElementById("first-action-title").textContent = `Start using ${name}`;
+    } else {
+      headline.innerHTML = `<span class="text-white">Your lakehouse</span><br><span class="grad-text">is live.</span>`;
+      document.getElementById("success-sub").textContent = "Demo data loaded. Smoke tests passed. Connect to any service below.";
+      document.getElementById("first-action-title").textContent = "Start using your lakehouse";
+    }
+    renderFirstActions(rec);
     const urls = document.getElementById("success-urls"); urls.innerHTML = "";
     Object.values(rec.outputs?.urls || {}).forEach(u => {
       const a = document.createElement("a");
@@ -1310,6 +1722,48 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       else ctx.clearRect(0, 0, w, h);
     }
     requestAnimationFrame(frame);
+  }
+
+  function renderFirstActions(rec) {
+    const grid = document.getElementById("first-action-grid");
+    const host = rec.host || "localhost";
+    const name = rec.lake_name || "your lakehouse";
+    const actions = [
+      {
+        icon: "▶",
+        title: "Run a query",
+        body: `Hit StarRocks immediately with the demo data. Use the query bar below or connect via <span class="mono text-cyan-300">mysql -h ${esc(host)} -P 9030 -u root</span>.`,
+        cta: "Try the SQL editor →",
+        anchor: "sql-editor-input",
+      },
+      {
+        icon: "📊",
+        title: "Connect a BI tool",
+        body: `Point Metabase, Superset, or Tableau at StarRocks on <span class="mono text-cyan-300">${esc(host)}:9030</span> (MySQL protocol). All Iceberg tables are queryable.`,
+        cta: "How to connect →",
+        link: "https://docs.starrocks.io/docs/integrations/BI_integrations/",
+      },
+      {
+        icon: "⬆",
+        title: "Load your own data",
+        body: `Drop files in MinIO (<span class="mono text-cyan-300">${esc(host)}:9001</span>), create an Iceberg table via Spark notebook, query from StarRocks.`,
+        cta: "MinIO console →",
+        link: `http://${host}:9001`,
+      },
+    ];
+    grid.innerHTML = "";
+    actions.forEach(a => {
+      const card = document.createElement("div");
+      card.className = "glass glass-hover spot p-5";
+      card.innerHTML = `
+        <div class="text-2xl mb-3">${a.icon}</div>
+        <div class="display-3 mb-2">${esc(a.title)}</div>
+        <div class="text-sm text-slate-400 mb-4 leading-relaxed">${a.body}</div>
+        ${a.link ? `<a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer" class="text-cyan-300 text-sm hover:text-cyan-200">${esc(a.cta)}</a>`
+          : `<button class="text-cyan-300 text-sm hover:text-cyan-200" onclick="document.getElementById('${a.anchor}')?.scrollIntoView({behavior:'smooth'}); document.getElementById('${a.anchor}')?.focus();">${esc(a.cta)}</button>`}
+      `;
+      grid.appendChild(card);
+    });
   }
 
   async function loadStructuredSmoke() {

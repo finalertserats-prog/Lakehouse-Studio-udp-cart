@@ -1,0 +1,181 @@
+# Component Catalog (v0.3 pilot — UDP-only)
+#
+# Per the founding architecture doc, this is the "Knowledge Layer" surface
+# exposed to the Catalog/Cart UI. Each category lists the option(s) the user
+# can pick. For the v0.3 pilot every category has exactly ONE option that's
+# ✓ Compatible — the UDP component. Alternatives are listed under
+# `coming_soon` so the user sees the marketplace nature of the product
+# without picking something we can't actually install yet.
+#
+# Use cases ("goals") map to a recommended set of category picks. For the
+# pilot all goals point at the UDP set.
+
+goals:
+  - id: local_demo
+    label: Local demo
+    summary: Lakehouse on one machine. Great for evaluation and proof-of-concept work.
+    icon: laptop
+    recommended_set: udp-recommended
+    intended_for: ["evaluating", "first-time users", "interview projects"]
+  - id: production_lakehouse
+    label: Production lakehouse
+    summary: Multi-tenant analytics lakehouse for real workloads. Cloud-region friendly.
+    icon: building
+    recommended_set: udp-recommended
+    intended_for: ["mid-size companies", "data platform teams"]
+  - id: ai_research
+    label: AI / ML research platform
+    summary: Lakehouse plus columnar serving — feature stores, vector search, BI on the side.
+    icon: sparkles
+    recommended_set: udp-recommended
+    intended_for: ["ML teams", "research labs"]
+  - id: analytics_layer
+    label: Analytics-only
+    summary: Lakehouse storage + serving without orchestration. Add Airflow/Dagster later.
+    icon: chart
+    recommended_set: udp-recommended
+    intended_for: ["BI teams adding open formats"]
+  - id: air_gapped
+    label: Air-gapped / on-prem
+    summary: For regulated industries — runs entirely inside customer infrastructure with no outbound traffic.
+    icon: shield
+    recommended_set: udp-recommended
+    intended_for: ["healthcare", "BFSI", "government"]
+
+recommended_sets:
+  udp-recommended:
+    name: UDP Reference Stack
+    components: [iceberg, iceberg-rest, minio, spark-iceberg, starrocks]
+    stack_id: udp-local-v0.2
+
+categories:
+  - id: table_format
+    label: Table format
+    description: How table data is laid out on object storage. Sets the foundation for everything else.
+    order: 1
+    components:
+      - id: iceberg
+        name: Apache Iceberg
+        version: "1.6.0"
+        maturity: ga
+        recommended: true
+        badges: [Recommended, Stable]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation
+        url: https://iceberg.apache.org
+        summary: Open table format with schema evolution, time travel, and hidden partitioning. The de-facto choice for Spark + Trino + StarRocks workflows.
+        compatible_with: [iceberg-rest, spark-iceberg, starrocks]
+    coming_soon:
+      - { name: "Apache Hudi", reason: "Different transactional model; tested combinations TBD" }
+      - { name: "Delta Lake", reason: "Databricks-led; tested combinations TBD" }
+
+  - id: catalog
+    label: Table catalog
+    description: Registry of table metadata (schemas, partitions, snapshot locations). Sits between processing engines and storage.
+    order: 2
+    components:
+      - id: iceberg-rest
+        name: Iceberg REST Catalog
+        version: "1.6.0"
+        maturity: ga
+        recommended: true
+        badges: [Recommended, Stable]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Iceberg community
+        url: https://iceberg.apache.org/concepts/catalog/
+        summary: Spec-compliant REST catalog server. Lightweight, no Postgres dependency, scales horizontally. Works with every modern Iceberg client.
+        compatible_with: [iceberg, spark-iceberg, starrocks]
+    coming_soon:
+      - { name: "Lakekeeper", reason: "Multi-tenant Iceberg REST; smoke tests pending" }
+      - { name: "Project Nessie", reason: "Branching semantics, git-for-data" }
+      - { name: "Apache Polaris", reason: "Snowflake-incubated open catalog" }
+      - { name: "Hive Metastore", reason: "Legacy support — slated for v0.5" }
+
+  - id: object_storage
+    label: Object storage
+    description: Where table files actually live. S3-compatible API across all options.
+    order: 3
+    components:
+      - id: minio
+        name: MinIO (self-hosted)
+        version: "RELEASE.2025-04-22T22-12-26Z"
+        maturity: ga
+        recommended: true
+        badges: [Recommended, Stable]
+        compatible: true
+        license: AGPL-3.0
+        maintainer: MinIO Inc.
+        url: https://min.io
+        summary: S3-compatible object store you control. Default for the UDP pilot; perfect for dev / on-prem / air-gapped. Swap to managed S3/GCS/Azure for cost-effective production.
+        compatible_with: [iceberg-rest, spark-iceberg]
+        production_note: For production at scale, migrate to AWS S3 / GCS / Azure Blob — same S3 API, lower operational burden.
+    coming_soon:
+      - { name: "AWS S3", reason: "Most common production target — config wizard pending" }
+      - { name: "Google GCS", reason: "Same S3 API surface; needs creds-handling UI" }
+      - { name: "Azure Blob Storage", reason: "Same S3 API surface; needs creds-handling UI" }
+
+  - id: processing
+    label: Processing engine
+    description: Where ETL / batch / streaming jobs run. Reads/writes table files via the catalog.
+    order: 4
+    components:
+      - id: spark-iceberg
+        name: Apache Spark + Iceberg
+        version: "3.5.1_1.5.2"
+        maturity: ga
+        recommended: true
+        badges: [Recommended, Stable]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation
+        url: https://spark.apache.org
+        summary: Industry-standard processing engine with first-class Iceberg support. Includes a Jupyter notebook UI for interactive exploration.
+        compatible_with: [iceberg, iceberg-rest, minio]
+    coming_soon:
+      - { name: "Trino", reason: "Federated SQL; planned for v0.4" }
+      - { name: "Apache Flink", reason: "Streaming-first; planned for v0.5" }
+      - { name: "Dremio", reason: "BI-focused lakehouse engine" }
+
+  - id: serving
+    label: Analytics / serving engine
+    description: Fast SQL for dashboards, BI tools, and ad-hoc queries. Reads from the catalog at MPP speed.
+    order: 5
+    components:
+      - id: starrocks
+        name: StarRocks (FE + BE)
+        version: "3.3"
+        maturity: ga
+        recommended: true
+        badges: [Recommended, Stable]
+        compatible: true
+        license: Apache-2.0
+        maintainer: StarRocks community
+        url: https://starrocks.io
+        summary: MPP analytics database with native Iceberg external catalog. Reads Iceberg tables directly without copying data — single-digit-second query latency.
+        compatible_with: [iceberg, iceberg-rest]
+    coming_soon:
+      - { name: "ClickHouse", reason: "OLAP serving alternative; pending Iceberg-via-external-catalog validation" }
+      - { name: "Trino", reason: "Same component as processing — could play both roles" }
+      - { name: "Apache Druid", reason: "Real-time analytics; planned for v0.6" }
+
+  - id: orchestration
+    label: Orchestrator (optional)
+    description: Schedules data pipelines. Defer for analytics-only stacks; add for production ETL.
+    order: 6
+    optional: true
+    components: []
+    coming_soon:
+      - { name: "Dagster", reason: "Asset-first; the doc's recommended choice — v0.4" }
+      - { name: "Apache Airflow", reason: "Industry standard; v0.4 with Postgres auto-add" }
+
+  - id: observability
+    label: Observability (optional)
+    description: Metrics + dashboards for the lakehouse itself. Defer for pilot.
+    order: 7
+    optional: true
+    components: []
+    coming_soon:
+      - { name: "Prometheus + Grafana", reason: "Bundled monitoring; v0.4" }
+      - { name: "Loki", reason: "Log aggregation; v0.5" }

@@ -15,8 +15,10 @@ from .config import ROOT, WORK_DIR
 from .events import bus
 from .inspector import inspect
 from .models import InstallRequest, InspectionReport
+from .catalog import categories as catalog_categories, goals as catalog_goals, recommended_sets as catalog_recommended_sets
 from .demo_query import list_queries, run_demo_query
 from .error_explainer import explain as explain_error
+from .lake_namer import suggest as suggest_lake_names, is_valid as is_valid_lake_name, normalize as normalize_lake_name
 from .paths import InstallDirError, validate_install_dir
 from .providers import match_plans, cheapest_overall
 from .runner import UDPRunner, make_steps, mark_step_skipped, retry_install, run_command
@@ -60,6 +62,54 @@ AuthDep = Depends(_require_auth)
 @app.get("/api/auth/status")
 def auth_status():
     return {"auth_required": bool(AUTH_TOKEN)}
+
+
+# ---------- Catalog / Goals (the "shop" surface) ----------
+
+@app.get("/api/catalog", dependencies=[AuthDep])
+def get_catalog():
+    """Component catalog: categories + their pickable components + alternates marked coming-soon."""
+    return {"categories": catalog_categories(), "goals": catalog_goals(), "recommended_sets": catalog_recommended_sets()}
+
+
+@app.get("/api/goals", dependencies=[AuthDep])
+def get_goals():
+    return catalog_goals()
+
+
+# ---------- Cart validation ----------
+
+class CartRequest(BaseModel):
+    cart: list[str]
+
+
+@app.post("/api/cart/validate", dependencies=[AuthDep])
+def post_cart_validate(body: CartRequest):
+    from .cart import validate_cart
+    return validate_cart(body.cart)
+
+
+@app.get("/api/cart/recommended", dependencies=[AuthDep])
+def get_recommended_cart():
+    from .cart import recommended_cart
+    return {"cart": recommended_cart()}
+
+
+# ---------- Lake names ----------
+
+@app.get("/api/lake-names/suggest", dependencies=[AuthDep])
+def get_lake_name_suggestion(n: int = 1):
+    return {"suggestions": suggest_lake_names(max(1, min(n, 20)))}
+
+
+class LakeNameValidateRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/lake-names/validate", dependencies=[AuthDep])
+def post_lake_name_validate(body: LakeNameValidateRequest):
+    ok, why = is_valid_lake_name(body.name)
+    return {"valid": ok, "reason": why if not ok else None, "normalized": normalize_lake_name(body.name)}
 
 
 # ---------- Stacks ----------
@@ -168,11 +218,22 @@ async def create_install(body: InstallRequest):
     except InstallDirError as e:
         raise HTTPException(400, f"install_dir rejected: {e}")
 
+    # Validate / normalize lake name if provided
+    lake_name = None
+    if body.lake_name:
+        ok, why = is_valid_lake_name(body.lake_name)
+        if not ok:
+            raise HTTPException(400, f"lake_name rejected: {why}")
+        lake_name = normalize_lake_name(body.lake_name)
+
     rec = store.create(
         stack_id=m.id,
         host=body.host,
         install_dir=str(install_dir),
         steps=make_steps(m),
+        lake_name=lake_name,
+        goal=body.goal,
+        cart=body.cart or [],
     )
 
     runner = UDPRunner(m, rec.install_id, body.host, install_dir)

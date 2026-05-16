@@ -39,6 +39,9 @@ class InstallRequest(BaseModel):
     host: str = "localhost"
     install_dir: Optional[str] = None
     env_overrides: dict[str, str] = Field(default_factory=dict)
+    lake_name: Optional[str] = None
+    goal: Optional[str] = None
+    cart: Optional[list[str]] = None
 
 
 class StepStatus(BaseModel):
@@ -62,6 +65,9 @@ class InstallRecord(BaseModel):
     steps: list[StepStatus]
     error: Optional[str] = None
     outputs: dict[str, Any] = Field(default_factory=dict)
+    lake_name: Optional[str] = None
+    goal: Optional[str] = None
+    cart: list[str] = Field(default_factory=list)
 
 
 class LogEvent(BaseModel):
