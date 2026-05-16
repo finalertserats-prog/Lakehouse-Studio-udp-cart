@@ -21,30 +21,50 @@ components:
     version: RELEASE.2025-04-22T22-12-26Z
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     ports: [9000, 9001]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2, disk_gb: 20 }
+      recommended: { cpu: 2, ram_gb: 4, disk_gb: 50 }
+      comfortable: { cpu: 4, ram_gb: 8, disk_gb: 200 }
   - id: iceberg-rest
     name: Iceberg REST Catalog
     category: catalog
     version: "1.6.0"
     image: tabulario/iceberg-rest:1.6.0
     ports: [8181]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1, disk_gb: 2 }
+      recommended: { cpu: 1, ram_gb: 2, disk_gb: 5 }
+      comfortable: { cpu: 2, ram_gb: 4, disk_gb: 10 }
   - id: spark
     name: Spark + Iceberg
     category: processing
     version: 3.5.1_1.5.2
     image: tabulario/spark-iceberg:3.5.1_1.5.2
     ports: [8888, 4040]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 20 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 40 }
   - id: starrocks-fe
     name: StarRocks Frontend
     category: serving
     version: 3.3-latest
     image: starrocks/fe-ubuntu:3.3-latest
     ports: [8030, 9020, 9030]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2, disk_gb: 5 }
+      recommended: { cpu: 2, ram_gb: 4, disk_gb: 10 }
+      comfortable: { cpu: 2, ram_gb: 8, disk_gb: 20 }
   - id: starrocks-be
     name: StarRocks Backend
     category: serving
     version: 3.3-latest
     image: starrocks/be-ubuntu:3.3-latest
     ports: [8040, 8060, 9050, 9060]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 20 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 50 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 200 }
 
 requirements:
   os: [linux, windows-docker-desktop, darwin]

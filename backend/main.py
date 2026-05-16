@@ -15,8 +15,11 @@ from .config import ROOT, WORK_DIR
 from .events import bus
 from .inspector import inspect
 from .models import InstallRequest, InspectionReport
+from .demo_query import list_queries, run_demo_query
 from .paths import InstallDirError, validate_install_dir
+from .providers import match_plans, cheapest_overall
 from .runner import UDPRunner, make_steps, run_command
+from .sizer import size_stack
 from .stack_manifest import list_manifests, load_manifest
 from .state import store
 
@@ -76,6 +79,26 @@ def get_stacks():
         }
         for m in manifests
     ]
+
+
+@app.get("/api/stacks/{stack_id}/sizing", dependencies=[AuthDep])
+def get_stack_sizing(stack_id: str):
+    """Per-tier resource totals + matched VPS plans + cheapest overall."""
+    try:
+        m = load_manifest(stack_id)
+    except KeyError:
+        raise HTTPException(404, f"Stack {stack_id} not found")
+    tiers = size_stack(m)
+    out = {"stack_id": m.id, "name": m.name, "tiers": {}}
+    for tier_name, tier in tiers.items():
+        matches = match_plans(tier["totals"])
+        cheapest = cheapest_overall(tier["totals"])
+        out["tiers"][tier_name] = {
+            **tier,
+            "matched_providers": matches,
+            "cheapest_overall": cheapest,
+        }
+    return out
 
 
 @app.get("/api/stacks/{stack_id}", dependencies=[AuthDep])
@@ -158,6 +181,29 @@ async def cancel_install(install_id: str):
         raise HTTPException(404, "no running install task")
     task.cancel()
     return {"cancelled": True}
+
+
+@app.get("/api/demo-queries", dependencies=[AuthDep])
+def get_demo_queries():
+    return list_queries()
+
+
+class DemoQueryRequest(BaseModel):
+    query_id: str
+
+
+@app.post("/api/installs/{install_id}/demo-query", dependencies=[AuthDep])
+async def post_demo_query(install_id: str, body: DemoQueryRequest):
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state != "READY":
+        raise HTTPException(409, f"install is in state {rec.state}; READY required")
+    try:
+        result = await run_demo_query(body.query_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    return result
 
 
 @app.on_event("shutdown")

@@ -76,6 +76,45 @@
     <div id="stack-list" class="grid grid-cols-1 gap-4"></div>
   </section>
 
+  <!-- SIZING -->
+  <section id="screen-sizing" class="screen hidden">
+    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3" onclick="navigate('stacks')">← Back to stacks</button>
+    <h2 class="text-2xl font-semibold mb-1">Pick a size</h2>
+    <p class="text-slate-400 mb-6">How big does the server need to be? We sized each tier from the components in your stack plus host overhead, then matched real VPS plans.</p>
+    <div id="sizing-tiers" class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6"></div>
+
+    <div class="rounded-2xl border border-slate-800 bg-slate-900 p-5 mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-semibold">Custom size</h3>
+        <span class="text-xs text-slate-500">override any tier — Studio recommends the cheapest matching VPS plan</span>
+      </div>
+      <div class="grid grid-cols-3 gap-4">
+        <label class="block">
+          <div class="text-xs text-slate-400 mb-1">vCPU cores</div>
+          <input id="size-cpu" type="number" min="2" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
+        </label>
+        <label class="block">
+          <div class="text-xs text-slate-400 mb-1">RAM (GB)</div>
+          <input id="size-ram" type="number" min="4" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
+        </label>
+        <label class="block">
+          <div class="text-xs text-slate-400 mb-1">Disk (GB)</div>
+          <input id="size-disk" type="number" min="40" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
+        </label>
+      </div>
+      <div class="text-xs text-slate-500 mt-2">Tip: editing these only changes the VPS recommendation. Actual install uses the server you connect to.</div>
+    </div>
+
+    <h3 class="text-lg font-semibold mb-3">Matched VPS plans</h3>
+    <div id="provider-list" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6"></div>
+    <div class="text-xs text-slate-500 mb-6">Prices are approximate USD/month as of early 2026. Always verify on the provider's pricing page before purchasing. Storage and bandwidth quoted are what the plan includes; UDP only needs about <span id="provider-disk-need">?</span> GB at this tier.</div>
+
+    <div class="flex items-center gap-3">
+      <button id="btn-to-server" class="px-5 py-2 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold">I have my server — continue →</button>
+      <button class="text-sm text-slate-400 hover:text-slate-200" onclick="navigate('stacks')">Cancel</button>
+    </div>
+  </section>
+
   <!-- SERVER -->
   <section id="screen-server" class="screen hidden">
     <button class="text-sm text-slate-400 hover:text-slate-200 mb-3" onclick="navigate('stacks')">← Back to stacks</button>
@@ -170,6 +209,12 @@
     </div>
 
     <div id="success-evidence" class="text-xs text-slate-500 mono mb-4"></div>
+
+    <h3 class="text-lg font-semibold mb-3 mt-8">Try a demo query</h3>
+    <div class="rounded-xl border border-slate-800 bg-slate-900 p-4 mb-2">
+      <div id="demo-query-buttons" class="flex flex-wrap gap-2"></div>
+    </div>
+    <div id="demo-query-result" class="rounded-xl border border-slate-800 bg-black/70 p-4 mb-6 text-xs mono min-h-[60px] text-slate-300 overflow-x-auto"></div>
 
     <h3 class="text-lg font-semibold mb-3 mt-8">Day-2 operations</h3>
     <div class="rounded-xl border border-slate-800 bg-slate-900 p-4 flex flex-wrap gap-2">
@@ -272,13 +317,136 @@
         <div class="flex flex-wrap gap-1 mb-4">${comps}</div>
         <div class="text-xs text-slate-500">Min RAM ${esc(s.requirements.minimum_ram_gb || '?')} GB · Ports ${(s.ports.required || []).join(', ')}</div>
       `;
-      div.addEventListener("click", () => {
+      div.addEventListener("click", async () => {
         state.selected = s;
-        navigate("server");
+        navigate("sizing");
+        await loadSizing(s.id);
       });
       list.appendChild(div);
     });
   }
+
+  // ----- sizing -----
+  async function loadSizing(stackId) {
+    const data = await api(`/api/stacks/${stackId}/sizing`);
+    state.sizing = data;
+    state.selectedTier = "recommended";
+    renderTiers();
+    const t = data.tiers[state.selectedTier];
+    setCustomSize(t.totals);
+    await refreshProviders();
+  }
+
+  function renderTiers() {
+    const wrap = document.getElementById("sizing-tiers");
+    wrap.innerHTML = "";
+    const tierOrder = ["minimal", "recommended", "comfortable"];
+    tierOrder.forEach(name => {
+      const t = state.sizing.tiers[name];
+      const selected = state.selectedTier === name;
+      const div = document.createElement("div");
+      div.className = "rounded-xl border p-5 cursor-pointer transition " +
+        (selected ? "border-cyan-500 bg-cyan-950/30" : "border-slate-800 bg-slate-900 hover:border-cyan-700");
+      const cheapest = t.cheapest_overall;
+      const priceTag = cheapest
+        ? `<div class="text-xs text-cyan-300 mt-2">from <span class="font-semibold">$${cheapest.usd_month}/mo</span> · ${esc(cheapest.provider_name)}</div>`
+        : `<div class="text-xs text-rose-400 mt-2">no listed VPS plan fits</div>`;
+      const compList = t.components.map(c => `<div class="flex justify-between"><span class="text-slate-400">${esc(c.name)}</span><span class="mono text-slate-300">${c.cpu}c · ${c.ram_gb}G · ${c.disk_gb}G</span></div>`).join("");
+      div.innerHTML = `
+        <div class="flex items-baseline justify-between mb-1">
+          <div class="font-semibold text-lg">${esc(t.label)}</div>
+          ${selected ? '<span class="text-xs text-cyan-300">✓ selected</span>' : ''}
+        </div>
+        <div class="text-xs text-slate-400 mb-3">${esc(t.blurb)}</div>
+        <div class="mono text-sm text-slate-200 mb-1">${t.totals.cpu} vCPU · ${t.totals.ram_gb} GB RAM · ${t.totals.disk_gb} GB disk</div>
+        <div class="text-xs text-slate-500 mb-3">incl. host overhead ${t.overhead.cpu}c / ${t.overhead.ram_gb}G / ${t.overhead.disk_gb}G</div>
+        <details class="text-xs text-slate-400">
+          <summary class="cursor-pointer hover:text-slate-200">per-component breakdown</summary>
+          <div class="mt-2 space-y-1">${compList}</div>
+        </details>
+        ${priceTag}
+      `;
+      div.addEventListener("click", async () => {
+        state.selectedTier = name;
+        renderTiers();
+        setCustomSize(t.totals);
+        await refreshProviders();
+      });
+      wrap.appendChild(div);
+    });
+  }
+
+  function setCustomSize(totals) {
+    document.getElementById("size-cpu").value = totals.cpu;
+    document.getElementById("size-ram").value = totals.ram_gb;
+    document.getElementById("size-disk").value = totals.disk_gb;
+  }
+
+  function currentCustomTotals() {
+    return {
+      cpu: Math.max(1, parseInt(document.getElementById("size-cpu").value || "0", 10)),
+      ram_gb: Math.max(1, parseInt(document.getElementById("size-ram").value || "0", 10)),
+      disk_gb: Math.max(1, parseInt(document.getElementById("size-disk").value || "0", 10)),
+    };
+  }
+
+  async function refreshProviders() {
+    const totals = currentCustomTotals();
+    document.getElementById("provider-disk-need").textContent = totals.disk_gb;
+    // Pull match results client-side from the loaded sizing data when the
+    // custom values match a tier; otherwise, request server-side filtering.
+    // Cheaper: re-use the tiers' matched_providers list and re-filter here.
+    const allPlans = [];
+    for (const tier of Object.values(state.sizing.tiers)) {
+      for (const prov of tier.matched_providers) {
+        for (const p of (prov.fitting_plans || [])) {
+          allPlans.push({...p, provider_id: prov.provider_id, provider_name: prov.provider_name, provider_url: prov.provider_url, notes: prov.notes});
+        }
+      }
+    }
+    // Dedup by plan id, then filter by custom totals.
+    const seen = new Set(); const fitting = [];
+    for (const p of allPlans) {
+      if (seen.has(p.id)) continue; seen.add(p.id);
+      if (p.cpu >= totals.cpu && p.ram_gb >= totals.ram_gb && p.disk_gb >= totals.disk_gb) {
+        fitting.push(p);
+      }
+    }
+    fitting.sort((a, b) => a.usd_month - b.usd_month);
+
+    const list = document.getElementById("provider-list");
+    list.innerHTML = "";
+    if (!fitting.length) {
+      list.innerHTML = `<div class="md:col-span-2 rounded-xl border border-rose-800/50 bg-rose-950/30 p-5 text-sm text-rose-200">No catalogued plan fits this size. Try lowering CPU/RAM, or check the provider sites directly — many offer larger custom plans not listed here.</div>`;
+      return;
+    }
+    fitting.forEach((p, i) => {
+      const div = document.createElement("a");
+      div.href = p.provider_url; div.target = "_blank"; div.rel = "noopener noreferrer";
+      div.className = "block rounded-xl border p-4 hover:border-cyan-500 transition " +
+        (i === 0 ? "border-cyan-700 bg-cyan-950/20" : "border-slate-800 bg-slate-900");
+      div.innerHTML = `
+        <div class="flex items-baseline justify-between mb-1">
+          <div class="font-semibold">${esc(p.provider_name)}</div>
+          <div class="text-cyan-300 font-semibold">$${p.usd_month}/mo</div>
+        </div>
+        <div class="text-sm mono text-slate-200 mb-1">${esc(p.plan)}</div>
+        <div class="text-xs text-slate-500 mb-2">${p.cpu} vCPU · ${p.ram_gb} GB RAM · ${p.disk_gb} GB disk · ${p.traffic_tb} TB traffic</div>
+        <div class="text-xs text-slate-500">${esc(p.location)}</div>
+        ${i === 0 ? '<div class="text-xs text-cyan-300 mt-2">✓ cheapest fit</div>' : ''}
+      `;
+      list.appendChild(div);
+    });
+  }
+
+  // Recompute providers when user edits custom inputs
+  ["size-cpu", "size-ram", "size-disk"].forEach(id => {
+    document.getElementById(id).addEventListener("input", () => refreshProviders());
+  });
+
+  document.getElementById("btn-to-server").addEventListener("click", () => {
+    navigate("server");
+  });
 
   // ----- server / inspect -----
   document.getElementById("btn-inspect").addEventListener("click", () => {
@@ -505,6 +673,61 @@
       ev.textContent = `evidence captured at ${rec.outputs.evidence_dir}`;
     } else {
       ev.textContent = "";
+    }
+    loadDemoQueries();
+  }
+
+  async function loadDemoQueries() {
+    const btnWrap = document.getElementById("demo-query-buttons");
+    btnWrap.innerHTML = "";
+    let queries;
+    try { queries = await api("/api/demo-queries"); } catch (e) { btnWrap.textContent = e.message; return; }
+    queries.forEach(q => {
+      const b = document.createElement("button");
+      b.className = "px-3 py-1.5 rounded bg-slate-800 hover:bg-cyan-700 text-sm";
+      b.textContent = q.label;
+      b.title = q.description;
+      b.addEventListener("click", () => runDemoQuery(q.id, q.label));
+      btnWrap.appendChild(b);
+    });
+  }
+
+  async function runDemoQuery(queryId, label) {
+    const out = document.getElementById("demo-query-result");
+    out.textContent = `> running: ${label} …`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/demo-query`, {
+        method: "POST",
+        body: JSON.stringify({ query_id: queryId }),
+      });
+      if (r.error) {
+        out.innerHTML = `<div class="text-rose-400">ERROR: ${esc(r.error)}</div>`;
+        return;
+      }
+      // Render as table
+      const t = document.createElement("table");
+      t.className = "min-w-full text-xs";
+      const thead = document.createElement("thead"); thead.className = "border-b border-slate-700";
+      const trh = document.createElement("tr");
+      (r.columns || []).forEach(c => {
+        const th = document.createElement("th"); th.className = "text-left px-2 py-1 text-cyan-300"; th.textContent = c;
+        trh.appendChild(th);
+      });
+      thead.appendChild(trh); t.appendChild(thead);
+      const tb = document.createElement("tbody");
+      (r.rows || []).forEach(row => {
+        const tr = document.createElement("tr"); tr.className = "border-b border-slate-800/50";
+        row.forEach(v => { const td = document.createElement("td"); td.className = "px-2 py-1"; td.textContent = v; tr.appendChild(td); });
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      out.innerHTML = "";
+      const meta = document.createElement("div"); meta.className = "text-slate-500 mb-2";
+      meta.textContent = `${r.row_count} row(s) · sql: ${r.sql}`;
+      out.appendChild(meta);
+      out.appendChild(t);
+    } catch (e) {
+      out.innerHTML = `<div class="text-rose-400">${esc(e.message)}</div>`;
     }
   }
 
