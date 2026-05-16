@@ -496,7 +496,7 @@ destinations:
   - id: insyght
     name: Insyght
     category: bi_analytics
-    logo: /assets/logos/insyght.svg
+    logo: /assets/logos/insyght.png
     tagline: "Conversational BI on top of your lakehouse"
     summary: >
       Ask questions in plain English; Insyght composes SQL against your
