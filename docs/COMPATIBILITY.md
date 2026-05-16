@@ -72,3 +72,14 @@ When a contributor proposes adding a new component (e.g. swapping Spark for Trin
 - **Nightly canary run:** CI workflow that runs the full install on the certified stack against current registries, alerting if a previously-working tag has disappeared.
 - **Compatibility solver UI:** when the cart screen shows alternates ("coming soon: Trino, Flink"), the underlying compatibility matrix gates them — clicking a non-validated combination shows a clear "this combination is not certified; here's what you'd need to validate" prompt.
 - **PR-driven matrix expansion:** community contributors submit lock-file updates as PRs with evidence; merged PRs flow into the next Studio release's catalog.
+
+## Upgrade Planner (v0.4)
+
+The Upgrade Planner lets operators see *what could be bumped* in a certified stack without touching the lock file. Candidates live in a sibling YAML next to the lock — e.g. `stacks/compatibility/udp-local-v0.2.upgrades.yaml` — and the loader rejects any candidate tag that hasn't been confirmed via `docker manifest inspect` ahead of time.
+
+Two read-only routes drive the surface:
+
+- `GET /api/stacks/{stack_id}/upgrades` — returns one row per candidate with the current lock tag, the candidate tag, the source (`hand_curated` for now), and a feasibility hint if a prior simulate has been cached.
+- `POST /api/stacks/{stack_id}/upgrades/simulate` — body `{proposed: {component_id: tag}}`. Overlays the proposed tags on the lock (never mutating it), reruns the registry precheck on the overlay, walks `incompatible[]` for known-bad combos, and classifies every `constraints[]` rule as `pass` (proposed doesn't touch the pair), `pass-cached` (a prior `pairwise_tested` entry confirms it), or `unknown` (touches but no cached evidence). Aggregation: any `fail` → `fail`; any `unknown` → `unknown`; else `pass`.
+
+The planner deliberately stops at *simulation*. Applying an upgrade — that requires a backup_id and a re-entry through the install pipeline — is deferred to v0.4.1 so we don't ship a one-way door before the rollback story is wired up.

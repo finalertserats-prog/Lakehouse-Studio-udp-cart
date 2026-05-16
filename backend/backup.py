@@ -372,6 +372,15 @@ async def restore_backup(
                 m.name = m.name[len("install_dir/"):]
                 if not m.name:
                     continue
+                # Zip-slip guard: reject any member whose resolved path escapes
+                # install_dir. Defense-in-depth — backups are produced by our
+                # own create_backup today, but a future "import backup" flow
+                # could expose us to hostile archives.
+                resolved = (install_dir / m.name).resolve()
+                if not str(resolved).startswith(str(install_dir.resolve())):
+                    raise BackupError(
+                        f"refusing to extract {m.name!r}: escapes install_dir"
+                    )
                 tar.extract(m, path=install_dir)
             _step("extract-metadata", "passed",
                   f"{len(install_members)} entries -> {install_dir}")
@@ -383,6 +392,12 @@ async def restore_backup(
                     m.name = m.name[len("minio_data/"):]
                     if not m.name:
                         continue
+                    # Same zip-slip guard for the minio scratch dir.
+                    resolved = (minio_scratch / m.name).resolve()
+                    if not str(resolved).startswith(str(minio_scratch.resolve())):
+                        raise BackupError(
+                            f"refusing to extract {m.name!r}: escapes minio_scratch"
+                        )
                     tar.extract(m, path=minio_scratch)
                 _step("extract-minio", "passed", f"{len(minio_members)} entries staged")
             elif rec.kind == "full":

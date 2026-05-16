@@ -30,6 +30,23 @@ from .config import ROOT
 COMPAT_DIR = ROOT / "stacks" / "compatibility"
 
 
+# Strict docker image:tag regex. We pass image refs to `docker manifest inspect`
+# via subprocess_exec (no shell), so injection isn't a concern, BUT a malformed
+# ref can be misinterpreted by docker itself (e.g. "--rm" parsed as a flag).
+# Reject anything not matching real docker naming conventions before exec.
+import re as _re
+_DOCKER_IMAGE_RE = _re.compile(r"^[a-z0-9][a-z0-9._\-/]{0,254}$")
+_DOCKER_TAG_RE = _re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}$")
+
+
+def _safe_image_ref(image: str, tag: str) -> bool:
+    """True iff image+tag look like real docker refs. Use before subprocess_exec."""
+    return bool(
+        isinstance(image, str) and isinstance(tag, str)
+        and _DOCKER_IMAGE_RE.match(image) and _DOCKER_TAG_RE.match(tag)
+    )
+
+
 class CompatibilityError(ValueError):
     """A stack's lock file is missing, malformed, or contradicts the catalog."""
 
@@ -106,6 +123,9 @@ async def precheck_image_availability(stack_id: str, timeout: int = 10) -> dict:
     checks: list[dict] = []
 
     async def _check_one(image: str, tag: str) -> dict:
+        if not _safe_image_ref(image, tag):
+            return {"image": image, "tag": tag, "status": "unknown",
+                    "detail": "refused: image/tag does not match docker naming rules"}
         ref = f"{image}:{tag}"
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -229,6 +249,9 @@ async def simulate_upgrade(stack_id: str, proposed: dict[str, str]) -> dict[str,
     image_checks: list[dict] = []
     if shutil.which("docker") is not None:
         async def _check_one_overlay(image: str, tag: str) -> dict:
+            if not _safe_image_ref(image, tag):
+                return {"image": image, "tag": tag, "status": "unknown",
+                        "detail": "refused: image/tag does not match docker naming rules"}
             ref = f"{image}:{tag}"
             try:
                 proc = await asyncio.create_subprocess_exec(

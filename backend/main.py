@@ -52,6 +52,7 @@ from .structured_smoke import run_structured_smoke
 from . import ingest as ingest_mod
 from . import table_explorer
 from . import backup as backup_mod
+from . import tls_wizard as tls_mod
 
 app = FastAPI(title="LakeHouse Studio", version="0.1.0")
 
@@ -617,6 +618,104 @@ async def post_uninstall(install_id: str):
     except UninstallError as e:
         raise HTTPException(409, str(e))
     return result
+
+
+# ---------- TLS + Password rotation wizard (post-install opt-in hardening) ----------
+
+# Cert generation is additive — never touches the install pipeline or the
+# compose patcher. Self-signed certs land in WORK_DIR/tls/{install_id}/ with
+# a sidecar manifest so list/get/delete don't have to parse PEM. The wizard
+# also exposes password rotation for MinIO (.env edit) and StarRocks
+# (returns SQL — env-var rotation does not work for the StarRocks root user).
+
+
+def _public_cert(rec: tls_mod.GeneratedCert) -> dict:
+    """Strip key_path from any cert record before returning it over the API.
+    The private key MUST never leave the server filesystem."""
+    data = rec.model_dump()
+    data.pop("key_path", None)
+    return data
+
+
+@app.post("/api/installs/{install_id}/tls/generate", dependencies=[AuthDep])
+async def post_tls_generate(install_id: str, body: tls_mod.CertSpec):
+    """Generate a TLS cert for the given install. Returns the public cert
+    record (cert_id + fingerprint + metadata) — never the key path."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    try:
+        if body.kind == "self_signed":
+            generated = await tls_mod.generate_self_signed(install_id, body)
+        else:
+            generated = await tls_mod.generate_letsencrypt(install_id, body)
+    except NotImplementedError as e:
+        raise HTTPException(501, str(e))
+    except RuntimeError as e:
+        # cryptography package missing or signing failed.
+        raise HTTPException(503, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _public_cert(generated)
+
+
+@app.get("/api/installs/{install_id}/tls/certs", dependencies=[AuthDep])
+def get_tls_certs(install_id: str):
+    """List public cert metadata for an install. Key paths are scrubbed."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    return {"certs": [_public_cert(c) for c in tls_mod.list_certs(install_id)]}
+
+
+@app.delete("/api/tls/certs/{cert_id}", status_code=204, dependencies=[AuthDep])
+def delete_tls_cert(cert_id: str):
+    """Remove cert + key + sidecar. 404 if cert_id is unknown."""
+    try:
+        tls_mod.delete_cert(cert_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return None
+
+
+class PasswordRotateRequest(BaseModel):
+    service: str = Field(min_length=1, max_length=32)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/installs/{install_id}/security/rotate-password", dependencies=[AuthDep])
+async def post_rotate_password(install_id: str, body: PasswordRotateRequest):
+    """Rotate the root password for minio or starrocks. The rotate function
+    never returns the password and never logs it."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if body.service not in ("minio", "starrocks"):
+        raise HTTPException(400, f"unknown service {body.service!r}; expected 'minio' or 'starrocks'")
+    try:
+        return await tls_mod.rotate_password(
+            install_id,
+            body.service,  # type: ignore[arg-type]
+            body.new_password,
+            running_states=RUNNING_STATES,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class PasswordStrengthRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/installs/{install_id}/security/password-strength", dependencies=[AuthDep])
+def post_password_strength(install_id: str, body: PasswordStrengthRequest):
+    """Pre-submit strength check. Helper for the UI; mirrors server rules so
+    the UI never proposes a password the server will reject. NEVER logs the
+    password."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    return tls_mod.password_strength_hint(body.password)
 
 
 # ---------- Backup / Restore ----------
