@@ -3779,9 +3779,9 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     errEl.classList.add("hidden");
     root.innerHTML = `<div class="v04-empty">Loading notification config…</div>`;
     try {
-      const r = await api(`/api/notifications/config`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
+      // api() already returns parsed JSON (not a Response object). Don't
+      // re-call .ok / .json() on it.
+      const data = await api(`/api/notifications/config`);
       const d = data.data || data;
       const channels = d.channels || d;
       const keys = Object.keys(channels || {});

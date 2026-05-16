@@ -73,6 +73,22 @@ templates:
     pending_components: []
     compliance_tags: []
 
+  - id: production_lakehouse
+    label: Production Lakehouse
+    icon: cube
+    elevator_pitch: General-purpose open lakehouse for real workloads — no vertical assumptions.
+    persona: Data platform team / mid-size company
+    intended_for: ["production analytics", "multi-team data platforms", "any-industry lakehouses"]
+    anti_use_cases: ["sub-second OLTP", "regulated PHI without your own controls (use Healthcare template)"]
+    recommended_set: udp-recommended
+    readiness: pilot
+    hero_use_cases: ["Multi-engine reads against the same Iceberg tables", "Run BI + ETL + ad-hoc SQL on one open stack"]
+    pending_components:
+      - { name: Dagster, role: orchestration, eta: v0.4, reason: "Asset-first scheduling for production ETL" }
+      - { name: Trino, role: federated_sql, eta: v0.4, reason: "Federate queries across data sources" }
+      - { name: "Prometheus + Grafana", role: observability, eta: v0.4, reason: "Per-component metrics + alerting" }
+    compliance_tags: []
+
   - id: startup_analytics
     label: Startup Analytics
     icon: chart
