@@ -1,7 +1,8 @@
 """Component catalog loader.
 
 Reads stacks/components-catalog.yaml and surfaces categorized component
-data to the UI. Static within a process — cached on first load.
+data to the UI. Validated on FastAPI startup so a malformed catalog fails
+loudly at boot rather than as a 500 on the first cart request.
 """
 from __future__ import annotations
 from functools import lru_cache
@@ -13,12 +14,118 @@ from .config import ROOT
 
 
 CATALOG_PATH = ROOT / "stacks" / "components-catalog.yaml"
+_MAX_CATALOG_BYTES = 512 * 1024  # 512 KB ceiling — well above realistic catalog size
+
+
+class CatalogError(ValueError):
+    """Catalog YAML is malformed, missing required keys, or has bad references."""
 
 
 @lru_cache(maxsize=1)
 def load_catalog() -> dict[str, Any]:
+    if not CATALOG_PATH.exists():
+        raise CatalogError(f"catalog file not found: {CATALOG_PATH}")
+    size = CATALOG_PATH.stat().st_size
+    if size > _MAX_CATALOG_BYTES:
+        raise CatalogError(
+            f"catalog file too large: {size} bytes (max {_MAX_CATALOG_BYTES})"
+        )
     with CATALOG_PATH.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        data = yaml.safe_load(f)
+    if data is None:
+        raise CatalogError("catalog file is empty")
+    if not isinstance(data, dict):
+        raise CatalogError(f"catalog root must be a mapping (got {type(data).__name__})")
+    return data
+
+
+def validate_catalog() -> list[str]:
+    """Run all structural checks. Returns the list of problems found
+    (empty list = OK). Called on FastAPI startup; never raises.
+    """
+    problems: list[str] = []
+    try:
+        data = load_catalog()
+    except CatalogError as e:
+        return [str(e)]
+    except Exception as e:
+        return [f"catalog load failed: {type(e).__name__}: {e}"]
+
+    cats = data.get("categories")
+    if not isinstance(cats, list) or not cats:
+        problems.append("categories: must be a non-empty list")
+        return problems
+
+    seen_cat_ids: set[str] = set()
+    seen_component_ids: set[str] = set()
+    component_to_category: dict[str, str] = {}
+
+    for i, cat in enumerate(cats):
+        if not isinstance(cat, dict):
+            problems.append(f"categories[{i}]: must be a mapping")
+            continue
+        cid = cat.get("id")
+        if not isinstance(cid, str) or not cid:
+            problems.append(f"categories[{i}]: missing 'id'")
+            continue
+        if cid in seen_cat_ids:
+            problems.append(f"categories[{i}]: duplicate category id '{cid}'")
+        seen_cat_ids.add(cid)
+        if not isinstance(cat.get("label"), str) or not cat["label"]:
+            problems.append(f"categories[{cid}]: missing 'label'")
+        if not isinstance(cat.get("description", ""), str):
+            problems.append(f"categories[{cid}]: 'description' must be a string")
+
+        comps = cat.get("components") or []
+        if not isinstance(comps, list):
+            problems.append(f"categories[{cid}]: 'components' must be a list")
+            continue
+        for j, comp in enumerate(comps):
+            if not isinstance(comp, dict):
+                problems.append(f"categories[{cid}].components[{j}]: must be a mapping")
+                continue
+            comp_id = comp.get("id")
+            if not isinstance(comp_id, str) or not comp_id:
+                problems.append(f"categories[{cid}].components[{j}]: missing 'id'")
+                continue
+            if comp_id in seen_component_ids:
+                problems.append(
+                    f"duplicate component id '{comp_id}' (in categories '{component_to_category[comp_id]}' and '{cid}')"
+                )
+            seen_component_ids.add(comp_id)
+            component_to_category[comp_id] = cid
+            if not isinstance(comp.get("name"), str) or not comp["name"]:
+                problems.append(f"component '{comp_id}': missing 'name'")
+            if "version" in comp and not isinstance(comp["version"], (str, int, float)):
+                problems.append(f"component '{comp_id}': 'version' must be scalar")
+
+    # Validate goals reference known recommended_sets
+    goals = data.get("goals") or []
+    rec_sets = data.get("recommended_sets") or {}
+    for g in goals:
+        if not isinstance(g, dict): continue
+        gid = g.get("id", "<unknown>")
+        rs = g.get("recommended_set")
+        if rs and rs not in rec_sets:
+            problems.append(f"goal '{gid}': recommended_set '{rs}' is not defined")
+
+    # Validate recommended_sets reference known components
+    for rs_id, rs in rec_sets.items():
+        if not isinstance(rs, dict): continue
+        for comp_id in rs.get("components", []) or []:
+            if comp_id not in seen_component_ids:
+                problems.append(
+                    f"recommended_set '{rs_id}': references unknown component '{comp_id}'"
+                )
+
+    return problems
+
+
+def categories() -> list[dict[str, Any]]:
+    cat = load_catalog()
+    out = list(cat.get("categories", []))
+    out.sort(key=lambda c: c.get("order", 999))
+    return out
 
 
 def categories() -> list[dict[str, Any]]:

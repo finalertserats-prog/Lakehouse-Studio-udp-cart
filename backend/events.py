@@ -1,41 +1,49 @@
 from __future__ import annotations
 import asyncio
+import itertools
 import threading
 from collections import defaultdict, deque
-from typing import Any
+from typing import Optional
 
 from .models import LogEvent
 
 
 class EventBus:
-    """Per-install event bus: bounded history + live async subscribers.
+    """Per-install event bus with bounded history + live async subscribers.
 
-    The bus is accessed from both sync (subprocess drain callbacks scheduled
-    on the loop) and async (FastAPI handlers) code, so we guard the history
-    deque with a threading.Lock. Subscriber list mutations sit behind the
-    asyncio.Lock so subscribe/unsubscribe don't race with publish.
+    Each event gets a monotonic per-install sequence number assigned at publish
+    time. The WebSocket handler sends `seq` on every event; on reconnect the
+    client passes `last_seq` and we replay only events with `seq > last_seq`,
+    or send a `reset` marker if last_seq is older than what we still have
+    buffered. This replaces the prior dedup-by-tuple set which leaked memory.
     """
 
     def __init__(self, history_size: int = 5000):
         self._history: dict[str, deque[LogEvent]] = defaultdict(lambda: deque(maxlen=history_size))
+        self._next_seq: dict[str, itertools.count] = defaultdict(lambda: itertools.count(1))
         self._subscribers: dict[str, set[asyncio.Queue]] = defaultdict(set)
         self._sub_lock = asyncio.Lock()
         self._hist_lock = threading.Lock()
         self._dropped: dict[str, int] = defaultdict(int)
 
+    def _assign_seq(self, event: LogEvent) -> LogEvent:
+        # Assign monotonic seq under the history lock so seq matches insertion order.
+        if event.seq is None:
+            event.seq = next(self._next_seq[event.install_id])
+        return event
+
     def _append_history(self, event: LogEvent) -> None:
         with self._hist_lock:
+            self._assign_seq(event)
             self._history[event.install_id].append(event)
 
     def _fanout(self, event: LogEvent) -> None:
-        # Snapshot subscriber set under lock-free read of dict (defaultdict reads are atomic in CPython).
         queues = list(self._subscribers.get(event.install_id, ()))
         for q in queues:
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
                 self._dropped[event.install_id] += 1
-                # Best-effort signal that we dropped — try once with a sentinel; if full, give up.
                 try:
                     q.put_nowait(LogEvent(
                         install_id=event.install_id,
@@ -56,21 +64,29 @@ class EventBus:
         self._append_history(event)
         self._fanout(event)
 
-    def history_snapshot(self, install_id: str) -> tuple[list[LogEvent], int]:
-        """Return (events, next_index). The next_index marks where new events
-        published after this call will land — callers use it to dedupe live
-        events against the replayed history.
-        """
+    def history_snapshot(self, install_id: str, *, since_seq: int = 0) -> tuple[list[LogEvent], int, bool]:
+        """Return (events, next_seq_hint, reset_needed).
+
+        `since_seq` is the last seq the client has seen; events with
+        seq > since_seq are returned. `reset_needed` is True when
+        since_seq is older than the oldest event still buffered (the
+        client must clear local state and accept the full history)."""
         with self._hist_lock:
             dq = self._history.get(install_id)
             if not dq:
-                return [], 0
+                return [], 0, False
             snapshot = list(dq)
-            return snapshot, len(snapshot)
+            oldest_seq = snapshot[0].seq or 0
+            newest_seq = snapshot[-1].seq or 0
+            reset_needed = since_seq > 0 and since_seq < oldest_seq
+            if since_seq == 0 or reset_needed:
+                return snapshot, newest_seq, reset_needed
+            filtered = [e for e in snapshot if (e.seq or 0) > since_seq]
+            return filtered, newest_seq, False
 
     # Backward-compat name used by evidence.py
     def history(self, install_id: str) -> list[LogEvent]:
-        events, _ = self.history_snapshot(install_id)
+        events, _, _ = self.history_snapshot(install_id)
         return events
 
     async def subscribe(self, install_id: str) -> asyncio.Queue:
@@ -81,7 +97,14 @@ class EventBus:
 
     async def unsubscribe(self, install_id: str, q: asyncio.Queue) -> None:
         async with self._sub_lock:
-            self._subscribers[install_id].discard(q)
+            subs = self._subscribers.get(install_id)
+            if subs is None:
+                return
+            subs.discard(q)
+            if not subs:
+                # Reap empty subscriber sets; the history dict stays so a
+                # reconnecting client can replay.
+                del self._subscribers[install_id]
 
 
 bus = EventBus()

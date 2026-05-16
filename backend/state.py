@@ -33,10 +33,25 @@ def _atomic_write(path: Path, data: str, *, retries: int = 5, delay: float = 0.1
 
 
 class StateStore:
+    """In-memory + JSON-backed install record store.
+
+    Write throttling: _persist_locked is called from many code paths
+    (every step transition, every state change, every output update). On
+    Windows with AV/OneDrive each rename can stall hundreds of ms. To
+    avoid stalling the event loop, mutations mark the store dirty and a
+    background timer flushes at most every WRITE_DEBOUNCE_SEC. Terminal
+    state transitions flush immediately so a crash never loses them.
+    """
+
+    WRITE_DEBOUNCE_SEC = 0.25
+    _TERMINAL_FLUSH_STATES = frozenset({"READY", "FAILED", "STOPPED", "CLEANED"})
+
     def __init__(self, path: Path = STATE_FILE):
         self.path = path
         self._records: dict[str, InstallRecord] = {}
         self._lock = threading.RLock()
+        self._dirty = False
+        self._flush_timer: threading.Timer | None = None
         self._load()
 
     def _load(self) -> None:
@@ -69,10 +84,47 @@ class StateStore:
         except Exception:
             pass
 
-    def _persist_locked(self) -> None:
+    def _write_now_locked(self) -> None:
+        """Synchronous full-write under lock. Used for terminal transitions
+        and from the debounced flush timer."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {k: v.model_dump() for k, v in self._records.items()}
         _atomic_write(self.path, json.dumps(data, indent=2))
+        self._dirty = False
+
+    def _persist_locked(self, *, force: bool = False) -> None:
+        """Mark dirty and schedule a debounced flush. With force=True, write
+        immediately (used for terminal state transitions and shutdown)."""
+        self._dirty = True
+        if force:
+            if self._flush_timer is not None:
+                self._flush_timer.cancel()
+                self._flush_timer = None
+            self._write_now_locked()
+            return
+        if self._flush_timer is None:
+            self._flush_timer = threading.Timer(self.WRITE_DEBOUNCE_SEC, self._flush_from_timer)
+            self._flush_timer.daemon = True
+            self._flush_timer.start()
+
+    def _flush_from_timer(self) -> None:
+        with self._lock:
+            self._flush_timer = None
+            if self._dirty:
+                try:
+                    self._write_now_locked()
+                except Exception as e:
+                    import logging
+                    logging.getLogger("lhs.state").error("debounced flush failed: %s", e)
+
+    def flush(self) -> None:
+        """Force any pending writes to disk. Called on shutdown."""
+        with self._lock:
+            if self._flush_timer is not None:
+                self._flush_timer.cancel()
+                self._flush_timer = None
+            if self._dirty:
+                self._write_now_locked()
 
     def _persist(self) -> None:
         with self._lock:
@@ -126,7 +178,8 @@ class StateStore:
             rec.updated_at = time.time()
             if error is not None:
                 rec.error = error
-            self._persist_locked()
+            # Terminal states flush immediately so a crash never loses them.
+            self._persist_locked(force=state in self._TERMINAL_FLUSH_STATES)
 
     def update_step(
         self,

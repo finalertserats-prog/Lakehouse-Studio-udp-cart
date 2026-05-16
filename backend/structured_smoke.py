@@ -227,14 +227,21 @@ async def run_structured_smoke() -> dict:
         return {"overall": "failed", "checks": [daemon], "passed": 0, "warning": 0, "failed": 1, "total": 1,
                 "error": "Docker daemon not reachable; no further checks attempted"}
 
-    # Run all checks in parallel — bounded by each check's own timeout
-    tasks = [_check_container_running(c) for c in _CONTAINER_CHECKS] + [fn() for fn in _API_CHECKS]
+    # Run all checks in parallel — bounded by each check's own timeout.
+    # Label each task so we can report the right check name when a coroutine
+    # raises instead of returning a result dict.
+    labeled = (
+        [(f"container:{c}", _check_container_running(c)) for c in _CONTAINER_CHECKS]
+        + [(fn.__name__.lstrip("_"), fn()) for fn in _API_CHECKS]
+    )
+    labels = [name for name, _ in labeled]
+    tasks = [coro for _, coro in labeled]
     results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
     results: list[dict] = [daemon]
-    for r in results_raw:
+    for label, r in zip(labels, results_raw):
         if isinstance(r, Exception):
-            results.append(_result("check", "failed",
+            results.append(_result(label, "failed",
                                    f"check raised {type(r).__name__}: {r}"))
         else:
             results.append(r)

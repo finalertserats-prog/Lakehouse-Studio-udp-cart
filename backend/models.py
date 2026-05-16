@@ -1,6 +1,39 @@
 from __future__ import annotations
+import re
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+# Limits used across endpoints that take user-supplied identifiers.
+MAX_CART_ITEMS = 50
+MAX_COMPONENT_ID_LEN = 64
+MAX_GOAL_ID_LEN = 64
+MAX_LAKE_NAME_LEN = 32
+_IDENT_RE = re.compile(r"^[a-z][a-z0-9_\-]{0,62}[a-z0-9]$|^[a-z]$")
+
+
+def _validate_component_id_list(v: Any, field_name: str = "cart") -> list[str]:
+    """Shared validator: list of lowercase identifiers, no duplicates, bounded length."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError(f"{field_name} must be a list")
+    if len(v) > MAX_CART_ITEMS:
+        raise ValueError(f"{field_name} has {len(v)} items (max {MAX_CART_ITEMS})")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for i, item in enumerate(v):
+        if not isinstance(item, str):
+            raise ValueError(f"{field_name}[{i}] must be a string (got {type(item).__name__})")
+        if not item or len(item) > MAX_COMPONENT_ID_LEN:
+            raise ValueError(f"{field_name}[{i}] length must be 1..{MAX_COMPONENT_ID_LEN}")
+        if not _IDENT_RE.match(item):
+            raise ValueError(f"{field_name}[{i}]={item!r}: invalid identifier (lowercase letters/digits/-_)")
+        if item in seen:
+            raise ValueError(f"{field_name}: duplicate component id '{item}'")
+        seen.add(item)
+        cleaned.append(item)
+    return cleaned
 
 
 InstallState = Literal[
@@ -35,13 +68,20 @@ class InspectionReport(BaseModel):
 
 
 class InstallRequest(BaseModel):
-    stack_id: str
-    host: str = "localhost"
-    install_dir: Optional[str] = None
+    stack_id: str = Field(min_length=1, max_length=128)
+    host: str = Field(default="localhost", min_length=1, max_length=253)
+    install_dir: Optional[str] = Field(default=None, max_length=4096)
     env_overrides: dict[str, str] = Field(default_factory=dict)
-    lake_name: Optional[str] = None
-    goal: Optional[str] = None
-    cart: Optional[list[str]] = None
+    lake_name: Optional[str] = Field(default=None, max_length=MAX_LAKE_NAME_LEN)
+    goal: Optional[str] = Field(default=None, max_length=MAX_GOAL_ID_LEN)
+    cart: Optional[list[str]] = Field(default=None)
+
+    @field_validator("cart")
+    @classmethod
+    def _validate_cart(cls, v: Any) -> Optional[list[str]]:
+        if v is None:
+            return None
+        return _validate_component_id_list(v, "cart")
 
 
 class StepStatus(BaseModel):
@@ -73,9 +113,10 @@ class InstallRecord(BaseModel):
 class LogEvent(BaseModel):
     install_id: str
     ts: float
-    kind: Literal["step_start", "step_end", "log", "state", "error", "result"]
+    kind: Literal["step_start", "step_end", "log", "state", "error", "result", "reset"]
     step: Optional[str] = None
     stream: Optional[Literal["stdout", "stderr"]] = None
     line: Optional[str] = None
     status: Optional[str] = None
     payload: Optional[dict[str, Any]] = None
+    seq: Optional[int] = None  # assigned by the bus on publish

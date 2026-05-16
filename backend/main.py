@@ -3,19 +3,25 @@ import asyncio
 import json
 import os
 import secrets
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from .config import ROOT, WORK_DIR
 from .events import bus
 from .inspector import inspect
-from .models import InstallRequest, InspectionReport
-from .catalog import categories as catalog_categories, goals as catalog_goals, recommended_sets as catalog_recommended_sets
+from .models import InstallRequest, InspectionReport, LogEvent
+from .catalog import (
+    categories as catalog_categories,
+    goals as catalog_goals,
+    recommended_sets as catalog_recommended_sets,
+    validate_catalog,
+)
 from .demo_query import list_queries, run_demo_query
 from .error_explainer import explain as explain_error
 from .lake_namer import suggest as suggest_lake_names, is_valid as is_valid_lake_name, normalize as normalize_lake_name
@@ -35,6 +41,55 @@ FRONTEND_DIR = ROOT / "frontend"
 
 # Track in-flight install tasks so they're not GC'd and so we can cancel them.
 _INSTALL_TASKS: dict[str, asyncio.Task] = {}
+
+# Any state in this set is "actively doing work" — used to gate operations
+# like rollback that would race a running install.
+RUNNING_STATES = frozenset({
+    "INSPECTING", "READY_TO_INSTALL", "CLONING_REPO", "WRITING_ENV",
+    "RUNNING_DOCTOR", "STARTING_STACK", "BOOTSTRAPPING", "SMOKE_TESTING",
+})
+TERMINAL_STATES = frozenset({"READY", "FAILED", "STOPPED", "CLEANED"})
+
+
+def _make_install_task_wrapper(install_id: str, coro_factory):
+    """Wrap an install coroutine factory with exception safety.
+
+    Guarantees:
+    - asyncio.CancelledError is NOT treated as failure (user-triggered cancel).
+    - Any other exception transitions the install to FAILED, but ONLY if the
+      install isn't already in a terminal state (don't overwrite a clean READY).
+    - An error event is published to the bus so the UI surfaces the crash.
+    - The task is removed from _INSTALL_TASKS in finally.
+    """
+    async def _wrapped() -> None:
+        try:
+            await coro_factory()
+        except asyncio.CancelledError:
+            # User cancelled. State stays where it is; the cancel endpoint
+            # already set it appropriately.
+            raise
+        except Exception as e:
+            import logging
+            logger = logging.getLogger("lhs.install")
+            logger.exception("install task %s crashed", install_id)
+            try:
+                rec = store.get(install_id)
+                if rec and rec.state not in TERMINAL_STATES:
+                    store.update_state(install_id, "FAILED",
+                                       error=f"orchestrator crash: {type(e).__name__}: {e}")
+                    bus.publish_nowait(LogEvent(
+                        install_id=install_id, ts=time.time(), kind="error",
+                        line=f"orchestrator crashed: {type(e).__name__}: {e}",
+                    ))
+                    bus.publish_nowait(LogEvent(
+                        install_id=install_id, ts=time.time(), kind="state",
+                        status="FAILED",
+                    ))
+            except Exception:
+                logger.exception("crash-handler itself failed for %s", install_id)
+        finally:
+            _INSTALL_TASKS.pop(install_id, None)
+    return _wrapped
 
 # Optional shared-token auth. Set LHS_AUTH_TOKEN to enable. Required for any
 # deployment that listens on a non-loopback interface (e.g. VPS).
@@ -57,6 +112,30 @@ def _require_auth(authorization: Optional[str] = Header(default=None),
 AuthDep = Depends(_require_auth)
 
 
+# Catalog validation on startup. If problems are found we don't crash the
+# app (it can still serve /healthz), but every catalog-dependent route will
+# return 503 with a clear message until the YAML is fixed.
+_CATALOG_PROBLEMS: list[str] = []
+
+
+@app.on_event("startup")
+async def _validate_catalog_on_startup() -> None:
+    global _CATALOG_PROBLEMS
+    _CATALOG_PROBLEMS = validate_catalog()
+    if _CATALOG_PROBLEMS:
+        import logging
+        for p in _CATALOG_PROBLEMS:
+            logging.getLogger("lhs.catalog").error("catalog problem: %s", p)
+
+
+def _require_catalog_ok() -> None:
+    if _CATALOG_PROBLEMS:
+        raise HTTPException(503, {"error": "catalog invalid", "problems": _CATALOG_PROBLEMS})
+
+
+CatalogOk = Depends(_require_catalog_ok)
+
+
 # ---------- Auth status ----------
 
 @app.get("/api/auth/status")
@@ -66,13 +145,13 @@ def auth_status():
 
 # ---------- Catalog / Goals (the "shop" surface) ----------
 
-@app.get("/api/catalog", dependencies=[AuthDep])
+@app.get("/api/catalog", dependencies=[AuthDep, CatalogOk])
 def get_catalog():
     """Component catalog: categories + their pickable components + alternates marked coming-soon."""
     return {"categories": catalog_categories(), "goals": catalog_goals(), "recommended_sets": catalog_recommended_sets()}
 
 
-@app.get("/api/goals", dependencies=[AuthDep])
+@app.get("/api/goals", dependencies=[AuthDep, CatalogOk])
 def get_goals():
     return catalog_goals()
 
@@ -80,16 +159,22 @@ def get_goals():
 # ---------- Cart validation ----------
 
 class CartRequest(BaseModel):
-    cart: list[str]
+    cart: list[str] = []
+
+    @field_validator("cart")
+    @classmethod
+    def _validate(cls, v):
+        from .models import _validate_component_id_list
+        return _validate_component_id_list(v, "cart")
 
 
-@app.post("/api/cart/validate", dependencies=[AuthDep])
+@app.post("/api/cart/validate", dependencies=[AuthDep, CatalogOk])
 def post_cart_validate(body: CartRequest):
     from .cart import validate_cart
     return validate_cart(body.cart)
 
 
-@app.get("/api/cart/recommended", dependencies=[AuthDep])
+@app.get("/api/cart/recommended", dependencies=[AuthDep, CatalogOk])
 def get_recommended_cart():
     from .cart import recommended_cart
     return {"cart": recommended_cart()}
@@ -226,6 +311,25 @@ async def create_install(body: InstallRequest):
             raise HTTPException(400, f"lake_name rejected: {why}")
         lake_name = normalize_lake_name(body.lake_name)
 
+    # Validate goal against known goals (if catalog is loaded)
+    if body.goal:
+        if _CATALOG_PROBLEMS:
+            raise HTTPException(503, "cannot validate goal: catalog has errors")
+        known_goals = {g["id"] for g in catalog_goals()}
+        if body.goal not in known_goals:
+            raise HTTPException(400, f"unknown goal '{body.goal}'; known: {sorted(known_goals)}")
+
+    # Validate cart components against the catalog (cart was already validated
+    # for shape/dedup/identifier-rules by the Pydantic field validator)
+    if body.cart:
+        if _CATALOG_PROBLEMS:
+            raise HTTPException(503, "cannot validate cart: catalog has errors")
+        from .catalog import component_index
+        known_components = set(component_index().keys())
+        unknown = [cid for cid in body.cart if cid not in known_components]
+        if unknown:
+            raise HTTPException(400, f"unknown component(s) in cart: {unknown}")
+
     rec = store.create(
         stack_id=m.id,
         host=body.host,
@@ -237,14 +341,10 @@ async def create_install(body: InstallRequest):
     )
 
     runner = UDPRunner(m, rec.install_id, body.host, install_dir)
-
-    async def _wrap() -> None:
-        try:
-            await runner.run(body.env_overrides)
-        finally:
-            _INSTALL_TASKS.pop(rec.install_id, None)
-
-    task = asyncio.create_task(_wrap(), name=f"install:{rec.install_id}")
+    wrapped = _make_install_task_wrapper(
+        rec.install_id, lambda: runner.run(body.env_overrides)
+    )
+    task = asyncio.create_task(wrapped(), name=f"install:{rec.install_id}")
     _INSTALL_TASKS[rec.install_id] = task
     return rec.model_dump()
 
@@ -279,14 +379,11 @@ async def post_step_retry(install_id: str, body: StepActionRequest):
         raise HTTPException(404, "stack not found")
 
     install_dir = Path(rec.install_dir)
-
-    async def _wrap() -> None:
-        try:
-            await retry_install(m, install_id, rec.host, install_dir, body.env_overrides, body.step_id)
-        finally:
-            _INSTALL_TASKS.pop(install_id, None)
-
-    task = asyncio.create_task(_wrap(), name=f"retry:{install_id}:{body.step_id}")
+    wrapped = _make_install_task_wrapper(
+        install_id,
+        lambda: retry_install(m, install_id, rec.host, install_dir, body.env_overrides, body.step_id)
+    )
+    task = asyncio.create_task(wrapped(), name=f"retry:{install_id}:{body.step_id}")
     _INSTALL_TASKS[install_id] = task
     return {"resumed_at": body.step_id}
 
@@ -310,14 +407,11 @@ async def post_step_skip(install_id: str, body: StepActionRequest):
     except KeyError:
         raise HTTPException(404, "stack not found")
     install_dir = Path(rec.install_dir)
-
-    async def _wrap() -> None:
-        try:
-            await retry_install(m, install_id, rec.host, install_dir, body.env_overrides, next_id)
-        finally:
-            _INSTALL_TASKS.pop(install_id, None)
-
-    task = asyncio.create_task(_wrap(), name=f"skip:{install_id}:{body.step_id}")
+    wrapped = _make_install_task_wrapper(
+        install_id,
+        lambda: retry_install(m, install_id, rec.host, install_dir, body.env_overrides, next_id)
+    )
+    task = asyncio.create_task(wrapped(), name=f"skip:{install_id}:{body.step_id}")
     _INSTALL_TASKS[install_id] = task
     return {"skipped": body.step_id, "resumed_at": next_id}
 
@@ -328,6 +422,12 @@ async def post_step_rollback(install_id: str):
     rec = store.get(install_id)
     if not rec:
         raise HTTPException(404, "install not found")
+    # Block rollback while an install/retry/skip task is in-flight — running
+    # `docker compose down` mid-install races the orchestrator.
+    if rec.state in RUNNING_STATES:
+        raise HTTPException(409, f"cannot rollback while state is {rec.state}; cancel first")
+    if install_id in _INSTALL_TASKS and not _INSTALL_TASKS[install_id].done():
+        raise HTTPException(409, "an install task is still running; cancel it first")
     try:
         m = load_manifest(rec.stack_id)
     except KeyError:
@@ -387,8 +487,65 @@ async def post_demo_query(install_id: str, body: DemoQueryRequest):
     return result
 
 
+# ---------- SQL editor (sandboxed free-form SQL) ----------
+
+class SqlEditorRequest(BaseModel):
+    sql: str = Field(min_length=1, max_length=10_000)
+
+
+SQL_MAX_ROWS = 1000
+SQL_TIMEOUT_SEC = 30
+
+
+@app.post("/api/installs/{install_id}/sql", dependencies=[AuthDep])
+async def post_sql_editor(install_id: str, body: SqlEditorRequest):
+    """Run sandboxed read-only SQL against the deployed stack. Allowed
+    leading keywords: SELECT/SHOW/DESCRIBE/EXPLAIN/WITH. Hard 30s timeout,
+    1000-row result cap, every call audit-logged to the install's event bus."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state != "READY":
+        raise HTTPException(409, f"install is in state {rec.state}; READY required")
+
+    from .sql_editor import run_user_sql
+
+    # Audit-log the query before execution (truncated for log hygiene)
+    audit_sql = body.sql.strip().replace("\n", " ")
+    if len(audit_sql) > 200:
+        audit_sql = audit_sql[:200] + "..."
+    bus.publish_nowait(LogEvent(
+        install_id=install_id, ts=time.time(), kind="log", stream="stdout",
+        step="sql", line=f"[sql-editor] running: {audit_sql}",
+    ))
+
+    result = await run_user_sql(body.sql, timeout=SQL_TIMEOUT_SEC)
+
+    # Enforce row cap
+    if result.get("rows") and len(result["rows"]) > SQL_MAX_ROWS:
+        result["rows"] = result["rows"][:SQL_MAX_ROWS]
+        result["truncated"] = True
+        result["truncated_at"] = SQL_MAX_ROWS
+
+    # Audit the outcome
+    if result.get("error"):
+        bus.publish_nowait(LogEvent(
+            install_id=install_id, ts=time.time(), kind="log", stream="stderr",
+            step="sql", line=f"[sql-editor] error: {result['error']}",
+        ))
+    else:
+        bus.publish_nowait(LogEvent(
+            install_id=install_id, ts=time.time(), kind="log", stream="stdout",
+            step="sql", line=f"[sql-editor] returned {result.get('row_count', 0)} rows",
+        ))
+
+    return result
+
+
 @app.on_event("shutdown")
 async def _shutdown():
+    import logging
+    log = logging.getLogger("lhs.shutdown")
     # Cancel any in-flight install tasks so we don't leave child processes around.
     tasks = list(_INSTALL_TASKS.values())
     for t in tasks:
@@ -396,8 +553,17 @@ async def _shutdown():
     for t in tasks:
         try:
             await asyncio.wait_for(t, timeout=5)
-        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+        except asyncio.TimeoutError:
+            log.warning("install task %s did not cancel within 5s", t.get_name())
+        except asyncio.CancelledError:
             pass
+        except Exception:
+            log.exception("install task %s failed during cancellation", t.get_name())
+    # Flush any debounced state writes so a graceful shutdown loses nothing.
+    try:
+        store.flush()
+    except Exception:
+        log.exception("state flush failed")
 
 
 class ControlRequest(BaseModel):
@@ -424,14 +590,30 @@ async def control_install(install_id: str, body: ControlRequest):
         raise HTTPException(400, f"unknown action {body.action}")
     cmd_name = action_to_cmd[body.action]
 
+    # Block destructive actions while an install task is running. status/smoke
+    # are read-only and safe to run anytime.
+    if body.action in ("stop", "clean"):
+        if rec.state in RUNNING_STATES:
+            raise HTTPException(409, f"cannot {body.action} while state is {rec.state}; cancel first")
+        if install_id in _INSTALL_TASKS and not _INSTALL_TASKS[install_id].done():
+            raise HTTPException(409, f"an install task is still running; cancel before {body.action}")
+
     install_dir = Path(rec.install_dir)
     rc = await run_command(rec.install_id, install_dir, rec.host, m, cmd_name)
 
-    if body.action == "stop" and rc == 0:
-        store.update_state(rec.install_id, "STOPPED")
-    elif body.action == "clean" and rc == 0:
-        store.update_state(rec.install_id, "CLEANED")
-    return {"exit_code": rc}
+    if rc == 0:
+        if body.action == "stop":
+            store.update_state(rec.install_id, "STOPPED")
+        elif body.action == "clean":
+            store.update_state(rec.install_id, "CLEANED")
+        return {"exit_code": rc, "ok": True}
+
+    # Non-zero rc → publish error event so the UI sees it, and surface as 502.
+    bus.publish_nowait(LogEvent(
+        install_id=rec.install_id, ts=time.time(), kind="error",
+        line=f"{body.action} exited with code {rc}",
+    ))
+    raise HTTPException(502, {"error": f"{body.action} failed", "exit_code": rc})
 
 
 # ---------- Logs WebSocket ----------
@@ -451,28 +633,49 @@ async def ws_logs(websocket: WebSocket, install_id: str):
             return
 
     await websocket.accept()
+    # Sequence-based replay: client may pass ?last_seq=N to resume from N+1.
+    # If N is older than buffered history, we send a `reset` event and replay
+    # everything we still have.
+    try:
+        last_seq = int(websocket.query_params.get("last_seq", "0"))
+    except (TypeError, ValueError):
+        last_seq = 0
+
     # Subscribe BEFORE snapshotting history so any event published in between
-    # ends up in the live queue. We then dedupe by id+ts on replay.
+    # ends up in the live queue. seq numbers guarantee we don't double-deliver.
     q = await bus.subscribe(install_id)
     try:
-        history, _ = bus.history_snapshot(install_id)
-        seen: set[tuple[float, str | None, str | None, str | None]] = set()
+        history, last_history_seq, reset_needed = bus.history_snapshot(install_id, since_seq=last_seq)
+        if reset_needed:
+            await websocket.send_text(LogEvent(
+                install_id=install_id, ts=time.time(), kind="reset",
+                line="resuming from older snapshot — buffered history truncated"
+            ).model_dump_json())
         for evt in history:
-            key = (evt.ts, evt.kind, evt.step, evt.line)
-            seen.add(key)
             try:
                 await websocket.send_text(evt.model_dump_json())
             except Exception:
                 return
         while True:
-            evt = await q.get()
-            key = (evt.ts, evt.kind, evt.step, evt.line)
-            if key in seen:
-                seen.discard(key)
+            try:
+                evt = await q.get()
+            except asyncio.CancelledError:
+                raise
+            # Guard: if a client passed last_seq that's NEWER than what the
+            # live event has (rare; happens with parallel reconnects), don't
+            # re-send what they already have.
+            if evt.seq is not None and evt.seq <= last_history_seq:
                 continue
-            await websocket.send_text(evt.model_dump_json())
+            try:
+                await websocket.send_text(evt.model_dump_json())
+            except Exception:
+                # Client disconnected mid-stream; bail to finally.
+                return
     except WebSocketDisconnect:
         pass
+    except Exception:
+        import logging
+        logging.getLogger("lhs.ws").exception("ws handler crashed for install %s", install_id)
     finally:
         await bus.unsubscribe(install_id, q)
 
@@ -486,7 +689,10 @@ def root():
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    return {
+        "ok": not _CATALOG_PROBLEMS,
+        "catalog_problems": _CATALOG_PROBLEMS,
+    }
 
 
 if FRONTEND_DIR.exists():
