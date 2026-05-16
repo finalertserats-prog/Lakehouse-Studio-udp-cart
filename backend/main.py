@@ -30,6 +30,8 @@ from .compatibility import (
     validate_against_catalog,
 )
 from .health import get_stack_health
+from .compliance import get_compliance, validate_compliance
+from .templates import get_template_detail, list_templates, validate_templates
 from .demo_query import list_queries, run_demo_query
 from .error_explainer import explain as explain_error
 from .lake_namer import suggest as suggest_lake_names, is_valid as is_valid_lake_name, normalize as normalize_lake_name
@@ -131,14 +133,29 @@ _CATALOG_PROBLEMS: list[str] = []
 _COMPAT_PROBLEMS: dict[str, list[str]] = {}
 
 
+_TEMPLATE_PROBLEMS: list[str] = []
+_COMPLIANCE_PROBLEMS: list[str] = []
+
+
 @app.on_event("startup")
 async def _validate_catalog_on_startup() -> None:
-    global _CATALOG_PROBLEMS, _COMPAT_PROBLEMS
+    global _CATALOG_PROBLEMS, _COMPAT_PROBLEMS, _TEMPLATE_PROBLEMS, _COMPLIANCE_PROBLEMS
     _CATALOG_PROBLEMS = validate_catalog()
     if _CATALOG_PROBLEMS:
         import logging
         for p in _CATALOG_PROBLEMS:
             logging.getLogger("lhs.catalog").error("catalog problem: %s", p)
+
+    # Templates + compliance are NON-FATAL — picker just shows empty state if broken.
+    _COMPLIANCE_PROBLEMS = validate_compliance()
+    _TEMPLATE_PROBLEMS = validate_templates()
+    if _COMPLIANCE_PROBLEMS or _TEMPLATE_PROBLEMS:
+        import logging
+        log = logging.getLogger("lhs.templates")
+        for p in _COMPLIANCE_PROBLEMS:
+            log.warning("compliance problem: %s", p)
+        for p in _TEMPLATE_PROBLEMS:
+            log.warning("template problem: %s", p)
 
     # Cross-check every stack manifest against its compatibility lock. A
     # mismatch means someone edited the catalog without bumping the lock —
@@ -183,6 +200,40 @@ def get_catalog():
 @app.get("/api/goals", dependencies=[AuthDep, CatalogOk])
 def get_goals():
     return catalog_goals()
+
+
+# ---------- Templates (use-case-shaped views over recommended_sets) ----------
+
+@app.get("/api/templates", dependencies=[AuthDep, CatalogOk])
+def get_templates():
+    """Lightweight list for the picker grid: id, label, pitch, readiness, tags."""
+    return {"templates": list_templates()}
+
+
+@app.get("/api/templates/{template_id}", dependencies=[AuthDep, CatalogOk])
+def get_template(template_id: str):
+    """Full detail: certified cart + display-only pending + resolved compliance.
+
+    Does NOT mutate any state. Front-end uses this to pre-fill the cart
+    after the user explicitly clicks a template card.
+    """
+    detail = get_template_detail(template_id)
+    if detail is None:
+        raise HTTPException(404, f"template '{template_id}' not found")
+    return detail
+
+
+@app.get("/api/compliance/{tag}", dependencies=[AuthDep, CatalogOk])
+def get_compliance_block(tag: str):
+    """One compliance framing entry (HIPAA / PCI / SOC 2 / GDPR).
+
+    Lazy-loaded by the UI so long-form prose only ships when a user
+    expands the panel.
+    """
+    block = get_compliance(tag)
+    if block is None:
+        raise HTTPException(404, f"compliance tag '{tag}' not found")
+    return {"tag": tag, **block}
 
 
 # ---------- Cart validation ----------
@@ -813,6 +864,8 @@ def healthz():
         "catalog_problems": _CATALOG_PROBLEMS,
         "compat_problems": _COMPAT_PROBLEMS,
         "certified_stacks": list_locks(),
+        "template_problems": _TEMPLATE_PROBLEMS,
+        "compliance_problems": _COMPLIANCE_PROBLEMS,
     }
 
 

@@ -677,10 +677,13 @@
   <section id="screen-goal" class="screen hidden fade-up">
     <div class="mb-8">
       <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 1 · Intent</div>
-      <h2 class="display-2 grad-text-soft inline-block">What are you building?</h2>
-      <p class="text-slate-400 mt-2">Pick the use case closest to yours. We pre-select sensible defaults; you'll still choose components on the next screen.</p>
+      <h2 class="display-2 grad-text-soft inline-block">Pick a template</h2>
+      <p class="text-slate-400 mt-2">Each template is a use-case-shaped view over the certified stack. Pending components are flagged with the release that brings them.</p>
     </div>
     <div id="goal-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    <div class="text-xs text-slate-500 mt-6">
+      Looking for the older goal-based flow? <button id="btn-classic-goals" class="text-cyan-400 hover:text-cyan-300 underline-offset-2 hover:underline">Show classic goals</button>
+    </div>
   </section>
 
   <!-- ============== BUILD (cart) ============== -->
@@ -695,6 +698,24 @@
       <div class="flex gap-2">
         <button id="btn-cart-reset" class="btn-ghost text-sm">↻ Reset cart</button>
         <button id="btn-cart-recommend" class="btn-ghost text-sm">✨ Use recommended</button>
+      </div>
+    </div>
+
+    <div id="template-banner" class="hidden glass p-4 mb-4" style="border-color: rgba(34,211,238,0.35); background: rgba(34,211,238,0.05);">
+      <div class="flex items-start gap-3">
+        <div class="text-cyan-300 text-xl" id="template-banner-icon">✨</div>
+        <div class="flex-1">
+          <div class="text-cyan-200 font-semibold mb-1">Pre-filled from <span id="template-banner-name"></span></div>
+          <div class="text-sm text-slate-300" id="template-banner-pitch"></div>
+          <div id="template-pending-wrap" class="hidden mt-3">
+            <div class="text-xs uppercase tracking-widest text-slate-400 mb-2">Pending — display only, won't be installed</div>
+            <div id="template-pending" class="flex flex-wrap gap-2"></div>
+          </div>
+          <div id="template-compliance-wrap" class="hidden mt-3 text-xs text-slate-400">
+            <span id="template-compliance-tags"></span>
+            <button id="btn-template-compliance" class="text-cyan-400 hover:text-cyan-300 underline-offset-2 hover:underline ml-1">View compliance framing</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1294,40 +1315,117 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   }
 
   // ===========================================================
-  // ----- GOAL screen (step 1) -----
+  // ----- TEMPLATE / GOAL screen (step 1) -----
   // ===========================================================
+  // We load templates first (the v0.4 primary UX). If the templates list
+  // is empty or fails, we silently fall back to the classic goals.
+  // The "Show classic goals" link always exposes the legacy flow.
+  const ICON_MAP = {
+    laptop: "💻", building: "🏛", sparkles: "✨", chart: "📊",
+    shield: "🛡", bolt: "⚡", cube: "🧊",
+  };
+
   async function loadGoals() {
     if (!state.catalog) state.catalog = await api("/api/catalog");
+    let templates = [];
+    try {
+      const r = await api("/api/templates");
+      templates = r?.templates || [];
+    } catch (_) { templates = []; }
+    if (templates.length > 0) {
+      renderTemplateCards(templates);
+    } else {
+      renderClassicGoalCards();
+    }
+  }
+
+  function renderTemplateCards(templates) {
+    state._lastTemplates = templates;
     const list = document.getElementById("goal-list"); list.innerHTML = "";
-    const iconMap = { laptop: "💻", building: "🏛", sparkles: "✨", chart: "📊", shield: "🛡" };
+    templates.forEach(t => {
+      const div = document.createElement("div");
+      const installable = t.readiness !== "preview";
+      div.className = "glass glass-hover spot p-6 " + (installable ? "cursor-pointer" : "opacity-80");
+      const tags = (t.compliance_tags || []).map(c =>
+        `<span class="badge badge-exp">${esc(c.toUpperCase())}</span>`
+      ).join("");
+      const pendingBadge = t.pending_count > 0
+        ? `<span class="badge" style="background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.35); color: #fcd34d;">${t.pending_count} pending</span>`
+        : `<span class="badge badge-stable">all certified</span>`;
+      const readinessBadge = t.readiness === "preview"
+        ? `<span class="badge" style="background: rgba(168,85,247,0.12); border-color: rgba(168,85,247,0.35); color: #d8b4fe;">PREVIEW</span>`
+        : "";
+      div.innerHTML = `
+        <div class="flex items-start justify-between mb-3">
+          <div class="text-3xl">${ICON_MAP[t.icon] || "•"}</div>
+          ${readinessBadge}
+        </div>
+        <div class="display-3 mb-1">${esc(t.label)}</div>
+        <div class="text-sm text-slate-400 mb-3 leading-relaxed">${esc(t.elevator_pitch || "")}</div>
+        <div class="text-xs text-slate-500 mb-3">${esc(t.persona || "")}</div>
+        <div class="flex flex-wrap gap-1 mb-3">${pendingBadge}${tags}</div>
+        <div class="text-xs ${installable ? "text-cyan-300" : "text-slate-500"} mt-2 flex items-center gap-1">
+          ${installable ? "Choose <span>→</span>" : "Preview only — coming v0.5"}
+        </div>
+      `;
+      if (installable) {
+        div.addEventListener("click", () => pickTemplate(t.id));
+      }
+      list.appendChild(div);
+    });
+  }
+
+  async function pickTemplate(templateId) {
+    let detail;
+    try {
+      detail = await api(`/api/templates/${encodeURIComponent(templateId)}`);
+    } catch (e) {
+      showToast(`Couldn't load template: ${e.message}`); return;
+    }
+    // Cart pre-fill from the certified subset only — pending stays display-only.
+    state.cart = [...(detail.cart || [])];
+    state.template = detail.id;
+    state.templatePending = detail.pending || [];
+    state.templateCompliance = detail.compliance || [];
+    state.goal = null; // template path is mutually exclusive with classic goals
+    try {
+      await loadBuild();
+      navigate("build");
+    } catch (e) {
+      showToast(`Couldn't load catalog: ${e.message}`);
+    }
+  }
+
+  function renderClassicGoalCards() {
+    const list = document.getElementById("goal-list"); list.innerHTML = "";
     (state.catalog.goals || []).forEach(g => {
       const div = document.createElement("div");
       div.className = "glass glass-hover spot p-6 cursor-pointer";
       const intended = (g.intended_for || []).map(i => `<span class="badge badge-stable">${esc(i)}</span>`).join("");
       div.innerHTML = `
-        <div class="text-3xl mb-3">${iconMap[g.icon] || "•"}</div>
+        <div class="text-3xl mb-3">${ICON_MAP[g.icon] || "•"}</div>
         <div class="display-3 mb-1">${esc(g.label)}</div>
         <div class="text-sm text-slate-400 mb-3 leading-relaxed">${esc(g.summary)}</div>
         <div class="flex flex-wrap gap-1">${intended}</div>
         <div class="text-xs text-cyan-300 mt-4 flex items-center gap-1">Choose <span>→</span></div>
       `;
       div.addEventListener("click", async () => {
-        // Preserve cart across back-nav if the user picks the SAME goal again.
-        // Different goal → reset (the recommended set may differ in v0.4+).
         if (state.goal !== g.id) {
           state.cart = [];
           state.goal = g.id;
         }
-        try {
-          await loadBuild();
-          navigate("build");
-        } catch (e) {
-          showToast(`Couldn't load catalog: ${e.message}`);
-        }
+        state.template = null;
+        try { await loadBuild(); navigate("build"); }
+        catch (e) { showToast(`Couldn't load catalog: ${e.message}`); }
       });
       list.appendChild(div);
     });
   }
+
+  document.getElementById("btn-classic-goals")?.addEventListener("click", () => {
+    if (!state.catalog) return;
+    renderClassicGoalCards();
+  });
 
   // ===========================================================
   // ----- BUILD / CART screen (step 2) -----
@@ -1335,8 +1433,57 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   async function loadBuild() {
     if (!state.catalog) state.catalog = await api("/api/catalog");
     renderCatalog();
+    renderTemplateBanner();
     await refreshCartValidation();
   }
+
+  function renderTemplateBanner() {
+    const banner = document.getElementById("template-banner");
+    if (!banner) return;
+    if (!state.template) { banner.classList.add("hidden"); return; }
+    banner.classList.remove("hidden");
+    const tmpl = (state._lastTemplates || []).find(t => t.id === state.template);
+    document.getElementById("template-banner-name").textContent = tmpl?.label || state.template;
+    document.getElementById("template-banner-icon").textContent = ICON_MAP[tmpl?.icon] || "✨";
+    document.getElementById("template-banner-pitch").textContent = tmpl?.elevator_pitch || "";
+    const pendingWrap = document.getElementById("template-pending-wrap");
+    const pending = state.templatePending || [];
+    if (pending.length === 0) {
+      pendingWrap.classList.add("hidden");
+    } else {
+      pendingWrap.classList.remove("hidden");
+      const el = document.getElementById("template-pending");
+      el.innerHTML = "";
+      pending.forEach(p => {
+        const tag = document.createElement("div");
+        tag.className = "px-2.5 py-1 rounded text-xs";
+        tag.style.cssText = "background: rgba(245,158,11,0.10); border: 1px solid rgba(245,158,11,0.30); color: #fcd34d;";
+        tag.innerHTML = `<span class="font-semibold">${esc(p.name)}</span> <span class="opacity-70">— ${esc(p.eta || "")} · ${esc(p.role || "")}</span>`;
+        tag.title = p.reason || "";
+        el.appendChild(tag);
+      });
+    }
+    const complianceWrap = document.getElementById("template-compliance-wrap");
+    const compliance = state.templateCompliance || [];
+    if (compliance.length === 0) {
+      complianceWrap.classList.add("hidden");
+    } else {
+      complianceWrap.classList.remove("hidden");
+      document.getElementById("template-compliance-tags").textContent =
+        "Compliance framing: " + compliance.map(c => (c.label || c.tag)).join(" · ");
+    }
+  }
+
+  document.getElementById("btn-template-compliance")?.addEventListener("click", () => {
+    const compliance = state.templateCompliance || [];
+    if (compliance.length === 0) return;
+    const lines = compliance.map(c =>
+      `\n━━ ${c.label || c.tag} ━━\n\n${c.disclaimer || ""}\n\n${c.summary || ""}\n\n` +
+      "Framing notes:\n" + (c.framing_notes || []).map(n => `  • ${n}`).join("\n") +
+      "\n\nPending controls:\n" + (c.pending_controls || []).map(p => `  • ${p.name} (${p.eta})`).join("\n")
+    ).join("\n\n");
+    alert(lines.trim());
+  });
 
   function renderCatalog() {
     const wrap = document.getElementById("catalog-list"); wrap.innerHTML = "";

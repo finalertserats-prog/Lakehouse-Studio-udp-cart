@@ -48,6 +48,110 @@ recommended_sets:
     components: [iceberg, iceberg-rest, minio, spark-iceberg, starrocks]
     stack_id: udp-local-v0.2
 
+# ============================================================
+# Templates — use-case-shaped views over recommended_sets.
+# ============================================================
+# For v0.4, every template currently maps to the one certified stack
+# (udp-recommended). `pending_components` are display-only labels for the
+# user; they never enter the cart, never affect compatibility scoring,
+# never reach the install pipeline. New certified stacks come through
+# `stacks/compatibility/*.lock.yaml` certification, not through templates.
+#
+# `compliance_tags` resolve via stacks/compliance.yaml (loaded separately).
+templates:
+
+  - id: local_demo
+    label: Local Demo Stack
+    icon: laptop
+    elevator_pitch: Lakehouse on your laptop in 10 minutes — the certified UDP reference, nothing extra.
+    persona: Evaluator / first-time user
+    intended_for: ["evaluating", "interview projects", "demos"]
+    anti_use_cases: ["regulated PHI/PCI data", "multi-tenant workloads"]
+    recommended_set: udp-recommended
+    readiness: pilot
+    hero_use_cases: ["Try Iceberg + StarRocks end-to-end", "Show stakeholders a working lakehouse"]
+    pending_components: []
+    compliance_tags: []
+
+  - id: startup_analytics
+    label: Startup Analytics
+    icon: chart
+    elevator_pitch: Iceberg + StarRocks for sub-second BI without a data team.
+    persona: Growth-stage startup / first data hire
+    intended_for: ["BI teams", "product analytics", "investor dashboards"]
+    anti_use_cases: ["regulated data", "streaming-first workloads"]
+    recommended_set: udp-recommended
+    readiness: pilot
+    hero_use_cases: ["Open analytics without managed-warehouse pricing", "Same lakehouse for ELT + BI"]
+    pending_components:
+      - { name: Dagster, role: orchestration, eta: v0.4, reason: "Asset-first scheduling for ELT" }
+      - { name: Trino, role: federated_sql, eta: v0.4, reason: "Federate queries across data sources" }
+    compliance_tags: []
+
+  - id: ai_research
+    label: AI / ML Research
+    icon: sparkles
+    elevator_pitch: Iceberg as feature-store substrate, Spark for training pulls.
+    persona: ML team / research lab
+    intended_for: ["feature engineering", "experiment tracking infra", "training-data versioning"]
+    anti_use_cases: ["low-latency online serving"]
+    recommended_set: udp-recommended
+    readiness: pilot
+    hero_use_cases: ["Versioned datasets via Iceberg snapshots", "Multi-engine reads from one warehouse"]
+    pending_components:
+      - { name: Trino, role: federated_sql, eta: v0.4, reason: "Cross-source feature lookups" }
+      - { name: "JupyterHub (multi-user)", role: notebook, eta: v0.5, reason: "Shared research environment" }
+      - { name: MLflow, role: tracking, eta: v0.6, reason: "Experiment tracking + model registry" }
+    compliance_tags: []
+
+  - id: healthcare
+    label: Healthcare Lakehouse
+    icon: shield
+    elevator_pitch: Air-gapped lakehouse framing with HIPAA-adjacent notes — not certified PHI-ready.
+    persona: Hospital IT / regulated-industry data platform
+    intended_for: ["on-prem analytics", "data-residency requirements"]
+    anti_use_cases: ["live PHI without your own BAA + controls"]
+    recommended_set: udp-recommended
+    readiness: pilot
+    hero_use_cases: ["Open analytics on infrastructure you control", "Audit-friendly storage substrate"]
+    pending_components:
+      - { name: "TLS-by-default profile", role: security, eta: v0.4, reason: "Encrypt all service ports out of the box" }
+      - { name: "Audit-log shipper", role: observability, eta: v0.5, reason: "Stream events to SIEM" }
+      - { name: "Polaris / Lakekeeper RBAC", role: catalog, eta: v0.5, reason: "Per-table access control" }
+    compliance_tags: [hipaa]
+
+  - id: fintech_compliance
+    label: Fintech Compliance
+    icon: building
+    elevator_pitch: Open-format lakehouse with audit-trail framing — PCI/SOX validation pending.
+    persona: BFSI data platform / compliance-conscious fintech
+    intended_for: ["regulated analytics", "audit-trail-first deployments"]
+    anti_use_cases: ["raw cardholder-data storage without tokenization upstream"]
+    recommended_set: udp-recommended
+    readiness: pilot
+    hero_use_cases: ["Snapshot-based audit history (Iceberg)", "Self-hosted analytics — no third-party data plane"]
+    pending_components:
+      - { name: "Nessie (branching catalog)", role: catalog, eta: v0.5, reason: "Point-in-time audit + rollback semantics" }
+      - { name: "WORM bucket policy", role: object_storage, eta: v0.5, reason: "Immutable audit logs" }
+      - { name: Trino, role: federated_sql, eta: v0.4, reason: "Cross-system reconciliation queries" }
+    compliance_tags: [pci_dss, soc2]
+
+  - id: streaming
+    label: Streaming Lakehouse
+    icon: bolt
+    elevator_pitch: CDC-into-Iceberg architecture preview — streaming engines coming Q3.
+    persona: Engineering team building on event data
+    intended_for: ["preview / architecture sketches", "CDC-into-lakehouse planning"]
+    anti_use_cases: ["live streaming pipelines today — pending Flink/Kafka v0.5"]
+    recommended_set: udp-recommended
+    readiness: preview
+    hero_use_cases: ["See the target shape before v0.5 streaming lands", "Validate Iceberg-as-sink plumbing"]
+    pending_components:
+      - { name: "Apache Kafka", role: streaming, eta: v0.5, reason: "Event bus + CDC source" }
+      - { name: "Schema Registry", role: streaming, eta: v0.5, reason: "Avro/JSON contract enforcement" }
+      - { name: "Apache Flink", role: processing, eta: v0.5, reason: "Streaming compute, Iceberg sink" }
+    compliance_tags: []
+
 categories:
   - id: table_format
     label: Table format

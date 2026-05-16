@@ -1,0 +1,114 @@
+# Lakehouse Studio — Compliance framing content
+# =============================================
+#
+# This file holds the long-form prose that describes how a template's
+# certified-component set MIGHT MAP to a compliance regime. It is NOT
+# a certification. Every entry MUST lead with a disclaimer. The
+# loader in backend/compliance.py rejects entries that don't.
+#
+# Templates reference these entries by tag (e.g. `compliance_tags: [hipaa]`).
+# UI renders each entry in an expandable "Compliance framing" panel on the
+# Build screen — collapsed by default; user must click to read.
+#
+# Anti-pattern reminder: never use language like "HIPAA compliant" or
+# "PCI certified". Allowed framing: "reference architecture",
+# "framing only", "pending validation", "for evaluation".
+
+schema_version: "1.0"
+
+compliance:
+
+  hipaa:
+    label: HIPAA framing (US healthcare)
+    disclaimer: |
+      This is a REFERENCE ARCHITECTURE for storing healthcare data on an
+      open lakehouse. Lakehouse Studio has NOT certified this stack as
+      HIPAA-compliant. A compliant deployment additionally requires a
+      signed Business Associate Agreement with every covered service,
+      organizational policies, training, and physical-security controls
+      far beyond what an installer can provide. Use this template as a
+      starting point for your own validation.
+    summary: |
+      Open lakehouse on infrastructure you fully control. Object storage
+      stays on MinIO inside your network; Iceberg metadata never leaves
+      your machines; StarRocks serves analytics without sending PHI to a
+      managed query service.
+    framing_notes:
+      - "Storage encryption at rest: MinIO supports SSE-S3 + KMS — enable in v0.4 TLS wizard"
+      - "Audit trail: Iceberg snapshot history is append-only by design — natural audit substrate"
+      - "Access control: per-table read/write via StarRocks RBAC (pending validation)"
+      - "Data residency: stack runs entirely on customer infrastructure — no third-party data plane"
+    pending_controls:
+      - { name: "TLS-by-default profile", eta: "v0.4" }
+      - { name: "Audit-log shipper to SIEM", eta: "v0.5" }
+      - { name: "RBAC via Polaris/Lakekeeper", eta: "v0.5" }
+      - { name: "Encryption-at-rest key rotation wizard", eta: "v0.6" }
+      - { name: "BAA template documentation", eta: "v0.6" }
+
+  pci_dss:
+    label: PCI-DSS framing (payment-card data)
+    disclaimer: |
+      This is a REFERENCE ARCHITECTURE for handling payment-card-adjacent
+      analytics. Lakehouse Studio has NOT certified this stack as PCI-DSS
+      compliant. PCI-DSS Level 1 requires QSA assessment, network
+      segmentation evidence, quarterly scans, and operational policies
+      that an installer cannot deliver. Use this template as a starting
+      point for your own validation.
+    summary: |
+      Open lakehouse for analytics on tokenized or de-identified payment
+      data. Card data itself should remain in your PCI-scoped systems;
+      the lakehouse serves the post-tokenization analytics path.
+    framing_notes:
+      - "Network segmentation: stack runs in one Docker network — pair with VPC isolation"
+      - "Tokenization at ingest: out of scope for v0.4; pair with your existing tokenizer upstream"
+      - "Quarterly key rotation: TLS wizard supports rotation; document in your runbook"
+      - "Audit trail: every Iceberg snapshot + every SQL editor query is logged via the event bus"
+    pending_controls:
+      - { name: "WORM bucket policy for audit logs", eta: "v0.5" }
+      - { name: "Nessie branching for point-in-time audit", eta: "v0.5" }
+      - { name: "Quarterly vulnerability scanner integration", eta: "v0.6" }
+
+  soc2:
+    label: SOC 2 framing (service-org controls)
+    disclaimer: |
+      This is a REFERENCE ARCHITECTURE for the technical controls relevant
+      to SOC 2 Type II. Lakehouse Studio has NOT been audited under SOC 2.
+      Achieving a SOC 2 report requires an independent auditor, ongoing
+      evidence collection, and organizational policies an installer
+      cannot deliver. Use this template as a starting point.
+    summary: |
+      Open lakehouse with the technical primitives that map to common
+      SOC 2 control objectives — change tracking, access logging,
+      backup, and recovery.
+    framing_notes:
+      - "Change management: every install captured as evidence; lock files certify versions"
+      - "Access logging: SQL editor audit-logs every query via the event bus"
+      - "Backup & recovery: backup module (v0.4) writes scheduled tarballs of metadata + data"
+      - "Incident response: install-time error explainer surfaces actionable diagnoses"
+    pending_controls:
+      - { name: "Continuous evidence export", eta: "v0.5" }
+      - { name: "Role-based access control surface", eta: "v0.5" }
+      - { name: "Automated DR drill", eta: "v0.6" }
+
+  gdpr:
+    label: GDPR framing (EU personal data)
+    disclaimer: |
+      This is a REFERENCE ARCHITECTURE for processing EU personal data on
+      a self-hosted lakehouse. Lakehouse Studio has NOT been certified
+      under GDPR Article 28 or any DPA. Compliance requires a Data
+      Protection Impact Assessment, lawful basis documentation, DPO
+      involvement, and operational processes (data-subject requests,
+      breach notification) an installer cannot deliver.
+    summary: |
+      Open lakehouse running entirely on infrastructure inside your
+      jurisdiction — useful for data-residency requirements where
+      managed cloud warehouses are not viable.
+    framing_notes:
+      - "Data residency: pick a host in the right region; the stack stays put"
+      - "Right to erasure: Iceberg row-level deletes (v2) support targeted removal"
+      - "Data minimization: schema evolution + column drops via Iceberg"
+      - "Processor / controller boundary: you are the controller; this stack has no third-party processor"
+    pending_controls:
+      - { name: "Subject-access-request workflow", eta: "v0.5" }
+      - { name: "Pseudonymization helpers", eta: "v0.5" }
+      - { name: "Breach-notification template", eta: "v0.6" }
