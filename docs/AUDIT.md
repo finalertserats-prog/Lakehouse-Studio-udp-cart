@@ -129,8 +129,28 @@ The response is a JSON array of `AuditEntry` objects:
 ## Retention
 
 `LHS_AUDIT_RETENTION_DAYS` (default `90`) is honoured by the
-`audit_log.retention_prune(older_than_days=N)` coroutine. **In v0.5 this is
-NOT scheduled automatically** — the operator runs it on demand:
+`audit_log.retention_prune(older_than_days=N)` coroutine. Two ways to
+run it:
+
+### Automatic (recommended)
+
+Set `LHS_AUDIT_SCHEDULER_ENABLED=true` and restart. The retention
+scheduler starts alongside the subscriber and prunes rows once per
+`LHS_AUDIT_PRUNE_INTERVAL_SECONDS` (default `86400` — daily). Lifecycle
+is wired into the FastAPI lifespan in `backend/main.py`, so the
+scheduler stops cleanly on shutdown.
+
+```sh
+export LHS_AUDIT_ENABLED=true
+export LHS_AUDIT_SCHEDULER_ENABLED=true
+# Optional overrides
+export LHS_AUDIT_RETENTION_DAYS=180
+export LHS_AUDIT_PRUNE_INTERVAL_SECONDS=43200   # twice daily
+```
+
+### Manual / on-demand
+
+Useful for one-off cleanups or when the scheduler is intentionally off:
 
 ```sh
 python -c "
@@ -141,9 +161,12 @@ print(f'pruned {deleted} rows')
 "
 ```
 
-A future release will wire this into the existing backup scheduler tick
-loop so it runs daily. Until then, treat retention pruning the same as
-log rotation — it's an operator task, not a runtime guarantee.
+### Concurrency note
+
+All audit DB writes go through `_connect()`, which sets
+`journal_mode=WAL`, `synchronous=NORMAL`, and `busy_timeout=5000`. The
+retention purge and the bus subscriber can therefore run concurrently
+without `database is locked` errors dropping audit writes.
 
 ## Disabling
 
