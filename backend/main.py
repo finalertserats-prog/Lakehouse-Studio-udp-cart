@@ -22,6 +22,13 @@ from .catalog import (
     recommended_sets as catalog_recommended_sets,
     validate_catalog,
 )
+from .compatibility import (
+    list_locks,
+    load_lock,
+    lock_summary,
+    precheck_image_availability,
+    validate_against_catalog,
+)
 from .demo_query import list_queries, run_demo_query
 from .error_explainer import explain as explain_error
 from .lake_namer import suggest as suggest_lake_names, is_valid as is_valid_lake_name, normalize as normalize_lake_name
@@ -117,15 +124,36 @@ AuthDep = Depends(_require_auth)
 # return 503 with a clear message until the YAML is fixed.
 _CATALOG_PROBLEMS: list[str] = []
 
+# Per-stack compatibility drift problems (catalog vs lock file). Surfaced via
+# /healthz so operators see drift before they ship. Non-fatal: install still
+# proceeds, but the install-time registry precheck will catch the worst cases.
+_COMPAT_PROBLEMS: dict[str, list[str]] = {}
+
 
 @app.on_event("startup")
 async def _validate_catalog_on_startup() -> None:
-    global _CATALOG_PROBLEMS
+    global _CATALOG_PROBLEMS, _COMPAT_PROBLEMS
     _CATALOG_PROBLEMS = validate_catalog()
     if _CATALOG_PROBLEMS:
         import logging
         for p in _CATALOG_PROBLEMS:
             logging.getLogger("lhs.catalog").error("catalog problem: %s", p)
+
+    # Cross-check every stack manifest against its compatibility lock. A
+    # mismatch means someone edited the catalog without bumping the lock —
+    # the "matrix is the moat" promise has been broken silently.
+    import logging
+    compat_log = logging.getLogger("lhs.compat")
+    _COMPAT_PROBLEMS = {}
+    locked = set(list_locks())
+    for m in list_manifests():
+        if m.id not in locked:
+            continue  # no lock yet — acceptable for uncertified stacks
+        problems = validate_against_catalog(m.id, m.components)
+        if problems:
+            _COMPAT_PROBLEMS[m.id] = problems
+            for p in problems:
+                compat_log.error("compat drift [%s]: %s", m.id, p)
 
 
 def _require_catalog_ok() -> None:
@@ -257,6 +285,59 @@ def get_stack(stack_id: str):
     except KeyError:
         raise HTTPException(404, f"Stack {stack_id} not found")
     return m.data
+
+
+# ---------- Compatibility (the matrix-as-moat surface) ----------
+
+@app.get("/api/stacks/{stack_id}/compatibility", dependencies=[AuthDep])
+def get_stack_compatibility(stack_id: str):
+    """Lock-file summary + any catalog-vs-lock drift detected at startup.
+
+    The lock file is the authoritative record of which versions were verified
+    working together. UI surfaces this so operators see what's actually been
+    certified before they install.
+    """
+    try:
+        m = load_manifest(stack_id)
+    except KeyError:
+        raise HTTPException(404, f"Stack {stack_id} not found")
+    summary = lock_summary(stack_id)
+    if summary is None:
+        return {
+            "stack_id": stack_id,
+            "certified": False,
+            "summary": None,
+            "drift": [f"no compatibility lock exists for stack '{stack_id}'"],
+            "components_in_catalog": len(m.components),
+        }
+    return {
+        "stack_id": stack_id,
+        "certified": True,
+        "summary": summary,
+        "drift": _COMPAT_PROBLEMS.get(stack_id, []),
+        "components_in_catalog": len(m.components),
+    }
+
+
+@app.post("/api/stacks/{stack_id}/compatibility/precheck", dependencies=[AuthDep])
+async def post_stack_compat_precheck(stack_id: str, timeout: int = 10):
+    """Verify every image+tag in the lock file STILL exists on its registry.
+
+    This is the v0.3-shipping-disaster prevention: a tag that worked at
+    certification time can be removed upstream, and the only way to know
+    before install is to ask the registry. Runs `docker manifest inspect`
+    in parallel for every component.
+    """
+    try:
+        load_manifest(stack_id)
+    except KeyError:
+        raise HTTPException(404, f"Stack {stack_id} not found")
+    if load_lock(stack_id) is None:
+        raise HTTPException(404, f"no compatibility lock for stack '{stack_id}'")
+    # Clamp timeout to a reasonable range — registry calls shouldn't hold
+    # the request open for more than a minute per component.
+    timeout = max(2, min(int(timeout), 60))
+    return await precheck_image_availability(stack_id, timeout=timeout)
 
 
 # ---------- Inspection ----------
@@ -711,6 +792,8 @@ def healthz():
     return {
         "ok": not _CATALOG_PROBLEMS,
         "catalog_problems": _CATALOG_PROBLEMS,
+        "compat_problems": _COMPAT_PROBLEMS,
+        "certified_stacks": list_locks(),
     }
 
 

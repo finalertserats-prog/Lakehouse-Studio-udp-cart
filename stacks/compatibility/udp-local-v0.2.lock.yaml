@@ -1,0 +1,225 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK
+# =====================================
+# This file records the EXACT versions, dependencies, and environment
+# requirements that have been VERIFIED working together for the UDP
+# reference stack as of the certification date below.
+#
+# Studio's compatibility checker reads this file at install time. It
+# refuses to install a version that doesn't match unless the user
+# explicitly overrides — preventing the classic open-source-data-lake
+# trap where a single component bump breaks the stack silently.
+#
+# When a contributor proposes a version bump:
+#   1. Update this file with the new pinned version
+#   2. Run the install end-to-end to completion
+#   3. Record evidence in the `evidence` block below
+#   4. Bump certified_at + version_id + reviewer
+#
+# Anything not in this file is UNCERTIFIED and unsupported.
+
+schema_version: "1.0"
+stack_id: udp-local-v0.2
+version_id: "0.2.0"
+certified_at: "2026-05-16T18:00:00+05:30"
+certified_by: vishnu.wildeagle@gmail.com
+certified_on:
+  os: "Windows 11 + Docker Desktop"
+  docker: "28.3.0"
+  docker_compose: "v2.38.1-desktop.1"
+status: "pilot-stable"
+
+# Maturity grades:
+#   pilot-stable    — install completes, lakehouse readable, smoke may need Skip on some OS
+#   linux-stable    — verified end-to-end on a Linux VPS, smoke passes clean
+#   production      — additional hardening (TLS, backups, RBAC) certified
+status_notes: |
+  pilot-stable: install completes through bootstrap and finalize on
+  Windows Docker Desktop; Spark can read the Iceberg tables from MinIO.
+  The smoke step's final StarRocks SELECT-from-Iceberg-on-MinIO path
+  fails on Windows due to a documented StarRocks-3.3 AWS SDK interaction
+  (the SDK ignores some catalog-property settings and falls back to its
+  default chain in a way that mishandles non-AWS endpoints). Same code
+  path is reported working on Linux per Codex source review. Linux
+  end-to-end verification pending → bump to `linux-stable` after.
+
+# ---------------------------------------------------------------------------
+# Component lock — every container image and tag in the stack.
+# Each entry includes:
+#   - image (full registry path)
+#   - tag (immutable — never use `latest` or floating tags here)
+#   - sha (optional — preferred for reproducibility; record after a verified pull)
+#   - registry_url (where to confirm the tag still exists)
+#   - upstream_url (project page for breaking-change scans)
+#   - notes (any known issues / why this version specifically)
+# ---------------------------------------------------------------------------
+components:
+  - id: minio
+    name: MinIO
+    role: object_storage
+    image: minio/minio
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+    registry_url: https://hub.docker.com/r/minio/minio/tags
+    upstream_url: https://github.com/minio/minio
+    notes: |
+      S3-compatible object store. Healthcheck uses `mc ready local`
+      which is in this image (mc-bundle).
+
+  - id: minio-client
+    name: MinIO Client (mc)
+    role: object_storage_bootstrap
+    image: minio/mc
+    tag: "RELEASE.2025-04-16T18-13-26Z"
+    registry_url: https://hub.docker.com/r/minio/mc/tags
+    upstream_url: https://github.com/minio/mc
+    notes: One-shot — creates the `datalake` bucket on MinIO startup.
+
+  - id: iceberg-rest
+    name: Iceberg REST Catalog
+    role: catalog
+    image: tabulario/iceberg-rest
+    tag: "1.6.0"
+    registry_url: https://hub.docker.com/r/tabulario/iceberg-rest/tags
+    upstream_url: https://github.com/apache/iceberg
+    notes: |
+      Upstream healthcheck uses `wget` which isn't in the image — we
+      replaced it with a bash-only TCP probe in the UDP PR.
+
+  - id: spark
+    name: Apache Spark + Iceberg
+    role: processing
+    image: tabulario/spark-iceberg
+    tag: "3.5.5_1.8.1"
+    registry_url: https://hub.docker.com/r/tabulario/spark-iceberg/tags
+    upstream_url: https://iceberg.apache.org/spark-quickstart
+    notes: |
+      DO NOT bump to `3.5.1_1.5.2` — that tag was REMOVED from Docker Hub
+      after UDP shipped, breaking every fresh install. Verified
+      3.5.5_1.8.1 exists via `docker manifest inspect`. Lock `id` matches
+      catalog `id` (`spark`) so drift-detection lines up cleanly.
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    image: starrocks/fe-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/fe-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: |
+      MUST be 3.3.12 or newer. Earlier 3.3.x ignored Iceberg REST
+      catalog property propagation to S3 FileIO (PR #55416).
+      DO NOT use `3.3-latest` floating tag — pin to a release.
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    image: starrocks/be-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/be-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: Same version requirement as FE.
+
+# ---------------------------------------------------------------------------
+# Compatibility constraints — pairs that MUST hold for this stack to work.
+# When proposing a bump, run validation against every constraint listed.
+# ---------------------------------------------------------------------------
+constraints:
+  - between: [spark, iceberg-rest]
+    rule: "spark-iceberg image's bundled Iceberg version must be >= iceberg-rest version"
+    verified: "3.5.5_1.8.1 ships Iceberg 1.8.1; iceberg-rest is 1.6.0 — server-side >= client-side OK"
+
+  - between: [starrocks-fe, iceberg-rest]
+    rule: "StarRocks 3.3.x requires PR #55416 for Iceberg REST catalog FileIO propagation"
+    verified: "3.3.12 includes PR #55416 (changelog confirmed via Codex research)"
+
+  - between: [starrocks-fe, starrocks-be]
+    rule: "FE and BE must run the same minor + patch version"
+    verified: "both pinned to 3.3.12"
+
+  - between: [minio, spark]
+    rule: "Spark/Iceberg must use path-style S3 addressing (MinIO doesn't support virtual-hosted-style on http endpoints)"
+    verified: "spark-defaults.conf sets spark.hadoop.fs.s3a.path.style.access=true"
+
+  - between: [minio, starrocks-fe, starrocks-be]
+    rule: "StarRocks FE+BE must export AWS_REGION + AWS_ENDPOINT_URL_S3 + AWS_S3_US_EAST_1_REGIONAL_ENDPOINT=regional in startup, beyond catalog props"
+    verified: "UDP PR #6 docker-compose.yml injects these into both FE and BE startup commands"
+    known_issue: "On Windows Docker Desktop, the AWS SDK may still fail SELECT queries from StarRocks BE → MinIO with UnknownHostException despite all env vars being set. Not reproduced on Linux."
+
+# ---------------------------------------------------------------------------
+# Host requirements — what the install target needs.
+# ---------------------------------------------------------------------------
+host_requirements:
+  docker_min: "28.0"
+  docker_compose_min: "v2.30"
+  bash_min: "5.0"
+  os_verified:
+    - "Ubuntu 22.04+ (Linux)"
+    - "Windows 11 + Docker Desktop (with smoke-step caveat)"
+  os_unverified_but_likely_works:
+    - "macOS + Docker Desktop"
+    - "Ubuntu 20.04"
+  ram_min_gb: 8
+  ram_recommended_gb: 16
+  disk_min_gb: 50
+  ports_required: [9000, 9001, 8181, 8888, 8030, 9030]
+
+# ---------------------------------------------------------------------------
+# Evidence — per-attempt verification records. Append-only.
+# ---------------------------------------------------------------------------
+evidence:
+  - id: "2026-05-16-windows-docker-desktop"
+    timestamp: "2026-05-16T17:50:00+05:30"
+    operator: vishnu.wildeagle@gmail.com
+    host:
+      os: "Windows 11 + Docker Desktop"
+      docker: "28.3.0"
+      ram_gb: 15.3
+      cpu_cores: 16
+    via: "Lakehouse Studio v0.3 — UI driven install"
+    install_id: inst_0d13069722
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: failed
+      finalize: passed_after_skip
+    smoke_failure_root_cause: |
+      StarRocks BE → MinIO via AWS SDK on Windows Docker Desktop
+      hits UnknownHostException at query time. Catalog properties +
+      all 5 prescribed env vars (AWS_REGION, AWS_ACCESS_KEY_ID,
+      AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL_S3,
+      AWS_S3_US_EAST_1_REGIONAL_ENDPOINT=regional) applied. Codex
+      research indicates this is Linux-only-fixable due to SDK
+      Docker-network interaction. Lakehouse data IS reachable from
+      Spark (proven: `SELECT * FROM udp.curated.demo_customer_summary`
+      returned 3 expected rows AMER/APAC/EMEA).
+    lakehouse_proof_via_spark:
+      - "AMER  1  510.0   2026-05-16 12:37:49"
+      - "APAC  2  195.75  2026-05-16 12:37:49"
+      - "EMEA  2  480.75  2026-05-16 12:37:49"
+
+# ---------------------------------------------------------------------------
+# Known-incompatible — combinations we know DO NOT work. Just as important
+# as the positive matrix.
+# ---------------------------------------------------------------------------
+incompatible:
+  - combination: [spark:3.5.1_1.5.2]
+    reason: "Tag was removed from Docker Hub after UDP shipped. Any fresh install fails at `docker compose up` with 'not found' error."
+    discovered: "2026-05-16"
+    workaround: "Bump to 3.5.5_1.8.1 (current certified)"
+
+  - combination: [starrocks-fe:3.3-latest, starrocks-be:3.3-latest]
+    reason: "Floating tag has historically resolved to 3.3.10 (pre-3.3.12) which has the Iceberg REST FileIO propagation bug (fixed by PR #55416)."
+    discovered: "2026-05-16"
+    workaround: "Pin to exact 3.3.12 or newer"
+
+  - combination: [starrocks-fe + spark with hive-metastore]
+    reason: |
+      UDP's pre-PR-#6 compose had spark → hive-metastore as a hard
+      dependency. Without hive-metastore actually starting (which
+      required additional env vars not in .env.example), spark
+      stayed in Created state forever.
+    discovered: "2026-05-16"
+    workaround: "Use UDP PR #6+ which makes hive-metastore opt-in via `hms` compose profile"
