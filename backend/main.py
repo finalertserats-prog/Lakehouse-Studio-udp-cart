@@ -53,6 +53,8 @@ from .state import store
 from .structured_smoke import run_structured_smoke
 from . import ingest as ingest_mod
 from . import data_sources as data_sources_mod
+from . import destinations as destinations_mod
+from . import insyght_connector as insyght_mod
 from . import table_explorer
 from . import backup as backup_mod
 from . import monitoring as monitoring_mod
@@ -1571,6 +1573,112 @@ async def delete_data_source(source_id: str):
     if src is None:
         raise HTTPException(404, "data source not found")
     await data_sources_mod.delete_source(source_id)
+    return None
+
+
+# ---------- Destinations (OUTBOUND mirror of data-sources) ----------
+#
+# Symmetric to the data_sources block above. After a stack reaches READY,
+# the operator wires downstream BI/analytics tools to it. Routes are
+# additive — no existing contract is touched.
+
+@app.post("/api/installs/{install_id}/destinations", dependencies=[AuthDep])
+async def post_destination(install_id: str,
+                           body: destinations_mod.DestinationCreateRequest):
+    """Register a downstream destination (Insyght / Tableau / etc.). Credentials
+    are encrypted at rest and never echoed back. Response uses the scrubbed
+    Destination model (has_credentials: bool, no plaintext)."""
+    _require_install_ready(install_id)
+    try:
+        record = await destinations_mod.create_destination(install_id, body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return record.model_dump()
+
+
+@app.get("/api/installs/{install_id}/destinations", dependencies=[AuthDep])
+async def get_destinations(install_id: str):
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    items = await destinations_mod.list_destinations(install_id)
+    return [d.model_dump() for d in items]
+
+
+@app.get("/api/destinations/{destination_id}", dependencies=[AuthDep])
+async def get_destination_by_id(destination_id: str):
+    dest = await destinations_mod.get_destination(destination_id)
+    if dest is None:
+        raise HTTPException(404, "destination not found")
+    return dest.model_dump()
+
+
+@app.post("/api/destinations/{destination_id}/test", dependencies=[AuthDep])
+async def post_destination_test(destination_id: str):
+    """Dispatch to the per-mode tester. sql_pull mode requires the install
+    to be in READY state since it opens a real connection to StarRocks."""
+    dest = await destinations_mod.get_destination(destination_id)
+    if dest is None:
+        raise HTTPException(404, "destination not found")
+    if dest.connection_mode == "sql_pull":
+        _require_install_ready(dest.install_id)
+    try:
+        return await destinations_mod.test_destination(destination_id)
+    except destinations_mod.DestinationNotFoundError:
+        raise HTTPException(404, "destination not found")
+
+
+@app.post("/api/destinations/{destination_id}/provision", dependencies=[AuthDep])
+async def post_destination_provision(destination_id: str):
+    """Provision the downstream-tool-facing artifacts for this destination.
+
+    For Insyght + sql_pull: creates a per-destination StarRocks read-only
+    user and grants SELECT on the configured database.
+    """
+    dest = await destinations_mod.get_destination(destination_id)
+    if dest is None:
+        raise HTTPException(404, "destination not found")
+    _require_install_ready(dest.install_id)
+
+    creds = destinations_mod._decrypt_credentials(destination_id)
+
+    if dest.kind == "insyght" and dest.connection_mode == "sql_pull":
+        result = await insyght_mod.provision_sql_pull(
+            dest.install_id, dest.config, creds,
+        )
+    elif dest.kind == "insyght" and dest.connection_mode == "push_api":
+        result = await insyght_mod.provision_push_api(
+            dest.install_id, dest.config, creds,
+        )
+    else:
+        # Other vendors are sql_pull-only via the same StarRocks user path.
+        # We reuse the Insyght provisioner since the SQL is identical for
+        # any MySQL-protocol consumer.
+        result = await insyght_mod.provision_sql_pull(
+            dest.install_id, dest.config, creds,
+        )
+    return result
+
+
+@app.get("/api/destinations/{destination_id}/connection", dependencies=[AuthDep])
+async def get_destination_connection(destination_id: str):
+    """Return the sanitized connection bundle the operator hands to the BI tool.
+
+    Plaintext credentials are NEVER returned — operators already have them
+    (they set them at create time).
+    """
+    try:
+        return await destinations_mod.generate_connection_payload(destination_id)
+    except destinations_mod.DestinationNotFoundError:
+        raise HTTPException(404, "destination not found")
+
+
+@app.delete("/api/destinations/{destination_id}", status_code=204, dependencies=[AuthDep])
+async def delete_destination(destination_id: str):
+    dest = await destinations_mod.get_destination(destination_id)
+    if dest is None:
+        raise HTTPException(404, "destination not found")
+    await destinations_mod.delete_destination(destination_id)
     return None
 
 

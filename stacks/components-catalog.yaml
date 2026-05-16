@@ -482,3 +482,93 @@ categories:
       - { name: "Prometheus", id: "prometheus", logo: "/assets/logos/prometheus.svg", summary: "Pull-based metrics scraping with a multi-dimensional time-series store.", reason: "Bundled monitoring; v0.4" }
       - { name: "Grafana",    id: "grafana",    logo: "/assets/logos/grafana.svg",    summary: "Dashboards over Prometheus, Loki, and Iceberg — one query UI for everything.", reason: "Bundled monitoring; v0.4" }
       - { name: "Loki",       id: "loki",       logo: "/assets/logos/loki.svg",       summary: "Log aggregation with Prometheus-style label indexing.",                   reason: "Log aggregation; v0.5" }
+
+# ============================================================
+# Destinations — downstream BI/analytics tools that read FROM the lakehouse.
+# ============================================================
+# These are PER-INSTALL runtime configuration, NOT items the user "installs"
+# from the cart. They live here so the picker UI can render a uniform
+# marketplace alongside templates/components, but they're consumed by the
+# /api/installs/{id}/destinations registry (backend/destinations.py), not
+# by the install pipeline. Categories: bi_analytics / etl_downstream /
+# notebook / custom.
+destinations:
+  - id: insyght
+    name: Insyght
+    category: bi_analytics
+    logo: /assets/logos/insyght.svg
+    tagline: "Conversational BI on top of your lakehouse"
+    summary: >
+      Ask questions in plain English; Insyght composes SQL against your
+      lakehouse and returns charts. sql_pull mode is GA in v0.6; push_api
+      mode lands in v0.6.1 once Insyght publishes their webhook spec.
+    connection_modes: [sql_pull, push_api]
+    default_mode: sql_pull
+    status: ga
+    instructions_url: ""   # TBD — needs the official Insyght docs URL from the user
+  - id: tableau
+    name: Tableau
+    category: bi_analytics
+    logo: /assets/logos/tableau.svg
+    tagline: "Drag-and-drop dashboards over MySQL-protocol warehouses"
+    summary: "Connects via the MySQL connector to StarRocks on port 9030."
+    connection_modes: [sql_pull]
+    default_mode: sql_pull
+    status: coming_soon
+  - id: looker
+    name: Looker
+    category: bi_analytics
+    logo: /assets/logos/looker.svg
+    tagline: "LookML-driven semantic modeling"
+    summary: "Connects via the MySQL dialect to StarRocks on port 9030."
+    connection_modes: [sql_pull]
+    default_mode: sql_pull
+    status: coming_soon
+  - id: mode
+    name: Mode
+    category: bi_analytics
+    logo: /assets/logos/mode.svg
+    tagline: "SQL-first analytics + notebooks"
+    summary: "Add as a MySQL data source pointing at the StarRocks frontend."
+    connection_modes: [sql_pull]
+    default_mode: sql_pull
+    status: coming_soon
+  - id: superset
+    name: Apache Superset
+    category: bi_analytics
+    logo: /assets/logos/superset.svg
+    tagline: "Open-source BI with rich chart library"
+    summary: "Uses the StarRocks SQLAlchemy dialect; configure as MySQL on :9030."
+    connection_modes: [sql_pull]
+    default_mode: sql_pull
+    status: coming_soon
+  - id: metabase
+    name: Metabase
+    category: bi_analytics
+    logo: /assets/logos/metabase.svg
+    tagline: "Self-service question-driven BI"
+    summary: "Add as a MySQL database; Metabase auto-discovers tables."
+    connection_modes: [sql_pull]
+    default_mode: sql_pull
+    status: coming_soon
+  - id: powerbi
+    name: Microsoft Power BI
+    category: bi_analytics
+    logo: /assets/logos/powerbi.svg
+    tagline: "Enterprise BI for Microsoft shops"
+    summary: "Connects via the MySQL connector or generic ODBC to :9030."
+    connection_modes: [sql_pull]
+    default_mode: sql_pull
+    status: coming_soon
+  - id: custom_jdbc
+    name: Custom JDBC consumer
+    category: custom
+    logo: /assets/logos/jdbc.svg
+    tagline: "Any tool that speaks MySQL protocol"
+    summary: >
+      Generic escape hatch — anything with a MySQL connector works against
+      the StarRocks frontend on port 9030. Use this when your downstream
+      tool isn't in the curated list.
+    connection_modes: [sql_pull]
+    default_mode: sql_pull
+    status: ga

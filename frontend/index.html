@@ -1418,6 +1418,139 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       </div>
     </div>
 
+    <!-- 9. Connect downstream tools (destinations — outbound mirror of data sources) -->
+    <div class="glass p-5 mb-6" data-card="destinations">
+      <div class="card-head flex items-center justify-between cursor-pointer" onclick="toggleCard(this, 'destinations')">
+        <h3 class="display-3">Connect downstream tools</h3>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="card-body mt-4 hidden">
+        <p class="text-sm text-slate-400 mb-3">
+          Wire BI tools (Insyght, Tableau, Looker, etc.) directly to the lakehouse.
+          Studio provisions a read-only StarRocks user and gives you a connection bundle to paste into your tool.
+        </p>
+        <div class="flex flex-wrap gap-2 items-center mb-3">
+          <button id="btn-add-destination" class="btn-primary text-sm">+ Add destination</button>
+          <button id="btn-refresh-destinations" class="btn-ghost text-sm">&#8635; Refresh</button>
+          <span id="destinations-status" class="text-xs text-slate-400 mono"></span>
+        </div>
+        <div id="destinations-error" class="text-xs text-rose-300 mb-2 hidden"></div>
+        <div id="destinations-list">
+          <div class="v04-empty">Loading destinations&#8230;</div>
+        </div>
+
+        <!-- Add-destination modal (hidden by default) -->
+        <div id="destination-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+             style="background: rgba(2,6,23,0.65);">
+          <div class="glass p-6 w-full max-w-lg" style="max-height: 90vh; overflow-y: auto;">
+            <div class="flex items-center justify-between mb-3">
+              <h4 class="display-3">Add destination</h4>
+              <button id="dest-modal-close" class="btn-ghost text-sm">&#10005;</button>
+            </div>
+            <div class="space-y-3">
+              <div>
+                <label class="text-xs text-slate-400 mono block mb-1">Tool</label>
+                <select id="dest-kind" class="input mono text-sm w-full">
+                  <option value="insyght">Insyght</option>
+                  <option value="tableau">Tableau</option>
+                  <option value="looker">Looker</option>
+                  <option value="mode">Mode</option>
+                  <option value="superset">Apache Superset</option>
+                  <option value="metabase">Metabase</option>
+                  <option value="powerbi">Power BI</option>
+                  <option value="custom_jdbc">Custom JDBC consumer</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-slate-400 mono block mb-1">Name</label>
+                <input id="dest-name" type="text" class="input mono text-sm w-full"
+                       placeholder="e.g. Insyght prod" maxlength="128" />
+              </div>
+              <div>
+                <label class="text-xs text-slate-400 mono block mb-1">Connection mode</label>
+                <select id="dest-mode" class="input mono text-sm w-full">
+                  <option value="sql_pull">SQL pull (recommended)</option>
+                  <option value="push_api">Push API (preview)</option>
+                  <option value="file_drop">File drop (preview)</option>
+                </select>
+              </div>
+              <div id="dest-sql-fields" class="space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="text-xs text-slate-400 mono block mb-1">Host</label>
+                    <input id="dest-host" type="text" class="input mono text-sm w-full"
+                           value="127.0.0.1" maxlength="253" />
+                  </div>
+                  <div>
+                    <label class="text-xs text-slate-400 mono block mb-1">Port</label>
+                    <input id="dest-port" type="number" class="input mono text-sm w-full"
+                           value="9030" min="1" max="65535" />
+                  </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="text-xs text-slate-400 mono block mb-1">Database</label>
+                    <input id="dest-database" type="text" class="input mono text-sm w-full"
+                           value="udp" maxlength="128" />
+                  </div>
+                  <div>
+                    <label class="text-xs text-slate-400 mono block mb-1">Username</label>
+                    <input id="dest-username" type="text" class="input mono text-sm w-full"
+                           value="insyght_reader" maxlength="63" />
+                  </div>
+                </div>
+                <div>
+                  <label class="text-xs text-slate-400 mono block mb-1">Password</label>
+                  <input id="dest-password" type="password" class="input mono text-sm w-full"
+                         autocomplete="new-password" maxlength="256" />
+                  <p class="text-xs text-slate-500 mt-1">
+                    Stored Fernet-encrypted; never echoed back. You'll need to remember it for the BI tool.
+                  </p>
+                </div>
+              </div>
+              <div id="dest-push-fields" class="space-y-3 hidden">
+                <div>
+                  <label class="text-xs text-slate-400 mono block mb-1">Webhook URL</label>
+                  <input id="dest-url" type="text" class="input mono text-sm w-full"
+                         placeholder="https://api.insyght.example/lhs/events" />
+                </div>
+                <div>
+                  <label class="text-xs text-slate-400 mono block mb-1">Bearer token</label>
+                  <input id="dest-token" type="password" class="input mono text-sm w-full"
+                         autocomplete="new-password" />
+                </div>
+              </div>
+              <div id="dest-bucket-fields" class="space-y-3 hidden">
+                <div>
+                  <label class="text-xs text-slate-400 mono block mb-1">Bucket path</label>
+                  <input id="dest-bucket" type="text" class="input mono text-sm w-full"
+                         placeholder="s3://datalake/exports/insyght/" />
+                </div>
+              </div>
+              <div id="dest-modal-error" class="text-xs text-rose-300 hidden"></div>
+              <div id="dest-modal-status" class="text-xs text-slate-400 mono"></div>
+              <div class="flex gap-2 pt-2">
+                <button id="dest-modal-test" class="btn-ghost text-sm">Test connection</button>
+                <button id="dest-modal-save" class="btn-primary text-sm">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- View-connection panel (hidden by default) -->
+        <div id="destination-conn-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+             style="background: rgba(2,6,23,0.65);">
+          <div class="glass p-6 w-full max-w-2xl" style="max-height: 90vh; overflow-y: auto;">
+            <div class="flex items-center justify-between mb-3">
+              <h4 class="display-3">Connection bundle</h4>
+              <button id="dest-conn-close" class="btn-ghost text-sm">&#10005;</button>
+            </div>
+            <div id="dest-conn-body" class="text-sm text-slate-300"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <h3 class="display-3 mb-4 mt-2">Day-2 operations</h3>
     <div class="glass p-4 flex flex-wrap gap-2">
       <button class="ops-btn btn-ghost text-sm" data-action="status">Status</button>
@@ -4218,7 +4351,277 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     gitops:   () => { bindGitopsCard(); },
     schedule: () => { bindScheduleCard(); loadSchedule(); },
     service_logs: () => { bindServiceLogsCard(); loadServiceLogsServices(); },
+    destinations: () => { bindDestinationsCard(); loadDestinations(); },
   };
+
+  // ===== Destinations card (outbound — BI tools that read FROM the lake) =====
+  function bindDestinationsCard() {
+    const addBtn = document.getElementById("btn-add-destination");
+    const refresh = document.getElementById("btn-refresh-destinations");
+    const closeBtn = document.getElementById("dest-modal-close");
+    const closeConn = document.getElementById("dest-conn-close");
+    const modeSel = document.getElementById("dest-mode");
+    const kindSel = document.getElementById("dest-kind");
+    const testBtn = document.getElementById("dest-modal-test");
+    const saveBtn = document.getElementById("dest-modal-save");
+    if (addBtn && !addBtn._bound) {
+      addBtn._bound = true;
+      addBtn.addEventListener("click", openDestinationModal);
+    }
+    if (refresh && !refresh._bound) {
+      refresh._bound = true;
+      refresh.addEventListener("click", loadDestinations);
+    }
+    if (closeBtn && !closeBtn._bound) {
+      closeBtn._bound = true;
+      closeBtn.addEventListener("click", closeDestinationModal);
+    }
+    if (closeConn && !closeConn._bound) {
+      closeConn._bound = true;
+      closeConn.addEventListener("click", () =>
+        document.getElementById("destination-conn-modal").classList.add("hidden"));
+    }
+    if (modeSel && !modeSel._bound) {
+      modeSel._bound = true;
+      modeSel.addEventListener("change", _toggleDestModeFields);
+    }
+    if (kindSel && !kindSel._bound) {
+      kindSel._bound = true;
+      kindSel.addEventListener("change", _applyDestKindDefaults);
+    }
+    if (testBtn && !testBtn._bound) {
+      testBtn._bound = true;
+      testBtn.addEventListener("click", testDestinationFromModal);
+    }
+    if (saveBtn && !saveBtn._bound) {
+      saveBtn._bound = true;
+      saveBtn.addEventListener("click", saveDestinationFromModal);
+    }
+  }
+
+  function _toggleDestModeFields() {
+    const mode = document.getElementById("dest-mode").value;
+    document.getElementById("dest-sql-fields").classList.toggle("hidden", mode !== "sql_pull");
+    document.getElementById("dest-push-fields").classList.toggle("hidden", mode !== "push_api");
+    document.getElementById("dest-bucket-fields").classList.toggle("hidden", mode !== "file_drop");
+  }
+
+  function _applyDestKindDefaults() {
+    const kind = document.getElementById("dest-kind").value;
+    const username = document.getElementById("dest-username");
+    // Auto-suggest a per-vendor read-only user name (operator can override).
+    if (username && (!username.value || /_(reader|bi)$/i.test(username.value))) {
+      username.value = (kind === "insyght" ? "insyght_reader"
+                       : kind === "tableau" ? "tableau_reader"
+                       : kind === "looker"  ? "looker_reader"
+                       : kind === "custom_jdbc" ? "bi_reader"
+                       : `${kind}_reader`);
+    }
+  }
+
+  function openDestinationModal() {
+    document.getElementById("dest-modal-error").classList.add("hidden");
+    document.getElementById("dest-modal-status").textContent = "";
+    _toggleDestModeFields();
+    _applyDestKindDefaults();
+    document.getElementById("destination-modal").classList.remove("hidden");
+  }
+
+  function closeDestinationModal() {
+    document.getElementById("destination-modal").classList.add("hidden");
+  }
+
+  function _readDestForm() {
+    const kind = document.getElementById("dest-kind").value;
+    const name = document.getElementById("dest-name").value.trim();
+    const connection_mode = document.getElementById("dest-mode").value;
+    const config = {};
+    const credentials = {};
+    if (connection_mode === "sql_pull") {
+      config.host = document.getElementById("dest-host").value.trim();
+      config.port = parseInt(document.getElementById("dest-port").value, 10);
+      config.database = document.getElementById("dest-database").value.trim();
+      config.username = document.getElementById("dest-username").value.trim();
+      const pw = document.getElementById("dest-password").value;
+      if (pw) credentials.password = pw;
+    } else if (connection_mode === "push_api") {
+      config.url = document.getElementById("dest-url").value.trim();
+      const tok = document.getElementById("dest-token").value;
+      if (tok) credentials.bearer_token = tok;
+    } else if (connection_mode === "file_drop") {
+      config.bucket = document.getElementById("dest-bucket").value.trim();
+    }
+    return { kind, name, connection_mode, config,
+             credentials: Object.keys(credentials).length ? credentials : null };
+  }
+
+  async function saveDestinationFromModal() {
+    const errEl = document.getElementById("dest-modal-error");
+    const statusEl = document.getElementById("dest-modal-status");
+    errEl.classList.add("hidden");
+    const body = _readDestForm();
+    if (!body.name) {
+      errEl.textContent = "Name is required."; errEl.classList.remove("hidden"); return;
+    }
+    statusEl.textContent = "saving…";
+    try {
+      const r = await api(`/api/installs/${state.installId}/destinations`, {
+        method: "POST", body: JSON.stringify(body),
+      });
+      if (r.error || r.detail) {
+        const msg = r.error || r.detail;
+        errEl.textContent = (typeof msg === "string") ? msg : JSON.stringify(msg);
+        errEl.classList.remove("hidden");
+        statusEl.textContent = ""; return;
+      }
+      statusEl.textContent = "saved";
+      closeDestinationModal();
+      loadDestinations();
+    } catch (e) {
+      errEl.textContent = e.message; errEl.classList.remove("hidden");
+      statusEl.textContent = "";
+    }
+  }
+
+  async function testDestinationFromModal() {
+    // Save-then-test pattern would require a destination_id we don't have yet.
+    // Instead, hint the operator to save first; per-row Test button does the real check.
+    const statusEl = document.getElementById("dest-modal-status");
+    statusEl.textContent = "save the destination first, then use Test from the row.";
+  }
+
+  async function loadDestinations() {
+    const root = document.getElementById("destinations-list");
+    const errEl = document.getElementById("destinations-error");
+    if (!root || !state.installId) return;
+    errEl.classList.add("hidden");
+    root.innerHTML = `<div class="v04-empty">Loading destinations…</div>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/destinations`);
+      const items = Array.isArray(r) ? r : (r.data || []);
+      if (!items.length) {
+        root.innerHTML = `<div class="v04-empty">No destinations yet — click <strong>+ Add destination</strong> to wire up your first BI tool.</div>`;
+        return;
+      }
+      const rows = items.map(d => {
+        const tested = d.last_tested_at
+          ? new Date(d.last_tested_at * 1000).toISOString().replace("T", " ").slice(0, 19)
+          : "—";
+        const provisionBtn = (d.kind === "insyght" && d.connection_mode === "sql_pull")
+          ? `<button class="btn-ghost text-xs" data-act="provision" data-id="${esc(d.destination_id)}">Provision</button>` : "";
+        return `<tr class="border-b border-white/5">
+          <td class="py-2 pr-3"><span class="mono text-cyan-300">${esc(d.name)}</span></td>
+          <td class="py-2 pr-3 text-slate-400">${esc(d.kind)}</td>
+          <td class="py-2 pr-3 text-slate-400">${esc(d.connection_mode)}</td>
+          <td class="py-2 pr-3 text-slate-400 mono">${tested}</td>
+          <td class="py-2 pr-3 flex gap-1 flex-wrap">
+            <button class="btn-ghost text-xs" data-act="test" data-id="${esc(d.destination_id)}">Test</button>
+            <button class="btn-ghost text-xs" data-act="connection" data-id="${esc(d.destination_id)}">View Connection</button>
+            ${provisionBtn}
+            <button class="btn-ghost text-xs" data-act="delete" data-id="${esc(d.destination_id)}" style="color:#fca5a5;">Delete</button>
+          </td>
+        </tr>`;
+      }).join("");
+      root.innerHTML = `<table class="w-full text-sm">
+        <thead><tr class="text-xs text-slate-500 border-b border-white/10">
+          <th class="text-left py-2 pr-3">Name</th>
+          <th class="text-left py-2 pr-3">Kind</th>
+          <th class="text-left py-2 pr-3">Mode</th>
+          <th class="text-left py-2 pr-3">Last tested</th>
+          <th class="text-left py-2 pr-3">Actions</th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+      root.querySelectorAll("button[data-act]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const id = btn.getAttribute("data-id");
+          const act = btn.getAttribute("data-act");
+          if (act === "test") testDestinationRow(id);
+          else if (act === "connection") viewDestinationConnection(id);
+          else if (act === "provision") provisionDestinationRow(id);
+          else if (act === "delete") deleteDestinationRow(id);
+        });
+      });
+    } catch (e) {
+      errEl.textContent = e.message; errEl.classList.remove("hidden");
+      root.innerHTML = `<div class="v04-empty">Couldn't load destinations.</div>`;
+    }
+  }
+
+  async function testDestinationRow(id) {
+    const statusEl = document.getElementById("destinations-status");
+    statusEl.textContent = `testing ${id}…`;
+    try {
+      const r = await api(`/api/destinations/${id}/test`, { method: "POST" });
+      const ok = r.ok ? "OK" : "FAIL";
+      statusEl.textContent = `${ok} (${r.latency_ms ?? "?"}ms) ${r.message || r.error || ""}`;
+      loadDestinations();
+    } catch (e) {
+      statusEl.textContent = `error: ${e.message}`;
+    }
+  }
+
+  async function provisionDestinationRow(id) {
+    const statusEl = document.getElementById("destinations-status");
+    if (!confirm("Provision the StarRocks read-only user for this destination? This runs CREATE USER + GRANT against StarRocks.")) return;
+    statusEl.textContent = `provisioning ${id}…`;
+    try {
+      const r = await api(`/api/destinations/${id}/provision`, { method: "POST" });
+      statusEl.textContent = r.success
+        ? `${r.message || "provisioned"}`
+        : `failed: ${r.error || "unknown"}`;
+    } catch (e) {
+      statusEl.textContent = `error: ${e.message}`;
+    }
+  }
+
+  async function deleteDestinationRow(id) {
+    if (!confirm("Forget this destination? (The StarRocks user it provisioned, if any, will remain — drop it manually if you want it gone.)")) return;
+    try {
+      await api(`/api/destinations/${id}`, { method: "DELETE" });
+      loadDestinations();
+    } catch (e) {
+      const errEl = document.getElementById("destinations-error");
+      errEl.textContent = e.message; errEl.classList.remove("hidden");
+    }
+  }
+
+  async function viewDestinationConnection(id) {
+    const modal = document.getElementById("destination-conn-modal");
+    const body = document.getElementById("dest-conn-body");
+    body.innerHTML = `<div class="v04-empty">Loading…</div>`;
+    modal.classList.remove("hidden");
+    try {
+      const p = await api(`/api/destinations/${id}/connection`);
+      const fields = [];
+      if (p.host)          fields.push(["Host", p.host]);
+      if (p.port)          fields.push(["Port", p.port]);
+      if (p.database)      fields.push(["Database", p.database]);
+      if (p.username)      fields.push(["Username", p.username]);
+      if (p.jdbc_url)      fields.push(["JDBC URL", p.jdbc_url]);
+      if (p.mysql_cli)     fields.push(["MySQL CLI", p.mysql_cli]);
+      if (p.endpoint_url)  fields.push(["Endpoint URL", p.endpoint_url]);
+      if (p.bucket_path)   fields.push(["Bucket path", p.bucket_path]);
+      const credLine = p.has_credentials ? p.password : "(no credentials stored)";
+      fields.push(["Password / Secret", credLine]);
+      const fieldHtml = fields.map(([k, v]) =>
+        `<div class="flex items-baseline gap-3 py-1">
+           <span class="text-xs text-slate-500 mono" style="min-width:130px;">${esc(k)}</span>
+           <span class="mono text-cyan-300 break-all">${esc(String(v))}</span>
+         </div>`).join("");
+      const instr = (p.instructions || []).map(s =>
+        `<li class="py-0.5">${esc(s)}</li>`).join("");
+      body.innerHTML = `
+        <div class="mb-4">
+          <div class="text-xs text-slate-500 mb-2">For ${esc(p.kind)} (${esc(p.mode)}):</div>
+          ${fieldHtml}
+        </div>
+        <div>
+          <div class="text-xs text-slate-500 mb-2">Step-by-step:</div>
+          <ol class="text-sm text-slate-300 list-decimal pl-5">${instr}</ol>
+        </div>`;
+    } catch (e) {
+      body.innerHTML = `<div class="text-rose-300 text-sm">error: ${esc(e.message)}</div>`;
+    }
+  }
 
   // ===== Service logs (per-service docker compose logs viewer) =====
   // Snapshot via GET /api/installs/{id}/services/{svc}/logs?tail=...

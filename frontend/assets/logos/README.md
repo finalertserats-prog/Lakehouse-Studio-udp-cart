@@ -51,6 +51,7 @@ Lakehouse Studio team.
 | spark-iceberg           | Original artwork    | Drawn for this repo. Spark swooshes + an Iceberg cap.              |
 | starrocks               | Original artwork    | Drawn for this repo. Star + orbiting dots.                         |
 | All coming-soon entries | Original artwork    | Monogram template — gradient circle + initials, per palette.       |
+| insyght                 | Placeholder artwork | **Geometric placeholder** — speech bubble + 3 ascending bars (two-tone blue). NOT a derivative of the official Insyght brand mark. Replace with an Insyght-supplied SVG when one is provided + cleared. |
 
 When we replace any of these with an officially-distributed upstream
 logo, update both this table and the upstream project's attribution
