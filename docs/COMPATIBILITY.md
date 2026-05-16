@@ -83,3 +83,118 @@ Two read-only routes drive the surface:
 - `POST /api/stacks/{stack_id}/upgrades/simulate` — body `{proposed: {component_id: tag}}`. Overlays the proposed tags on the lock (never mutating it), reruns the registry precheck on the overlay, walks `incompatible[]` for known-bad combos, and classifies every `constraints[]` rule as `pass` (proposed doesn't touch the pair), `pass-cached` (a prior `pairwise_tested` entry confirms it), or `unknown` (touches but no cached evidence). Aggregation: any `fail` → `fail`; any `unknown` → `unknown`; else `pass`.
 
 The planner deliberately stops at *simulation*. Applying an upgrade — that requires a backup_id and a re-entry through the install pipeline — is deferred to v0.4.1 so we don't ship a one-way door before the rollback story is wired up.
+
+## TLS Sidecar
+
+The certified stack ships HTTP-only by default — adding TLS as part of the install pipeline would change `docker-compose.yml` and invalidate the lock-file contract. Instead, v0.4.1 adds an **opt-in Caddy TLS sidecar** via a sibling override file the operator activates when they want HTTPS termination.
+
+**The override-file pattern.** The base `docker-compose.yml` is FROZEN (`runner._patch_compose_images` produces it byte-for-byte regardless of TLS profile). The Caddy module writes two sibling files alongside it:
+
+- `docker-compose.tls.yml` — a Caddy service definition + named `caddy_data` / `caddy_config` volumes
+- `Caddyfile` — path-based routing for the four primary UIs (`/minio`, `/iceberg`, `/spark`, `/starrocks`) on a single virtual host with TLS termination on port 443
+
+Two profiles are supported:
+
+| Profile | Use when | Trust model |
+|---|---|---|
+| `self_signed` | offline/dev installs | Caddy generates an internal CA + per-host leaf cert. Browser warns until the operator imports `/data/caddy/pki/authorities/local/root.crt` into the OS trust store. |
+| `letsencrypt` | public installs with a real domain | Caddy issues via ACME HTTP-01 using `{domain}` and `{email}`. Auto-renews at 60 days. Requires inbound ports 80 + 443 reachable from the public internet. |
+
+**The activate command** (surfaced from the route, NOT run by Studio):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d caddy
+```
+
+The operator runs this themselves from the `install_dir`. Studio writes the override files and surfaces the command — it never restarts the operator's stack on its own.
+
+**Volume persistence (CRITICAL).** The Caddy service mounts two named Docker volumes:
+
+- `caddy_data` — holds the issued certs **and the ACME account key**
+- `caddy_config` — runtime cache
+
+**Do NOT recreate `caddy_data` on stack upgrades.** Losing the ACME account forces Caddy to register a new one, and the new account will burn Let's Encrypt's "duplicate certificate" rate limit (5 per week per FQDN). On a domain that's already hit that ceiling, issuance fails for the rest of the rolling window. The same volume also holds the self-signed internal CA — recreating it invalidates any trust-store entries the operator pinned for the previous root.
+
+**What we deliberately do not ship in v0.4.1:**
+
+- DNS-01 challenges (would need a custom Caddy image with the DNS-provider plugin baked in)
+- Per-service certs (out of scope; the sidecar pattern wins on operational simplicity)
+- Auto-stop of the existing caddy container on `disable` (the operator retains lifecycle control — the route returns the `docker compose ... down` command instead)
+
+Pinned image: `caddy:2.8-alpine` (verified via `docker manifest inspect` on 2026-05-16; multi-arch amd64 + arm64).
+
+## Monitoring Sidecar
+
+Studio ships an opt-in Prometheus + Grafana monitoring stack as a Docker Compose **override file** — the same pattern as the Caddy TLS sidecar. Monitoring is layered ON TOP of the base install via a separate `docker-compose.metrics.yml` the operator activates explicitly.
+
+**Crucial scope note:** the monitoring sidecar is **NOT** part of the certified compatibility lock file. It is an opt-in operational layer — image tags are pinned in `backend/monitoring.py`, not in `stacks/compatibility/*.lock.yaml`. This is deliberate:
+
+- The certified lock represents the *minimum verified-working data lakehouse*. Monitoring is observability for that lake, not part of it.
+- The operator chooses whether to accept the prometheus/grafana versions independently of accepting the lakehouse stack.
+- Bumping a monitoring image tag does NOT require a full end-to-end install re-verification — it only affects observability.
+
+### How it works
+
+Two routes drive the override:
+
+- `POST /api/installs/{install_id}/monitoring/enable` body `{include_grafana, prometheus_retention_days, grafana_admin_password}` — writes the override file + `monitoring/` subtree into the install_dir.
+- `POST /api/installs/{install_id}/monitoring/disable` — removes the override file + `monitoring/` subdir. Does NOT stop the containers — the response includes a shutdown hint so the operator retains lifecycle control.
+
+Both routes refuse if the install is in `RUNNING_STATES` (same guard as Caddy/backup).
+
+### Files written into the install_dir
+
+```
+{install_dir}/
+  docker-compose.metrics.yml                  # the override
+  monitoring/
+    prometheus.yml                            # scrape config
+    grafana/
+      provisioning/
+        datasources/datasource.yml            # auto-wires Prometheus
+        dashboards/dashboard.yml              # provisioning provider
+      dashboards/
+        lakehouse-overview.json               # starter connectivity dashboard
+```
+
+### Activation
+
+The enable route returns the exact command (it never runs `docker compose up` itself — keeps lifecycle control with the operator):
+
+```bash
+cd {install_dir}
+docker compose -f docker-compose.yml -f docker-compose.metrics.yml up -d
+```
+
+Default host-side ports: Prometheus on `9091`, Grafana on `3001`. Both are deliberately above the typical UDP service range so they don't collide.
+
+### Pinned images (verified 2026-05-16)
+
+| Service | Image | Tag | Verified |
+|---|---|---|---|
+| Prometheus | `prom/prometheus` | `v2.55.0` | `docker manifest inspect` |
+| Grafana | `grafana/grafana` | `11.3.0` | `docker manifest inspect` |
+
+Both tags exist on Docker Hub at the time of pinning. They are **not** re-checked at install-time precheck (that precheck only runs against the certified lock).
+
+### Scrape target caveats
+
+The generated `prometheus.yml` targets four jobs. Each has a real-world gotcha:
+
+- **MinIO** (`/minio/v2/metrics/cluster`): by default MinIO requires a bearer token on the cluster metrics endpoint. To make scrapes work without auth, set `MINIO_PROMETHEUS_AUTH_TYPE=public` in the install's `.env` and restart MinIO. Alternatively paste a bearer token under `authorization.credentials` in `monitoring/prometheus.yml` after enabling.
+- **StarRocks FE** (`:8030/api/health` + `:8030/metrics`): the readiness endpoint gives an up/down signal out of the box. The native `/metrics` endpoint **requires** `enable_prometheus_metrics = true` in `fe.conf` — without it, the metrics target shows down (the health target stays up).
+- **Iceberg REST** (`:8181/metrics`): conditional on the upstream image. `tabulario/iceberg-rest:1.6.0` (the version in the current certified lock) does **not** expose `/metrics`. The target will show down — this is expected and harmless.
+- **Prometheus itself**: self-scrape on `localhost:9090`, always up when the container is running.
+
+### Grafana admin password handling
+
+- If the caller supplies a password in the enable request body, that value is injected into `GF_SECURITY_ADMIN_PASSWORD` and the response confirms it was user-supplied.
+- If the caller does NOT supply one, the backend generates a 24-character URL-safe random secret, injects it into the override file, and returns it in the response **ONCE**. The server never persists it outside the running Grafana container's environment — the operator must save it immediately.
+
+### What the override does NOT do
+
+- It does not modify `docker-compose.yml` (the certified base) — strict additive layering only.
+- It does not touch `backend/runner.py` or `_patch_compose_images` — the install pipeline is frozen.
+- It does not register a new entry in `stacks/compatibility/*.lock.yaml` — monitoring is intentionally outside the certified surface.
+- It does not run `docker compose up` for you — the operator retains explicit lifecycle control (same model as the Caddy sidecar).
+

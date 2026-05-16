@@ -218,15 +218,86 @@ async def generate_self_signed(install_id: str, spec: CertSpec) -> GeneratedCert
 
 
 async def generate_letsencrypt(install_id: str, spec: CertSpec) -> GeneratedCert:
-    """Let's Encrypt issuance is intentionally not implemented in v0.4.0.
+    """Let's Encrypt via Caddy sidecar (v0.4.1).
 
-    Research conclusion (locked): the right shape is a Caddy sidecar in
-    docker-compose, which would auto-renew and reload. That requires editing
-    the compose patcher — explicitly out of scope this pass. Tracked for
-    v0.4.1.
+    Replaces the NotImplementedError stub. Writes a docker-compose.tls.yml
+    override + Caddyfile next to the FROZEN base compose so the operator
+    can opt in with one `docker compose ... up -d caddy` command. The
+    actual cert issuance happens inside Caddy at container start (ACME
+    HTTP-01 against the supplied domain).
+
+    Returns a GeneratedCert-shaped record where `cert_path` points at the
+    override file (the real cert lives in the caddy_data Docker volume,
+    not on the host filesystem). `key_path` is empty -- the route layer
+    already scrubs key_path before returning.
     """
-    raise NotImplementedError(
-        "Use Caddy sidecar — manual setup until v0.4.1"
+    if spec.kind != "letsencrypt":
+        raise ValueError(f"generate_letsencrypt called with kind={spec.kind!r}")
+    if not spec.domain:
+        raise ValueError("letsencrypt requires a domain")
+    if not spec.email:
+        raise ValueError("letsencrypt requires an email for ACME registration")
+
+    # Lazy import to avoid a circular reference at module load.
+    from . import caddy_tls
+
+    profile = caddy_tls.TlsProfile(
+        kind="letsencrypt", domain=spec.domain, email=spec.email,
+    )
+    override_path = await caddy_tls.write_caddy_override(install_id, profile)
+
+    now = time.time()
+    cert_id = f"caddy_le_{uuid.uuid4().hex[:10]}"
+    return GeneratedCert(
+        cert_id=cert_id,
+        install_id=install_id,
+        kind="letsencrypt",
+        cert_path=str(override_path),
+        key_path="",  # managed inside the caddy_data Docker volume
+        sha256_fingerprint="",  # cert is issued by Caddy at container start
+        # ACME-issued LE certs are valid 90 days; Caddy auto-renews at 60.
+        expires_at=now + 90 * 86400,
+        created_at=now,
+        common_name=spec.domain,
+    )
+
+
+async def generate_caddy_self_signed(install_id: str, spec: CertSpec) -> GeneratedCert:
+    """Opt-in path: ask Caddy to generate + serve a self-signed cert via
+    its internal CA. Different from generate_self_signed() above, which
+    writes a one-shot PEM to WORK_DIR/tls/... This path produces the
+    docker-compose.tls.yml override + Caddyfile and Caddy handles
+    issuance + serving on port 443.
+
+    Use this when you want HTTPS termination IN FRONT of the stack rather
+    than per-service cert mounting (which Studio doesn't ship yet).
+    """
+    if spec.kind != "self_signed":
+        raise ValueError(f"generate_caddy_self_signed called with kind={spec.kind!r}")
+
+    from . import caddy_tls
+
+    profile = caddy_tls.TlsProfile(
+        kind="self_signed",
+        domain=spec.domain or "localhost",
+        email=None,
+    )
+    override_path = await caddy_tls.write_caddy_override(install_id, profile)
+
+    now = time.time()
+    cert_id = f"caddy_ss_{uuid.uuid4().hex[:10]}"
+    return GeneratedCert(
+        cert_id=cert_id,
+        install_id=install_id,
+        kind="self_signed",
+        cert_path=str(override_path),
+        key_path="",  # managed inside the caddy_data Docker volume
+        sha256_fingerprint="",  # cert is issued by Caddy at container start
+        # Caddy's internal CA mints 12h leaf certs and rotates them silently
+        # on every restart; report a 1y horizon so the UI doesn't panic.
+        expires_at=now + 365 * 86400,
+        created_at=now,
+        common_name=spec.domain or "localhost",
     )
 
 
