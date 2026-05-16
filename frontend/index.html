@@ -3,189 +3,640 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LakeHouse Studio</title>
+  <title>LakeHouse Studio — install a lakehouse</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
+            sans: ['"Inter"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+          },
+        },
+      },
       safelist: [
-        // dynamic color palette classes used by inspect, score, ops UI
-        'text-emerald-300','text-cyan-300','text-amber-300','text-rose-300','text-slate-300',
-        'bg-emerald-500','bg-cyan-500','bg-amber-500','bg-rose-500',
-        'bg-emerald-700/40','bg-cyan-700/30','bg-amber-700/40','bg-rose-700/40',
-        'border-emerald-500','border-cyan-500','border-amber-500','border-rose-500',
+        'text-emerald-300','text-cyan-300','text-amber-300','text-rose-300','text-slate-300','text-purple-300','text-pink-300',
+        'bg-emerald-500','bg-cyan-500','bg-amber-500','bg-rose-500','bg-purple-500','bg-pink-500',
+        'bg-emerald-500/10','bg-cyan-500/10','bg-amber-500/10','bg-rose-500/10','bg-purple-500/10',
+        'bg-emerald-500/20','bg-cyan-500/20','bg-amber-500/20','bg-rose-500/20',
+        'border-emerald-500/30','border-cyan-500/30','border-amber-500/30','border-rose-500/30','border-purple-500/30',
+        'border-emerald-500/60','border-cyan-500/60','border-amber-500/60','border-rose-500/60',
         'text-emerald-200','text-cyan-200','text-amber-200','text-rose-200',
         'text-emerald-400','text-cyan-400','text-amber-400','text-rose-400',
+        'shadow-emerald-500/30','shadow-cyan-500/30','shadow-amber-500/30','shadow-rose-500/30',
       ],
     };
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Inter', system-ui, sans-serif; }
+    /* ---------------- THEME ---------------- */
+    :root {
+      --bg:        #07061a;
+      --bg-2:      #0d0826;
+      --ink:       #e5e7f0;
+      --ink-dim:   #94a3b8;
+      --ink-faint: #64748b;
+      --glass:     rgba(255,255,255,0.04);
+      --glass-2:   rgba(255,255,255,0.07);
+      --hairline:  rgba(255,255,255,0.08);
+      --hairline-2:rgba(255,255,255,0.14);
+      --cyan:      #22d3ee;
+      --purple:    #a855f7;
+      --pink:      #ec4899;
+      --emerald:   #34d399;
+      --amber:     #f59e0b;
+      --rose:      #f43f5e;
+    }
+    html, body { background: var(--bg); color: var(--ink); }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+      position: relative;
+    }
+    .font-display { font-family: 'Space Grotesk', sans-serif; letter-spacing: -0.02em; }
     .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
-    .log-line { white-space: pre-wrap; word-break: break-all; }
+
+    /* ---------------- AURORA BACKGROUND ---------------- */
+    .aurora { position: fixed; inset: 0; z-index: -2; overflow: hidden; pointer-events: none; }
+    .aurora::before, .aurora::after, .aurora .blob {
+      content: ''; position: absolute; border-radius: 50%;
+      filter: blur(120px); opacity: 0.45;
+      will-change: transform;
+    }
+    .aurora::before {
+      width: 50vw; height: 50vw; left: -10vw; top: -10vw;
+      background: radial-gradient(circle, var(--cyan) 0%, transparent 60%);
+      animation: drift1 22s ease-in-out infinite alternate;
+    }
+    .aurora::after {
+      width: 55vw; height: 55vw; right: -15vw; top: 20vh;
+      background: radial-gradient(circle, var(--purple) 0%, transparent 60%);
+      animation: drift2 28s ease-in-out infinite alternate;
+    }
+    .aurora .blob {
+      width: 50vw; height: 50vw; left: 30vw; bottom: -20vw;
+      background: radial-gradient(circle, var(--pink) 0%, transparent 60%);
+      animation: drift3 26s ease-in-out infinite alternate;
+    }
+    @keyframes drift1 { from { transform: translate(0,0); } to { transform: translate(8vw, 4vw); } }
+    @keyframes drift2 { from { transform: translate(0,0); } to { transform: translate(-6vw, 6vw); } }
+    @keyframes drift3 { from { transform: translate(0,0); } to { transform: translate(-8vw,-6vw); } }
+
+    /* Dot grid layer over the aurora — anchors visual identity */
+    .grid-bg {
+      position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background-image: radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px);
+      background-size: 24px 24px;
+      mask-image: radial-gradient(circle at 50% 30%, black 30%, transparent 80%);
+    }
+
+    /* Soft vignette to deepen edges */
+    body::after {
+      content: ''; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+      background: radial-gradient(ellipse at center, transparent 40%, rgba(7,6,26,0.85) 100%);
+    }
+
+    /* ---------------- GLASS PRIMITIVES ---------------- */
+    .glass {
+      background: var(--glass);
+      border: 1px solid var(--hairline);
+      backdrop-filter: blur(20px) saturate(160%);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      border-radius: 18px;
+    }
+    .glass-strong { background: var(--glass-2); border-color: var(--hairline-2); }
+    .glass-hover { transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease; }
+    .glass-hover:hover {
+      transform: translateY(-2px);
+      border-color: rgba(34,211,238,0.45);
+      box-shadow: 0 14px 60px -20px rgba(34,211,238,0.35);
+    }
+
+    /* Mouse-tracked glow on .spot containers (set via JS) */
+    .spot { position: relative; overflow: hidden; }
+    .spot::before {
+      content: ''; position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(circle 240px at var(--mx, 50%) var(--my, 50%),
+        rgba(168, 85, 247, 0.18), transparent 60%);
+      opacity: 0; transition: opacity .25s ease;
+    }
+    .spot:hover::before { opacity: 1; }
+
+    /* ---------------- GRADIENT TEXT + BORDERS ---------------- */
+    .grad-text {
+      background: linear-gradient(120deg, var(--cyan) 0%, var(--purple) 50%, var(--pink) 100%);
+      -webkit-background-clip: text; background-clip: text;
+      color: transparent;
+    }
+    .grad-text-soft {
+      background: linear-gradient(120deg, #67e8f9 0%, #c4b5fd 50%, #f9a8d4 100%);
+      -webkit-background-clip: text; background-clip: text;
+      color: transparent;
+    }
+    .grad-border {
+      position: relative;
+      background:
+        linear-gradient(var(--bg-2), var(--bg-2)) padding-box,
+        linear-gradient(120deg, rgba(34,211,238,0.55), rgba(168,85,247,0.55), rgba(236,72,153,0.55)) border-box;
+      border: 1px solid transparent;
+    }
+
+    /* ---------------- BUTTONS ---------------- */
+    .btn-primary {
+      background: linear-gradient(120deg, var(--cyan), var(--purple), var(--pink));
+      background-size: 200% 200%;
+      color: #0a0a1f;
+      font-weight: 700;
+      padding: 0.7rem 1.6rem;
+      border-radius: 12px;
+      position: relative;
+      transition: transform .2s ease, box-shadow .25s ease, background-position .8s ease;
+      box-shadow: 0 8px 32px -8px rgba(168, 85, 247, 0.55);
+    }
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      background-position: 100% 50%;
+      box-shadow: 0 12px 48px -8px rgba(236, 72, 153, 0.7);
+    }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; transform: none; }
+    .btn-ghost {
+      background: var(--glass);
+      border: 1px solid var(--hairline);
+      color: var(--ink); padding: 0.6rem 1.2rem; border-radius: 10px;
+      transition: background .2s ease, border-color .2s ease;
+    }
+    .btn-ghost:hover { background: var(--glass-2); border-color: var(--hairline-2); }
+
+    /* ---------------- ANIMATIONS ---------------- */
+    .fade-up { animation: fadeUp .55s cubic-bezier(.16,1,.3,1) both; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+    .fade-in { animation: fadeIn .35s ease both; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     .pulse-dot { animation: pulse 1.4s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
-    .step-running { background: linear-gradient(90deg, rgba(56,189,248,0.08) 0%, rgba(56,189,248,0.18) 50%, rgba(56,189,248,0.08) 100%); background-size: 200% 100%; animation: shimmer 2s linear infinite; }
+    .step-running { background: linear-gradient(90deg, rgba(34,211,238,0.06) 0%, rgba(168,85,247,0.18) 50%, rgba(236,72,153,0.06) 100%); background-size: 200% 100%; animation: shimmer 2s linear infinite; }
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .scroll-shadow { box-shadow: inset 0 -10px 12px -10px rgba(0,0,0,0.4), inset 0 10px 12px -10px rgba(0,0,0,0.4); }
+
+    /* ---------------- CUSTOM PIPELINE ---------------- */
+    .pipe-step {
+      position: relative;
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      transition: background .2s ease;
+    }
+    .pipe-step + .pipe-step::before {
+      content: ''; position: absolute; left: 26px; top: -14px; height: 14px; width: 2px;
+      background: linear-gradient(to bottom, transparent, var(--hairline-2));
+    }
+    .pipe-node {
+      width: 24px; height: 24px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; flex-shrink: 0;
+      border: 2px solid var(--hairline-2);
+      background: var(--bg-2);
+      color: var(--ink-dim);
+      transition: all .3s ease;
+    }
+    .pipe-step[data-status="success"] .pipe-node {
+      border-color: var(--emerald);
+      background: rgba(52,211,153,0.18);
+      color: var(--emerald);
+      box-shadow: 0 0 18px -2px rgba(52,211,153,0.55);
+    }
+    .pipe-step[data-status="failed"] .pipe-node {
+      border-color: var(--rose);
+      background: rgba(244,63,94,0.18);
+      color: var(--rose);
+      box-shadow: 0 0 18px -2px rgba(244,63,94,0.55);
+    }
+    .pipe-step[data-status="running"] .pipe-node {
+      border-color: var(--cyan);
+      background: rgba(34,211,238,0.18);
+      color: var(--cyan);
+      box-shadow: 0 0 24px -2px rgba(34,211,238,0.7);
+      animation: pulseNode 1.6s ease-in-out infinite;
+    }
+    .pipe-step[data-status="skipped"] .pipe-node { opacity: 0.5; }
+    @keyframes pulseNode { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+    .pipe-step[data-status="running"] { background: linear-gradient(90deg, rgba(34,211,238,0.04), rgba(168,85,247,0.10) 50%, rgba(34,211,238,0.04)); background-size: 200% 100%; animation: shimmer 2.5s linear infinite; }
+
+    /* ---------------- LOG TERMINAL ---------------- */
+    .terminal {
+      background: rgba(0,0,0,0.55);
+      border: 1px solid var(--hairline);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .log-line { white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+
+    /* ---------------- BADGE GLOW ---------------- */
+    .state-badge {
+      padding: 6px 14px; border-radius: 999px; font-size: 11px; font-weight: 700;
+      letter-spacing: 0.06em; text-transform: uppercase;
+      border: 1px solid currentColor;
+      background: rgba(255,255,255,0.02);
+    }
+    .state-badge.ready    { color: var(--emerald); box-shadow: 0 0 24px -8px rgba(52,211,153,0.6); }
+    .state-badge.failed   { color: var(--rose);    box-shadow: 0 0 24px -8px rgba(244,63,94,0.6); }
+    .state-badge.working  { color: var(--cyan);    box-shadow: 0 0 24px -8px rgba(34,211,238,0.5); animation: pulse 1.6s ease-in-out infinite; }
+
+    /* ---------------- SUCCESS BURST ---------------- */
+    .success-hero {
+      position: relative; overflow: hidden;
+      background:
+        radial-gradient(ellipse at top, rgba(52,211,153,0.18), transparent 60%),
+        radial-gradient(ellipse at bottom right, rgba(34,211,238,0.12), transparent 60%),
+        linear-gradient(180deg, rgba(13,8,38,0.95), rgba(7,6,26,0.95));
+      border: 1px solid rgba(52,211,153,0.35);
+      border-radius: 22px;
+    }
+    .success-burst {
+      position: absolute; inset: 0; pointer-events: none; opacity: 0.55;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(34,211,238,0.5) 0, transparent 12%),
+        radial-gradient(circle at 80% 20%, rgba(168,85,247,0.5) 0, transparent 14%),
+        radial-gradient(circle at 50% 90%, rgba(52,211,153,0.5) 0, transparent 18%);
+      animation: burst 5s ease-in-out infinite alternate;
+    }
+    @keyframes burst { from { transform: scale(1); } to { transform: scale(1.08); } }
+
+    /* ---------------- STATUS BAR ---------------- */
+    .statusbar {
+      position: fixed; bottom: 12px; right: 16px; z-index: 50;
+      padding: 6px 14px;
+      font-size: 11px; letter-spacing: 0.05em;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.5);
+      border: 1px solid var(--hairline);
+      backdrop-filter: blur(12px);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .statusbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 10px var(--emerald); }
+    .statusbar .dot.off { background: var(--rose); box-shadow: 0 0 10px var(--rose); }
+
+    /* ---------------- INPUTS ---------------- */
+    .input {
+      width: 100%; padding: 10px 14px; border-radius: 10px;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--hairline);
+      color: var(--ink);
+      transition: border-color .2s ease, box-shadow .2s ease;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .input:focus { outline: none; border-color: rgba(34,211,238,0.6); box-shadow: 0 0 0 3px rgba(34,211,238,0.12); }
+
+    /* ---------------- TIER CARDS ---------------- */
+    .tier-card {
+      cursor: pointer;
+      padding: 24px;
+      border-radius: 18px;
+      position: relative;
+      background: var(--glass);
+      border: 1px solid var(--hairline);
+      transition: all .25s ease;
+    }
+    .tier-card:hover { background: var(--glass-2); border-color: var(--hairline-2); transform: translateY(-2px); }
+    .tier-card.selected {
+      background: linear-gradient(135deg, rgba(34,211,238,0.10), rgba(168,85,247,0.08));
+      border-color: rgba(34,211,238,0.55);
+      box-shadow: 0 14px 60px -20px rgba(34,211,238,0.45);
+    }
+    .tier-card.selected::after {
+      content: '✓'; position: absolute; top: 14px; right: 14px;
+      width: 26px; height: 26px; border-radius: 50%;
+      background: linear-gradient(120deg, var(--cyan), var(--purple));
+      color: #0a0a1f; display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 14px;
+      box-shadow: 0 0 18px -2px rgba(34,211,238,0.7);
+    }
+
+    /* ---------------- SCORE BAR ---------------- */
+    .score-bar { height: 6px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
+    .score-fill { height: 100%; border-radius: 999px; transition: width .8s cubic-bezier(.16,1,.3,1); }
+    .score-fill.good { background: linear-gradient(90deg, var(--emerald), var(--cyan)); box-shadow: 0 0 10px var(--emerald); }
+    .score-fill.mid  { background: linear-gradient(90deg, var(--amber), var(--rose)); box-shadow: 0 0 10px var(--amber); }
+    .score-fill.bad  { background: linear-gradient(90deg, var(--rose), #9f1239); box-shadow: 0 0 10px var(--rose); }
+
+    /* ---------------- TYPE SCALE ---------------- */
+    .display-1 { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: clamp(2.5rem, 6vw, 4.5rem); line-height: 1.02; letter-spacing: -0.03em; }
+    .display-2 { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: clamp(1.75rem, 3.2vw, 2.5rem); line-height: 1.1; letter-spacing: -0.02em; }
+    .display-3 { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.015em; }
+
+    /* selection */
+    ::selection { background: rgba(168,85,247,0.4); color: white; }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen">
+<body>
 
-<header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
-  <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+<!-- Aurora + grid backgrounds -->
+<div class="aurora"><div class="blob"></div></div>
+<div class="grid-bg"></div>
+
+<!-- Top status bar (fixed) -->
+<div class="statusbar"><div class="dot" id="status-dot"></div><span class="mono" id="status-text">studio · v0.3</span></div>
+
+<!-- ============== HEADER ============== -->
+<header class="sticky top-0 z-20" style="background: linear-gradient(180deg, rgba(7,6,26,0.85), rgba(7,6,26,0.35)); backdrop-filter: blur(16px); border-bottom: 1px solid var(--hairline);">
+  <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center font-bold text-slate-900">L</div>
+      <!-- LOGO MARK (animated SVG, gradient hue-rotates) -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" role="img" aria-label="LakeHouse Studio">
+        <defs>
+          <linearGradient id="lhg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#22d3ee"/>
+            <stop offset="50%" stop-color="#a855f7"/>
+            <stop offset="100%" stop-color="#ec4899"/>
+          </linearGradient>
+          <linearGradient id="lhgSoft" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.55"/>
+            <stop offset="100%" stop-color="#ec4899" stop-opacity="0.55"/>
+          </linearGradient>
+          <filter id="lhglow" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="0.8" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <style>
+            .mark { transform-origin: 20px 20px; animation: lhHue 8s linear infinite; }
+            @keyframes lhHue { 0%{filter:hue-rotate(0deg)} 100%{filter:hue-rotate(360deg)} }
+            .spark { animation: lhPulse 3s ease-in-out infinite; transform-origin: center; }
+            @keyframes lhPulse { 0%,100%{opacity:.6} 50%{opacity:1} }
+          </style>
+        </defs>
+        <g class="mark" filter="url(#lhglow)">
+          <path d="M9 6 L9 30 L31 30" fill="none" stroke="url(#lhg)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9 14 L20 14" fill="none" stroke="url(#lhgSoft)" stroke-width="2" stroke-linecap="round" opacity="0.85"/>
+          <path d="M9 22 L24 22" fill="none" stroke="url(#lhgSoft)" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
+          <path d="M20 6 L31 17" fill="none" stroke="url(#lhg)" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+          <circle class="spark" cx="31" cy="17" r="1.6" fill="#ec4899"/>
+          <circle class="spark" cx="9" cy="6" r="1.4" fill="#22d3ee" style="animation-delay:-1.5s"/>
+        </g>
+      </svg>
       <div>
-        <div class="font-semibold text-lg leading-none">LakeHouse Studio</div>
-        <div class="text-xs text-slate-400 mt-0.5">Pilot · UDP reference stack</div>
+        <div class="font-display font-semibold text-lg leading-none grad-text">LakeHouse Studio</div>
+        <div class="text-xs text-slate-400 mt-1 mono">v0.3 · UDP reference stack</div>
       </div>
     </div>
-    <nav class="flex items-center gap-2 text-sm">
-      <button data-nav="welcome" class="nav-btn px-3 py-1.5 rounded text-slate-300 hover:bg-slate-800">Home</button>
-      <button data-nav="installs" class="nav-btn px-3 py-1.5 rounded text-slate-300 hover:bg-slate-800">Installs</button>
-      <a href="https://github.com/finalertserats-prog/Lakehouse-Studio-udp-cart" target="_blank" class="px-3 py-1.5 rounded text-slate-400 hover:text-slate-200">GitHub ↗</a>
+    <nav class="flex items-center gap-1 text-sm">
+      <button data-nav="welcome"  class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Home</button>
+      <button data-nav="installs" class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Installs</button>
+      <a href="https://github.com/finalertserats-prog/Lakehouse-Studio-udp-cart" target="_blank" class="px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200">GitHub <span class="text-xs">↗</span></a>
     </nav>
   </div>
 </header>
 
-<main class="max-w-6xl mx-auto px-6 py-8">
+<main class="max-w-7xl mx-auto px-6 py-10 relative z-10">
 
-  <!-- WELCOME -->
+  <!-- ============== WELCOME ============== -->
   <section id="screen-welcome" class="screen">
-    <div class="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800/40 border border-slate-800 p-10">
-      <div class="max-w-3xl">
-        <div class="text-xs uppercase tracking-widest text-cyan-400 mb-3">Plug-and-play data lakehouse</div>
-        <h1 class="text-4xl font-bold leading-tight mb-4">Install a production-ready open lakehouse in 30 minutes.</h1>
-        <p class="text-slate-400 mb-8">Shop for components, check your server, compile a deployment, install, verify with a demo query. The first certified stack is <span class="text-slate-200 font-medium">Unified Data Plug</span> — MinIO + Iceberg + Spark + StarRocks.</p>
-        <button id="btn-start" class="px-6 py-3 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold transition">Start Pilot Install →</button>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-10 items-center min-h-[60vh] fade-up">
+      <div>
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full glass mb-6 fade-in">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
+          <span class="text-xs text-slate-300 tracking-wide">pilot release · v0.3</span>
+        </div>
+        <h1 class="display-1 mb-6">
+          <span class="text-white">Install a</span><br>
+          <span class="grad-text">lakehouse</span><br>
+          <span class="text-white">in 30 minutes.</span>
+        </h1>
+        <p class="text-lg text-slate-400 max-w-xl mb-8 leading-relaxed">
+          Shop components, size your server, click install. Studio drives the whole stack — MinIO, Iceberg, Spark, StarRocks — with a live demo query on the other side.
+        </p>
+        <div class="flex items-center gap-3">
+          <button id="btn-start" class="btn-primary text-base">Start install <span class="ml-2">→</span></button>
+          <a href="#what" class="btn-ghost text-sm">See how it works</a>
+        </div>
+        <div class="flex items-center gap-6 mt-10 text-xs text-slate-500">
+          <div class="flex items-center gap-2"><span class="w-1 h-1 rounded-full bg-cyan-400"></span> Compatibility-validated</div>
+          <div class="flex items-center gap-2"><span class="w-1 h-1 rounded-full bg-purple-400"></span> VPS-sized</div>
+          <div class="flex items-center gap-2"><span class="w-1 h-1 rounded-full bg-pink-400"></span> Demo query included</div>
+        </div>
+      </div>
+      <!-- HERO ILLUSTRATION (animated SVG: 5-layer data flow with pulsing nodes + dash-flowing edges) -->
+      <div class="flex justify-center items-center">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" preserveAspectRatio="xMidYMid meet" class="w-full max-w-xl" role="img" aria-label="Lakehouse data flow">
+          <defs>
+            <linearGradient id="hg" x1="0%" y1="100%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#22d3ee"/><stop offset="50%" stop-color="#a855f7"/><stop offset="100%" stop-color="#ec4899"/>
+            </linearGradient>
+            <linearGradient id="hgV" x1="50%" y1="100%" x2="50%" y2="0%">
+              <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.9"/>
+              <stop offset="50%" stop-color="#a855f7" stop-opacity="0.9"/>
+              <stop offset="100%" stop-color="#ec4899" stop-opacity="0.9"/>
+            </linearGradient>
+            <radialGradient id="cyanN" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#67e8f9"/><stop offset="70%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#0891b2"/></radialGradient>
+            <radialGradient id="purpN" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#c4b5fd"/><stop offset="70%" stop-color="#a855f7"/><stop offset="100%" stop-color="#6d28d9"/></radialGradient>
+            <radialGradient id="pinkN" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#f9a8d4"/><stop offset="70%" stop-color="#ec4899"/><stop offset="100%" stop-color="#be185d"/></radialGradient>
+            <filter id="ng" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+            <filter id="ngSoft" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="8"/></filter>
+            <style>
+              .nd { animation: nPulse 3s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+              .nd2 { animation-delay: -1s } .nd3 { animation-delay: -2s }
+              @keyframes nPulse { 0%,100% { opacity:.7 } 50% { opacity:1 } }
+              .flow { stroke-dasharray: 6 10; animation: dash 5s linear infinite; }
+              @keyframes dash { to { stroke-dashoffset: -160 } }
+              .flow2 { animation-duration: 6s; animation-delay: -1.2s }
+              .flow3 { animation-duration: 4.5s; animation-delay: -2.4s }
+              .halo { animation: hPulse 4s ease-in-out infinite; transform-origin: center; transform-box: fill-box;}
+              @keyframes hPulse { 0%,100% { opacity:.25 } 50% { opacity:.5 } }
+              .base { animation: baseShift 8s ease-in-out infinite; }
+              @keyframes baseShift { 0%,100% { opacity:.35 } 50% { opacity:.6 } }
+            </style>
+          </defs>
+          <g class="base">
+            <rect x="60" y="335" width="480" height="40" rx="8" fill="none" stroke="url(#hg)" stroke-width="1" stroke-dasharray="3 4" opacity="0.7"/>
+            <rect x="72" y="347" width="14" height="16" rx="2" fill="none" stroke="#22d3ee" stroke-width="0.8" opacity="0.5"/>
+            <rect x="92" y="347" width="14" height="16" rx="2" fill="none" stroke="#22d3ee" stroke-width="0.8" opacity="0.5"/>
+            <rect x="112" y="347" width="14" height="16" rx="2" fill="none" stroke="#22d3ee" stroke-width="0.8" opacity="0.5"/>
+            <circle cx="520" cy="355" r="2" fill="#22d3ee" opacity="0.6"/>
+            <circle cx="510" cy="355" r="2" fill="#a855f7" opacity="0.6"/>
+          </g>
+          <g fill="none" stroke="url(#hgV)" stroke-width="1.2" stroke-linecap="round" opacity="0.85">
+            <path class="flow" d="M300 250 Q260 230 220 215"/>
+            <path class="flow flow2" d="M300 250 Q340 230 380 215"/>
+            <path class="flow flow3" d="M220 195 Q190 170 160 150"/>
+            <path class="flow" d="M220 195 Q260 170 300 150"/>
+            <path class="flow flow2" d="M380 195 Q340 170 300 150"/>
+            <path class="flow flow3" d="M380 195 Q410 170 440 150"/>
+            <path class="flow" d="M160 130 Q180 105 200 90"/>
+            <path class="flow flow2" d="M300 130 L300 90"/>
+            <path class="flow flow3" d="M440 130 Q420 105 400 90"/>
+            <path class="flow flow2" d="M160 130 Q230 110 300 90" opacity="0.4"/>
+            <path class="flow flow3" d="M440 130 Q370 110 300 90" opacity="0.4"/>
+          </g>
+          <g><circle class="halo" cx="300" cy="270" r="42" fill="url(#pinkN)" filter="url(#ngSoft)"/><circle class="nd" cx="300" cy="270" r="22" fill="url(#pinkN)" filter="url(#ng)"/><circle cx="300" cy="270" r="22" fill="none" stroke="#fbcfe8" stroke-width="0.8" opacity="0.6"/><circle cx="300" cy="270" r="9" fill="none" stroke="#fff" stroke-width="0.6" opacity="0.5"/></g>
+          <g><circle class="halo" cx="220" cy="200" r="22" fill="url(#purpN)" filter="url(#ngSoft)"/><circle class="nd" cx="220" cy="200" r="11" fill="url(#purpN)" filter="url(#ng)"/><circle cx="220" cy="200" r="11" fill="none" stroke="#ddd6fe" stroke-width="0.6" opacity="0.6"/><circle class="halo" cx="380" cy="200" r="22" fill="url(#purpN)" filter="url(#ngSoft)"/><circle class="nd nd2" cx="380" cy="200" r="11" fill="url(#purpN)" filter="url(#ng)"/><circle cx="380" cy="200" r="11" fill="none" stroke="#ddd6fe" stroke-width="0.6" opacity="0.6"/></g>
+          <g><circle class="halo" cx="160" cy="140" r="20" fill="url(#cyanN)" filter="url(#ngSoft)"/><circle class="nd" cx="160" cy="140" r="10" fill="url(#cyanN)" filter="url(#ng)"/><circle class="halo" cx="300" cy="140" r="20" fill="url(#purpN)" filter="url(#ngSoft)"/><circle class="nd nd2" cx="300" cy="140" r="10" fill="url(#purpN)" filter="url(#ng)"/><circle class="halo" cx="440" cy="140" r="20" fill="url(#cyanN)" filter="url(#ngSoft)"/><circle class="nd nd3" cx="440" cy="140" r="10" fill="url(#cyanN)" filter="url(#ng)"/></g>
+          <g><circle class="halo" cx="200" cy="75" r="16" fill="url(#cyanN)" filter="url(#ngSoft)"/><circle class="nd" cx="200" cy="75" r="7" fill="url(#cyanN)" filter="url(#ng)"/><circle class="halo" cx="300" cy="75" r="16" fill="url(#purpN)" filter="url(#ngSoft)"/><circle class="nd nd2" cx="300" cy="75" r="7" fill="url(#purpN)" filter="url(#ng)"/><circle class="halo" cx="400" cy="75" r="16" fill="url(#pinkN)" filter="url(#ngSoft)"/><circle class="nd nd3" cx="400" cy="75" r="7" fill="url(#pinkN)" filter="url(#ng)"/></g>
+          <g stroke="url(#hg)" stroke-width="0.4" opacity="0.18" stroke-dasharray="2 6">
+            <line x1="80" y1="75" x2="520" y2="75"/><line x1="80" y1="140" x2="520" y2="140"/><line x1="80" y1="200" x2="520" y2="200"/><line x1="80" y1="270" x2="520" y2="270"/>
+          </g>
+        </svg>
       </div>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
-      <div class="rounded-xl bg-slate-900 border border-slate-800 p-5">
-        <div class="text-cyan-400 text-2xl mb-2">①</div>
-        <div class="font-semibold mb-1">Compatibility-validated</div>
-        <div class="text-sm text-slate-400">Every component pinned. Smoke tests prove the stack actually works end-to-end.</div>
+    <!-- Feature row -->
+    <div id="what" class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-16">
+      <div class="glass glass-hover spot p-6">
+        <div class="display-3 grad-text mb-2">①</div>
+        <div class="font-semibold mb-1">Shop a stack</div>
+        <div class="text-sm text-slate-400">Pick from certified component bundles. Real versions, real maturity.</div>
       </div>
-      <div class="rounded-xl bg-slate-900 border border-slate-800 p-5">
-        <div class="text-cyan-400 text-2xl mb-2">②</div>
-        <div class="font-semibold mb-1">Server-aware</div>
-        <div class="text-sm text-slate-400">Inspects Docker, ports, RAM, disk before installing — fails loud, never silent.</div>
+      <div class="glass glass-hover spot p-6">
+        <div class="display-3 grad-text mb-2">②</div>
+        <div class="font-semibold mb-1">Size your server</div>
+        <div class="text-sm text-slate-400">See exact CPU/RAM/disk needs. Matched against Hetzner, DO, Linode, Vultr.</div>
       </div>
-      <div class="rounded-xl bg-slate-900 border border-slate-800 p-5">
-        <div class="text-cyan-400 text-2xl mb-2">③</div>
-        <div class="font-semibold mb-1">Day-2 ready</div>
-        <div class="text-sm text-slate-400">Status, logs, smoke-test, stop, clean — operations baked in from install.</div>
+      <div class="glass glass-hover spot p-6">
+        <div class="display-3 grad-text mb-2">③</div>
+        <div class="font-semibold mb-1">Install with live progress</div>
+        <div class="text-sm text-slate-400">Pre-flight checks, streaming logs, retry-on-failure. Never silent.</div>
+      </div>
+      <div class="glass glass-hover spot p-6">
+        <div class="display-3 grad-text mb-2">④</div>
+        <div class="font-semibold mb-1">Run a query</div>
+        <div class="text-sm text-slate-400">Demo data loaded. One click hits StarRocks and shows results.</div>
       </div>
     </div>
   </section>
 
-  <!-- STACKS -->
-  <section id="screen-stacks" class="screen hidden">
-    <h2 class="text-2xl font-semibold mb-1">Choose a stack</h2>
-    <p class="text-slate-400 mb-6">Pick the lakehouse blueprint to install on your target server.</p>
-    <div id="stack-list" class="grid grid-cols-1 gap-4"></div>
+  <!-- ============== STACKS ============== -->
+  <section id="screen-stacks" class="screen hidden fade-up">
+    <div class="mb-8">
+      <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 1 · Catalog</div>
+      <h2 class="display-2 grad-text-soft inline-block">Choose a stack</h2>
+      <p class="text-slate-400 mt-2">Pick the lakehouse blueprint to install on your target server.</p>
+    </div>
+    <div id="stack-list" class="grid grid-cols-1 gap-5"></div>
   </section>
 
-  <!-- SIZING -->
-  <section id="screen-sizing" class="screen hidden">
-    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3" onclick="navigate('stacks')">← Back to stacks</button>
-    <h2 class="text-2xl font-semibold mb-1">Pick a size</h2>
-    <p class="text-slate-400 mb-6">How big does the server need to be? We sized each tier from the components in your stack plus host overhead, then matched real VPS plans.</p>
-    <div id="sizing-tiers" class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6"></div>
+  <!-- ============== SIZING ============== -->
+  <section id="screen-sizing" class="screen hidden fade-up">
+    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3 flex items-center gap-1" onclick="navigate('stacks')"><span>←</span> Back to stacks</button>
+    <div class="mb-8">
+      <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 2 · Capacity</div>
+      <h2 class="display-2 grad-text-soft inline-block">Pick a size</h2>
+      <p class="text-slate-400 mt-2">How big does the server need to be? We sized each tier from the components in your stack plus host overhead, then matched real VPS plans.</p>
+    </div>
+    <div id="sizing-tiers" class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8"></div>
 
-    <div id="stack-score" class="rounded-2xl border border-slate-800 bg-slate-900 p-5 mb-6"></div>
+    <div id="stack-score" class="glass p-6 mb-8"></div>
 
-    <div class="rounded-2xl border border-slate-800 bg-slate-900 p-5 mb-6">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-lg font-semibold">Custom size</h3>
+    <div class="glass p-6 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="display-3">Custom size</h3>
         <span class="text-xs text-slate-500">override any tier — Studio recommends the cheapest matching VPS plan</span>
       </div>
       <div class="grid grid-cols-3 gap-4">
         <label class="block">
           <div class="text-xs text-slate-400 mb-1">vCPU cores</div>
-          <input id="size-cpu" type="number" min="2" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
+          <input id="size-cpu" type="number" min="2" class="input" />
         </label>
         <label class="block">
           <div class="text-xs text-slate-400 mb-1">RAM (GB)</div>
-          <input id="size-ram" type="number" min="4" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
+          <input id="size-ram" type="number" min="4" class="input" />
         </label>
         <label class="block">
           <div class="text-xs text-slate-400 mb-1">Disk (GB)</div>
-          <input id="size-disk" type="number" min="40" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
+          <input id="size-disk" type="number" min="40" class="input" />
         </label>
       </div>
-      <div class="text-xs text-slate-500 mt-2">Tip: editing these only changes the VPS recommendation. Actual install uses the server you connect to.</div>
+      <div class="text-xs text-slate-500 mt-2">Tip: editing these only changes the VPS recommendation. The actual install uses the server you connect to.</div>
     </div>
 
-    <h3 class="text-lg font-semibold mb-3">Matched VPS plans</h3>
-    <div id="provider-list" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6"></div>
-    <div class="text-xs text-slate-500 mb-6">Prices are approximate USD/month as of early 2026. Always verify on the provider's pricing page before purchasing. Storage and bandwidth quoted are what the plan includes; UDP only needs about <span id="provider-disk-need">?</span> GB at this tier.</div>
+    <h3 class="display-3 mb-4">Matched VPS plans</h3>
+    <div id="provider-list" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4"></div>
+    <div class="text-xs text-slate-500 mb-8">Prices are approximate USD/month as of early 2026. Always verify on the provider's pricing page before purchasing. UDP only needs about <span id="provider-disk-need" class="mono text-cyan-300">?</span> GB of disk at this tier.</div>
 
     <div class="flex items-center gap-3">
-      <button id="btn-to-server" class="px-5 py-2 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold">I have my server — continue →</button>
-      <button class="text-sm text-slate-400 hover:text-slate-200" onclick="navigate('stacks')">Cancel</button>
+      <button id="btn-to-server" class="btn-primary">I have my server — continue <span class="ml-1">→</span></button>
+      <button class="btn-ghost" onclick="navigate('stacks')">Cancel</button>
     </div>
   </section>
 
-  <!-- SERVER -->
-  <section id="screen-server" class="screen hidden">
-    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3" onclick="navigate('stacks')">← Back to stacks</button>
-    <h2 class="text-2xl font-semibold mb-1">Server details</h2>
-    <p class="text-slate-400 mb-6">For this pilot, the target is <span class="mono text-slate-200">localhost</span> — Studio drives Docker on this machine.</p>
-    <div class="rounded-xl bg-slate-900 border border-slate-800 p-6 max-w-2xl">
-      <label class="block text-sm font-medium mb-1">Host</label>
-      <input id="input-host" value="localhost" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
-      <p class="text-xs text-slate-500 mt-1">Use <span class="mono">localhost</span> for the pilot. Remote-host (SSH) support comes next.</p>
+  <!-- ============== SERVER ============== -->
+  <section id="screen-server" class="screen hidden fade-up">
+    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3 flex items-center gap-1" onclick="navigate('sizing')"><span>←</span> Back</button>
+    <div class="mb-8">
+      <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 3 · Target</div>
+      <h2 class="display-2 grad-text-soft inline-block">Server details</h2>
+      <p class="text-slate-400 mt-2">For this pilot, the install runs against the machine Studio itself is on. Use <span class="mono text-cyan-300">localhost</span> if you're running everything here, or your VPS hostname if Studio is on the VPS.</p>
+    </div>
+    <div class="glass p-8 max-w-2xl">
+      <label class="block text-sm font-medium mb-2">Host</label>
+      <input id="input-host" value="localhost" class="input" />
+      <p class="text-xs text-slate-500 mt-2">Used to render service URLs after install (e.g. <span class="mono">http://&lt;host&gt;:9001</span>).</p>
 
-      <label class="block text-sm font-medium mb-1 mt-4">Install directory</label>
-      <input id="input-installdir" placeholder="(default: ./work/udp)" class="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 mono" />
-      <p class="text-xs text-slate-500 mt-1">Where the UDP repo will be cloned and run. Leave empty for default.</p>
+      <label class="block text-sm font-medium mb-2 mt-6">Install directory</label>
+      <input id="input-installdir" placeholder="(default: ./work/udp)" class="input" />
+      <p class="text-xs text-slate-500 mt-2">Where the UDP repo will be cloned and run. Leave empty for default.</p>
 
-      <div class="flex items-center gap-3 mt-6">
-        <button id="btn-inspect" class="px-5 py-2 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold">Inspect server</button>
-        <button class="text-sm text-slate-400 hover:text-slate-200" onclick="navigate('stacks')">Cancel</button>
+      <div class="flex items-center gap-3 mt-8">
+        <button id="btn-inspect" class="btn-primary">Inspect server <span class="ml-1">→</span></button>
+        <button class="btn-ghost" onclick="navigate('sizing')">Cancel</button>
       </div>
     </div>
   </section>
 
-  <!-- INSPECT -->
-  <section id="screen-inspect" class="screen hidden">
-    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3" onclick="navigate('server')">← Back</button>
-    <h2 class="text-2xl font-semibold mb-1">Pre-flight inspection</h2>
-    <p class="text-slate-400 mb-6">Checking the target environment against stack requirements.</p>
-    <div id="inspect-summary" class="rounded-xl border border-slate-800 bg-slate-900 p-5 mb-4"></div>
+  <!-- ============== INSPECT ============== -->
+  <section id="screen-inspect" class="screen hidden fade-up">
+    <button class="text-sm text-slate-400 hover:text-slate-200 mb-3 flex items-center gap-1" onclick="navigate('server')"><span>←</span> Back</button>
+    <div class="mb-8">
+      <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 4 · Pre-flight</div>
+      <h2 class="display-2 grad-text-soft inline-block">Pre-flight inspection</h2>
+      <p class="text-slate-400 mt-2">Checking the target environment against stack requirements.</p>
+    </div>
+    <div id="inspect-summary" class="glass p-6 mb-4"></div>
     <div id="inspect-checks" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>
-    <div class="flex items-center gap-3 mt-6">
-      <button id="btn-install" class="px-5 py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold">Install</button>
-      <button class="text-sm text-slate-400 hover:text-slate-200" onclick="runInspect()">Re-run inspection</button>
+    <div class="flex items-center gap-3 mt-8">
+      <button id="btn-install" class="btn-primary">Install <span class="ml-1">→</span></button>
+      <button class="btn-ghost" onclick="runInspect()">↻ Re-run inspection</button>
     </div>
   </section>
 
-  <!-- INSTALL -->
-  <section id="screen-install" class="screen hidden">
-    <div class="flex items-center justify-between mb-4">
+  <!-- ============== INSTALL ============== -->
+  <section id="screen-install" class="screen hidden fade-up">
+    <div class="flex items-center justify-between mb-6">
       <div>
-        <h2 class="text-2xl font-semibold">Installing</h2>
-        <p class="text-slate-400 text-sm mono" id="install-meta"></p>
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 5 · Live install</div>
+        <h2 class="display-2 grad-text-soft inline-block">Installing</h2>
+        <p class="text-slate-500 text-sm mono mt-2" id="install-meta"></p>
       </div>
-      <div id="install-state" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-800">…</div>
+      <div id="install-state" class="state-badge working">…</div>
     </div>
-    <div id="install-diagnose" class="hidden rounded-xl border border-rose-800/40 bg-rose-950/30 p-5 mb-4"></div>
+
+    <div id="install-diagnose" class="hidden glass p-5 mb-4" style="border-color: rgba(244,63,94,0.4); background: rgba(244,63,94,0.06);"></div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div class="lg:col-span-1">
-        <div class="rounded-xl border border-slate-800 bg-slate-900 p-2">
+        <div class="glass p-3">
+          <div class="text-xs uppercase tracking-widest text-slate-500 mb-3 px-2">Pipeline</div>
           <div id="step-list" class="space-y-1"></div>
         </div>
-        <div id="failure-controls" class="hidden rounded-xl border border-slate-800 bg-slate-900 p-3 mt-3 space-y-2"></div>
+        <div id="failure-controls" class="hidden glass p-3 mt-3 space-y-2"></div>
       </div>
       <div class="lg:col-span-2">
-        <div class="rounded-xl border border-slate-800 bg-black/70 h-[460px] flex flex-col">
-          <div class="px-4 py-2 border-b border-slate-800 text-xs text-slate-400 flex items-center justify-between">
-            <span>Live logs</span>
+        <div class="terminal h-[480px] flex flex-col">
+          <div class="px-4 py-2 border-b border-white/5 text-xs flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-rose-500/70"></span>
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-500/70"></span>
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/70"></span>
+              <span class="text-slate-500 ml-2">live logs</span>
+            </div>
             <span id="log-step" class="mono text-slate-500"></span>
           </div>
           <div id="log-stream" class="flex-1 overflow-y-auto p-4 text-xs mono leading-relaxed scroll-shadow"></div>
@@ -194,19 +645,30 @@
     </div>
   </section>
 
-  <!-- SUCCESS -->
-  <section id="screen-success" class="screen hidden">
-    <div class="rounded-2xl bg-gradient-to-br from-emerald-900/30 to-slate-900 border border-emerald-700/40 p-8 mb-6">
-      <div class="text-emerald-300 text-sm font-semibold mb-2">✓ STACK READY</div>
-      <h2 class="text-3xl font-bold mb-2">Your lakehouse is live.</h2>
-      <p class="text-slate-300">Demo data loaded, smoke tests passed. Connect to any service below.</p>
+  <!-- ============== SUCCESS ============== -->
+  <section id="screen-success" class="screen hidden fade-up">
+    <div class="success-hero p-10 mb-8 relative">
+      <div class="success-burst"></div>
+      <div class="relative">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-emerald-300 text-xs font-semibold tracking-wider bg-emerald-500/10 border border-emerald-500/30 mb-4">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
+          STACK READY
+        </div>
+        <h2 class="display-1">
+          <span class="text-white">Your lakehouse</span><br>
+          <span class="grad-text">is live.</span>
+        </h2>
+        <p class="text-slate-300 mt-4 text-lg">Demo data loaded. Smoke tests passed. Connect to any service below.</p>
+      </div>
     </div>
-    <h3 class="text-lg font-semibold mb-3">Service URLs</h3>
-    <div id="success-urls" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6"></div>
-    <h3 class="text-lg font-semibold mb-3">Connections</h3>
-    <div id="success-conns" class="space-y-2 mb-6"></div>
 
-    <div class="rounded-2xl border border-amber-800/40 bg-amber-950/30 p-5 mb-6">
+    <h3 class="display-3 mb-4 mt-2">Service URLs</h3>
+    <div id="success-urls" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8"></div>
+
+    <h3 class="display-3 mb-4">Connections</h3>
+    <div id="success-conns" class="space-y-2 mb-8"></div>
+
+    <div class="glass p-5 mb-8" style="border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.04);">
       <div class="flex items-start gap-3">
         <div class="text-amber-300 text-xl">⚠</div>
         <div class="flex-1">
@@ -216,7 +678,7 @@
             <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Rotate default MinIO credentials</li>
             <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Enable TLS on all service ports</li>
             <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Move object storage to managed S3/GCS/Azure</li>
-            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Configure persistent backups (catalog + storage)</li>
+            <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Configure persistent backups</li>
             <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Add monitoring + alerting (Prometheus / Grafana)</li>
             <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Enable RBAC + audit logs</li>
             <li class="flex items-center gap-2"><span class="text-amber-400">○</span>Restrict network access (firewall / VPN)</li>
@@ -226,43 +688,51 @@
       </div>
     </div>
 
-    <div id="success-evidence" class="text-xs text-slate-500 mono mb-4"></div>
+    <div id="success-evidence" class="text-xs text-slate-500 mono mb-6"></div>
 
-    <div class="flex items-center justify-between mb-3 mt-8">
-      <h3 class="text-lg font-semibold">Smoke tests</h3>
-      <button id="btn-rerun-smoke" class="text-xs text-cyan-400 hover:text-cyan-300">↻ re-run</button>
+    <div class="flex items-center justify-between mb-4 mt-2">
+      <h3 class="display-3">Smoke tests</h3>
+      <button id="btn-rerun-smoke" class="btn-ghost text-xs">↻ Re-run</button>
     </div>
-    <div id="smoke-results" class="rounded-xl border border-slate-800 bg-slate-900 p-4 mb-6"></div>
+    <div id="smoke-results" class="glass p-5 mb-8"></div>
 
-    <h3 class="text-lg font-semibold mb-3 mt-8">Try a demo query</h3>
-    <div class="rounded-xl border border-slate-800 bg-slate-900 p-4 mb-2">
+    <h3 class="display-3 mb-4 mt-2">Try a demo query</h3>
+    <div class="glass p-4 mb-2">
       <div id="demo-query-buttons" class="flex flex-wrap gap-2"></div>
     </div>
-    <div id="demo-query-result" class="rounded-xl border border-slate-800 bg-black/70 p-4 mb-6 text-xs mono min-h-[60px] text-slate-300 overflow-x-auto"></div>
+    <div id="demo-query-result" class="terminal p-5 mb-6 text-xs mono min-h-[80px] text-slate-300 overflow-x-auto"></div>
 
-    <h3 class="text-lg font-semibold mb-3 mt-8">Day-2 operations</h3>
-    <div class="rounded-xl border border-slate-800 bg-slate-900 p-4 flex flex-wrap gap-2">
-      <button class="ops-btn" data-action="status">Status</button>
-      <button class="ops-btn" data-action="smoke">Re-run smoke test</button>
-      <button class="ops-btn" data-action="stop">Stop stack</button>
-      <button class="ops-btn ops-danger" data-action="clean">Clean (destroy volumes)</button>
+    <h3 class="display-3 mb-4 mt-8">SQL editor <span class="text-sm font-normal text-slate-400 ml-2">(read-only — SELECT / SHOW / DESCRIBE / EXPLAIN / WITH)</span></h3>
+    <div class="glass p-4 mb-2">
+      <textarea id="sql-editor-input" rows="4" class="input mono text-sm" style="resize: vertical;">-- Try a query
+SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
+      <div class="flex items-center justify-between mt-2">
+        <div class="text-xs text-slate-500">Max 10KB · 30s timeout · destructive statements rejected</div>
+        <button id="btn-sql-run" class="btn-primary text-sm">Run query</button>
+      </div>
     </div>
-    <div id="ops-output" class="mt-4 rounded-xl border border-slate-800 bg-black/70 p-4 text-xs mono whitespace-pre-wrap min-h-[80px] text-slate-300"></div>
+    <div id="sql-editor-result" class="terminal p-5 mb-8 text-xs mono min-h-[80px] text-slate-300 overflow-x-auto"></div>
+
+    <h3 class="display-3 mb-4 mt-2">Day-2 operations</h3>
+    <div class="glass p-4 flex flex-wrap gap-2">
+      <button class="ops-btn btn-ghost text-sm" data-action="status">Status</button>
+      <button class="ops-btn btn-ghost text-sm" data-action="smoke">Re-run smoke test</button>
+      <button class="ops-btn btn-ghost text-sm" data-action="stop">Stop stack</button>
+      <button class="ops-btn btn-ghost text-sm" data-action="clean" style="border-color: rgba(244,63,94,0.4); color: #fca5a5;">Clean (destroy volumes)</button>
+    </div>
+    <div id="ops-output" class="terminal p-4 mt-3 text-xs mono whitespace-pre-wrap min-h-[60px] text-slate-300"></div>
   </section>
 
-  <!-- INSTALLS LIST -->
-  <section id="screen-installs" class="screen hidden">
-    <h2 class="text-2xl font-semibold mb-1">Installs</h2>
-    <p class="text-slate-400 mb-6">History of installs Studio has driven on this machine.</p>
+  <!-- ============== INSTALLS LIST ============== -->
+  <section id="screen-installs" class="screen hidden fade-up">
+    <div class="mb-8">
+      <h2 class="display-2 grad-text-soft inline-block">Installs</h2>
+      <p class="text-slate-400 mt-2">History of installs Studio has driven on this machine.</p>
+    </div>
     <div id="installs-list" class="space-y-2"></div>
   </section>
 
 </main>
-
-<style>
-  .ops-btn { @apply px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm font-medium; }
-  .ops-danger { @apply bg-rose-900/60 hover:bg-rose-800; }
-</style>
 
 <script>
   // ----- state -----
@@ -281,11 +751,16 @@
   function navigate(screen) {
     document.querySelectorAll(".screen").forEach(s => s.classList.add("hidden"));
     const el = document.getElementById("screen-" + screen);
-    if (el) el.classList.remove("hidden");
+    if (el) {
+      el.classList.remove("hidden");
+      // Re-trigger fade-up animation
+      el.classList.remove("fade-up"); void el.offsetWidth; el.classList.add("fade-up");
+    }
     document.querySelectorAll(".nav-btn").forEach(b => {
-      b.classList.toggle("bg-slate-800", b.dataset.nav === screen);
+      b.classList.toggle("bg-white/10", b.dataset.nav === screen);
     });
     if (screen === "installs") loadInstalls();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
   document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => navigate(b.dataset.nav)));
   document.getElementById("btn-start").addEventListener("click", () => { loadStacks().then(() => navigate("stacks")); });
@@ -293,12 +768,31 @@
   // ----- escape helper -----
   function esc(s) {
     if (s == null) return "";
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  }
+
+  // ----- mouse-tracked glow on .spot cards -----
+  document.addEventListener("mousemove", (e) => {
+    document.querySelectorAll(".spot").forEach(el => {
+      const r = el.getBoundingClientRect();
+      const x = e.clientX - r.left; const y = e.clientY - r.top;
+      if (x >= 0 && y >= 0 && x <= r.width && y <= r.height) {
+        el.style.setProperty("--mx", `${x}px`);
+        el.style.setProperty("--my", `${y}px`);
+      }
+    });
+  });
+
+  // ----- animated number counter -----
+  function animateCount(el, from, to, dur = 700, fmt = (v) => String(Math.round(v))) {
+    const start = performance.now();
+    const ease = t => 1 - Math.pow(1 - t, 3);
+    function step(now) {
+      const t = Math.min(1, (now - start) / dur);
+      el.textContent = fmt(from + (to - from) * ease(t));
+      if (t < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
   }
 
   // ----- auth -----
@@ -310,7 +804,9 @@
     const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
     const tok = authToken();
     if (tok) headers["Authorization"] = "Bearer " + tok;
-    const r = await fetch(path, { ...opts, headers });
+    let r;
+    try { r = await fetch(path, { ...opts, headers }); }
+    catch (e) { setStatusBar(false, "offline"); throw e; }
     if (r.status === 401) {
       const t = prompt("This Studio requires an auth token. Paste your LHS_AUTH_TOKEN:");
       if (t) { setAuthToken(t.trim()); return api(path, opts); }
@@ -320,7 +816,12 @@
       const t = await r.text();
       throw new Error(`${r.status} ${r.statusText}: ${t}`);
     }
+    setStatusBar(true, "studio · v0.3");
     return r.json();
+  }
+  function setStatusBar(ok, text) {
+    document.getElementById("status-dot").classList.toggle("off", !ok);
+    document.getElementById("status-text").textContent = text;
   }
 
   // ----- stacks -----
@@ -330,22 +831,26 @@
     list.innerHTML = "";
     state.stacks.forEach(s => {
       const div = document.createElement("div");
-      div.className = "rounded-xl border border-slate-800 bg-slate-900 p-5 hover:border-cyan-700 cursor-pointer transition";
-      const comps = s.components.map(c => `<span class="px-2 py-0.5 rounded bg-slate-800 text-xs mono">${esc(c.name)} ${esc(c.version || '')}</span>`).join("");
+      div.className = "glass glass-hover spot p-6 cursor-pointer";
+      const comps = s.components.map(c => `<span class="px-2 py-0.5 rounded-md bg-white/5 border border-white/5 text-xs mono">${esc(c.name)} ${esc(c.version || '')}</span>`).join("");
+      const matBadge = s.maturity === 'certified'
+        ? `bg-emerald-500/15 text-emerald-300 border-emerald-500/30`
+        : `bg-amber-500/10 text-amber-300 border-amber-500/30`;
       div.innerHTML = `
-        <div class="flex items-center justify-between mb-2">
-          <div class="font-semibold text-lg">${esc(s.name)}</div>
-          <span class="px-2 py-0.5 rounded text-xs font-medium ${s.maturity === 'certified' ? 'bg-emerald-700/40 text-emerald-300' : 'bg-amber-700/40 text-amber-300'}">${esc(s.maturity || 'pilot')} · v${esc(s.version || '?')}</span>
+        <div class="flex items-start justify-between mb-3">
+          <div>
+            <div class="display-3 mb-1">${esc(s.name)}</div>
+            <div class="text-sm text-slate-400">${esc(s.description || '')}</div>
+          </div>
+          <span class="px-2 py-0.5 rounded-md text-xs font-medium border ${matBadge}">${esc(s.maturity || 'pilot')} · v${esc(s.version || '?')}</span>
         </div>
-        <div class="text-sm text-slate-400 mb-3">${esc(s.description || '')}</div>
-        <div class="flex flex-wrap gap-1 mb-4">${comps}</div>
-        <div class="text-xs text-slate-500">Min RAM ${esc(s.requirements.minimum_ram_gb || '?')} GB · Ports ${(s.ports.required || []).join(', ')}</div>
+        <div class="flex flex-wrap gap-1.5 mb-4">${comps}</div>
+        <div class="flex items-center justify-between text-xs text-slate-500">
+          <div>Min RAM ${esc(s.requirements.minimum_ram_gb || '?')} GB · Ports ${(s.ports.required || []).join(', ')}</div>
+          <div class="text-cyan-400">Choose this stack →</div>
+        </div>
       `;
-      div.addEventListener("click", async () => {
-        state.selected = s;
-        navigate("sizing");
-        await loadSizing(s.id);
-      });
+      div.addEventListener("click", async () => { state.selected = s; navigate("sizing"); await loadSizing(s.id); });
       list.appendChild(div);
     });
   }
@@ -368,55 +873,53 @@
     const el = document.getElementById("stack-score");
     const palette = s.overall >= 80 ? 'emerald' : (s.overall >= 70 ? 'cyan' : (s.overall >= 60 ? 'amber' : 'rose'));
     const bars = s.breakdown.map(d => {
-      const c = d.score >= 80 ? 'emerald' : (d.score >= 60 ? 'amber' : 'rose');
+      const cls = d.score >= 80 ? 'good' : (d.score >= 60 ? 'mid' : 'bad');
+      const txtC = d.score >= 80 ? 'emerald' : (d.score >= 60 ? 'amber' : 'rose');
       return `
-        <div class="space-y-1">
+        <div class="space-y-1.5">
           <div class="flex items-baseline justify-between text-xs">
             <span class="text-slate-300">${esc(d.label)}</span>
-            <span class="mono text-${c}-300">${d.score} / 100</span>
+            <span class="mono text-${txtC}-300">${d.score} / 100</span>
           </div>
-          <div class="h-1.5 rounded bg-slate-800 overflow-hidden">
-            <div class="h-full bg-${c}-500" style="width: ${d.score}%"></div>
-          </div>
+          <div class="score-bar"><div class="score-fill ${cls}" style="width: ${d.score}%"></div></div>
           <div class="text-xs text-slate-500">${esc(d.note)}</div>
         </div>
       `;
     }).join("");
     el.innerHTML = `
-      <div class="flex items-baseline justify-between mb-3">
+      <div class="flex items-center justify-between mb-4">
         <div>
           <div class="text-xs uppercase tracking-widest text-slate-400 mb-1">Stack score · tier '${esc(state.selectedTier)}'</div>
-          <div class="text-3xl font-bold text-${palette}-300">${s.overall} <span class="text-base text-slate-400 font-normal">/ 100</span></div>
+          <div class="flex items-baseline gap-2">
+            <span class="display-1 text-${palette}-300" id="score-num">0</span>
+            <span class="text-base text-slate-400 font-normal">/ 100</span>
+          </div>
           <div class="text-sm text-${palette}-300 font-medium">${esc(s.grade)}</div>
         </div>
         <div class="max-w-md text-sm text-slate-400 text-right">${esc(s.headline)}</div>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">${bars}</div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">${bars}</div>
     `;
+    animateCount(document.getElementById("score-num"), 0, s.overall, 900);
   }
 
   function renderTiers() {
     const wrap = document.getElementById("sizing-tiers");
     wrap.innerHTML = "";
-    const tierOrder = ["minimal", "recommended", "comfortable"];
-    tierOrder.forEach(name => {
+    ["minimal", "recommended", "comfortable"].forEach(name => {
       const t = state.sizing.tiers[name];
       const selected = state.selectedTier === name;
       const div = document.createElement("div");
-      div.className = "rounded-xl border p-5 cursor-pointer transition " +
-        (selected ? "border-cyan-500 bg-cyan-950/30" : "border-slate-800 bg-slate-900 hover:border-cyan-700");
+      div.className = "tier-card spot" + (selected ? " selected" : "");
       const cheapest = t.cheapest_overall;
       const priceTag = cheapest
-        ? `<div class="text-xs text-cyan-300 mt-2">from <span class="font-semibold">$${cheapest.usd_month}/mo</span> · ${esc(cheapest.provider_name)}</div>`
-        : `<div class="text-xs text-rose-400 mt-2">no listed VPS plan fits</div>`;
-      const compList = t.components.map(c => `<div class="flex justify-between"><span class="text-slate-400">${esc(c.name)}</span><span class="mono text-slate-300">${c.cpu}c · ${c.ram_gb}G · ${c.disk_gb}G</span></div>`).join("");
+        ? `<div class="mt-4 pt-4 border-t border-white/5"><div class="text-xs text-slate-500 mb-0.5">from</div><div class="display-3 grad-text"><span class="price-num" data-target="${cheapest.usd_month}">$${cheapest.usd_month}</span><span class="text-base text-slate-400 font-normal">/mo</span></div><div class="text-xs text-slate-400 mt-1">${esc(cheapest.provider_name)} · ${esc(cheapest.plan)}</div></div>`
+        : `<div class="mt-4 pt-4 border-t border-white/5"><div class="text-xs text-rose-400">no listed VPS plan fits</div></div>`;
+      const compList = t.components.map(c => `<div class="flex justify-between text-xs"><span class="text-slate-400">${esc(c.name)}</span><span class="mono text-slate-300">${c.cpu}c · ${c.ram_gb}G · ${c.disk_gb}G</span></div>`).join("");
       div.innerHTML = `
-        <div class="flex items-baseline justify-between mb-1">
-          <div class="font-semibold text-lg">${esc(t.label)}</div>
-          ${selected ? '<span class="text-xs text-cyan-300">✓ selected</span>' : ''}
-        </div>
-        <div class="text-xs text-slate-400 mb-3">${esc(t.blurb)}</div>
-        <div class="mono text-sm text-slate-200 mb-1">${t.totals.cpu} vCPU · ${t.totals.ram_gb} GB RAM · ${t.totals.disk_gb} GB disk</div>
+        <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">${esc(t.label)}</div>
+        <div class="text-sm text-slate-400 mb-3 leading-relaxed">${esc(t.blurb)}</div>
+        <div class="mono text-lg text-slate-100 mb-1">${t.totals.cpu} vCPU · ${t.totals.ram_gb} GB · ${t.totals.disk_gb} GB</div>
         <div class="text-xs text-slate-500 mb-3">incl. host overhead ${t.overhead.cpu}c / ${t.overhead.ram_gb}G / ${t.overhead.disk_gb}G</div>
         <details class="text-xs text-slate-400">
           <summary class="cursor-pointer hover:text-slate-200">per-component breakdown</summary>
@@ -425,11 +928,8 @@
         ${priceTag}
       `;
       div.addEventListener("click", async () => {
-        state.selectedTier = name;
-        renderTiers();
-        renderStackScore();
-        setCustomSize(t.totals);
-        await refreshProviders();
+        state.selectedTier = name; renderTiers(); renderStackScore();
+        setCustomSize(t.totals); await refreshProviders();
       });
       wrap.appendChild(div);
     });
@@ -441,7 +941,6 @@
     document.getElementById("size-ram").value = totals.ram_gb;
     document.getElementById("size-disk").value = totals.disk_gb;
   }
-
   function currentCustomTotals() {
     return {
       cpu: Math.max(1, parseInt(document.getElementById("size-cpu").value || "0", 10)),
@@ -453,9 +952,6 @@
   async function refreshProviders() {
     const totals = currentCustomTotals();
     document.getElementById("provider-disk-need").textContent = totals.disk_gb;
-    // Pull match results client-side from the loaded sizing data when the
-    // custom values match a tier; otherwise, request server-side filtering.
-    // Cheaper: re-use the tiers' matched_providers list and re-filter here.
     const allPlans = [];
     for (const tier of Object.values(state.sizing.tiers)) {
       for (const prov of tier.matched_providers) {
@@ -464,49 +960,42 @@
         }
       }
     }
-    // Dedup by plan id, then filter by custom totals.
     const seen = new Set(); const fitting = [];
     for (const p of allPlans) {
       if (seen.has(p.id)) continue; seen.add(p.id);
-      if (p.cpu >= totals.cpu && p.ram_gb >= totals.ram_gb && p.disk_gb >= totals.disk_gb) {
-        fitting.push(p);
-      }
+      if (p.cpu >= totals.cpu && p.ram_gb >= totals.ram_gb && p.disk_gb >= totals.disk_gb) fitting.push(p);
     }
     fitting.sort((a, b) => a.usd_month - b.usd_month);
 
     const list = document.getElementById("provider-list");
     list.innerHTML = "";
     if (!fitting.length) {
-      list.innerHTML = `<div class="md:col-span-2 rounded-xl border border-rose-800/50 bg-rose-950/30 p-5 text-sm text-rose-200">No catalogued plan fits this size. Try lowering CPU/RAM, or check the provider sites directly — many offer larger custom plans not listed here.</div>`;
+      list.innerHTML = `<div class="md:col-span-2 glass p-5 text-sm text-rose-200" style="border-color: rgba(244,63,94,0.35)">No catalogued plan fits this size. Try lowering CPU/RAM, or check the provider sites directly — many offer larger custom plans not listed here.</div>`;
       return;
     }
     fitting.forEach((p, i) => {
       const div = document.createElement("a");
       div.href = p.provider_url; div.target = "_blank"; div.rel = "noopener noreferrer";
-      div.className = "block rounded-xl border p-4 hover:border-cyan-500 transition " +
-        (i === 0 ? "border-cyan-700 bg-cyan-950/20" : "border-slate-800 bg-slate-900");
+      div.className = "block glass glass-hover spot p-5" + (i === 0 ? " grad-border" : "");
+      div.style = i === 0 ? "" : "";
       div.innerHTML = `
-        <div class="flex items-baseline justify-between mb-1">
-          <div class="font-semibold">${esc(p.provider_name)}</div>
-          <div class="text-cyan-300 font-semibold">$${p.usd_month}/mo</div>
+        <div class="flex items-baseline justify-between mb-2">
+          <div class="font-semibold text-slate-100">${esc(p.provider_name)}</div>
+          <div class="grad-text font-bold">$${p.usd_month}<span class="text-slate-400 font-normal text-sm">/mo</span></div>
         </div>
-        <div class="text-sm mono text-slate-200 mb-1">${esc(p.plan)}</div>
-        <div class="text-xs text-slate-500 mb-2">${p.cpu} vCPU · ${p.ram_gb} GB RAM · ${p.disk_gb} GB disk · ${p.traffic_tb} TB traffic</div>
+        <div class="text-sm mono text-slate-200 mb-2">${esc(p.plan)}</div>
+        <div class="text-xs text-slate-500 mb-1">${p.cpu} vCPU · ${p.ram_gb} GB RAM · ${p.disk_gb} GB disk · ${p.traffic_tb} TB traffic</div>
         <div class="text-xs text-slate-500">${esc(p.location)}</div>
-        ${i === 0 ? '<div class="text-xs text-cyan-300 mt-2">✓ cheapest fit</div>' : ''}
+        ${i === 0 ? '<div class="text-xs text-cyan-300 mt-3 flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-cyan-400"></span> Cheapest fit · sign up →</div>' : ''}
       `;
       list.appendChild(div);
     });
   }
 
-  // Recompute providers when user edits custom inputs
   ["size-cpu", "size-ram", "size-disk"].forEach(id => {
     document.getElementById(id).addEventListener("input", () => refreshProviders());
   });
-
-  document.getElementById("btn-to-server").addEventListener("click", () => {
-    navigate("server");
-  });
+  document.getElementById("btn-to-server").addEventListener("click", () => navigate("server"));
 
   // ----- server / inspect -----
   document.getElementById("btn-inspect").addEventListener("click", () => {
@@ -522,22 +1011,16 @@
     summary.innerHTML = `<div class="flex items-center gap-2 text-slate-400 text-sm"><div class="w-2 h-2 rounded-full bg-cyan-400 pulse-dot"></div>Inspecting…</div>`;
     grid.innerHTML = "";
     try {
-      const r = await api("/api/inspect", {
-        method: "POST",
-        body: JSON.stringify({ stack_id: state.selected.id, host: state.host }),
-      });
+      const r = await api("/api/inspect", { method: "POST", body: JSON.stringify({ stack_id: state.selected.id, host: state.host }) });
       state.inspectReport = r;
       renderInspect(r);
-    } catch (e) {
-      summary.innerHTML = `<div class="text-rose-400">${e.message}</div>`;
-    }
+    } catch (e) { summary.innerHTML = `<div class="text-rose-400">${esc(e.message)}</div>`; }
   }
 
   function statusBadge(s) {
-    if (s === "passed") return `<span class="px-2 py-0.5 rounded text-xs bg-emerald-700/40 text-emerald-300">PASS</span>`;
-    if (s === "warning") return `<span class="px-2 py-0.5 rounded text-xs bg-amber-700/40 text-amber-300">WARN</span>`;
-    if (s === "failed") return `<span class="px-2 py-0.5 rounded text-xs bg-rose-700/40 text-rose-300">FAIL</span>`;
-    return `<span class="px-2 py-0.5 rounded text-xs bg-slate-700 text-slate-300">${s}</span>`;
+    const map = { passed: ["emerald","PASS"], warning: ["amber","WARN"], failed: ["rose","FAIL"] };
+    const [c, t] = map[s] || ["slate", String(s).toUpperCase()];
+    return `<span class="px-2 py-0.5 rounded-md text-xs bg-${c}-500/15 text-${c}-300 border border-${c}-500/30">${t}</span>`;
   }
 
   function renderInspect(r) {
@@ -549,15 +1032,16 @@
       <div class="flex items-center justify-between">
         <div>
           <div class="text-xs uppercase tracking-widest text-${c}-300 mb-1">Overall · ${r.overall}</div>
-          <div class="font-semibold">${r.recommended ? 'Ready to install.' : 'Cannot install — required checks failed.'}</div>
+          <div class="font-semibold text-lg">${r.recommended ? '✓ Ready to install.' : '✗ Cannot install — required checks failed.'}</div>
         </div>
-        <div class="text-sm text-slate-500 mono">host: ${r.host}</div>
+        <div class="text-sm text-slate-500 mono">host: ${esc(r.host)}</div>
       </div>
     `;
     grid.innerHTML = "";
-    r.checks.forEach(c => {
+    r.checks.forEach((c, i) => {
       const el = document.createElement("div");
-      el.className = "flex items-start gap-3 px-4 py-3 rounded-lg border border-slate-800 bg-slate-900";
+      el.className = "flex items-start gap-3 p-4 glass fade-up";
+      el.style.animationDelay = `${i * 30}ms`;
       el.innerHTML = `
         <div class="mt-0.5">${statusBadge(c.status)}</div>
         <div class="flex-1 min-w-0">
@@ -569,17 +1053,12 @@
       grid.appendChild(el);
     });
     document.getElementById("btn-install").disabled = !r.recommended;
-    document.getElementById("btn-install").classList.toggle("opacity-50", !r.recommended);
-    document.getElementById("btn-install").classList.toggle("cursor-not-allowed", !r.recommended);
   }
 
   // ----- install -----
   document.getElementById("btn-install").addEventListener("click", async () => {
     if (!state.inspectReport?.recommended) return;
-    const body = {
-      stack_id: state.selected.id,
-      host: state.host,
-    };
+    const body = { stack_id: state.selected.id, host: state.host };
     if (state.installDir) body.install_dir = state.installDir;
     const rec = await api("/api/installs", { method: "POST", body: JSON.stringify(body) });
     state.installId = rec.install_id;
@@ -597,39 +1076,31 @@
       const el = document.getElementById("log-stream");
       if (el && el.children.length === 0) {
         const div = document.createElement("div");
-        div.className = "log-line text-rose-400";
-        div.textContent = "ERROR: " + rec.error;
+        div.className = "log-line text-rose-400"; div.textContent = "ERROR: " + rec.error;
         el.appendChild(div);
       }
     }
     renderFailureControls(rec);
   }
 
-  // Steps that can be Skipped (server-side check; this is a UI guard).
   const SKIPPABLE_STEPS = new Set(["smoke", "finalize"]);
-
   function renderFailureControls(rec) {
     const wrap = document.getElementById("failure-controls");
     const diag = document.getElementById("install-diagnose");
-    if (rec.state !== "FAILED") {
-      wrap.classList.add("hidden");
-      diag.classList.add("hidden");
-      return;
-    }
+    if (rec.state !== "FAILED") { wrap.classList.add("hidden"); diag.classList.add("hidden"); return; }
     const failed = rec.steps.find(s => s.status === "failed");
     if (!failed) { wrap.classList.add("hidden"); return; }
     wrap.classList.remove("hidden");
     wrap.innerHTML = `
-      <div class="text-xs text-slate-400 mb-1">Failed: <span class="mono text-rose-300">${esc(failed.title)}</span></div>
-      <button id="btn-retry" class="w-full px-3 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-sm font-medium">↻ Retry this step</button>
-      ${SKIPPABLE_STEPS.has(failed.id) ? `<button id="btn-skip" class="w-full px-3 py-1.5 rounded bg-amber-700 hover:bg-amber-600 text-sm">↷ Skip and continue</button>` : `<div class="text-xs text-slate-500 px-1">(this step is required — cannot be skipped)</div>`}
-      <button id="btn-rollback" class="w-full px-3 py-1.5 rounded bg-rose-900/60 hover:bg-rose-800 text-sm">⊘ Rollback (clean)</button>
+      <div class="text-xs text-slate-400 mb-1 px-1">Failed: <span class="mono text-rose-300">${esc(failed.title)}</span></div>
+      <button id="btn-retry" class="w-full px-3 py-2 rounded-lg btn-primary text-sm">↻ Retry this step</button>
+      ${SKIPPABLE_STEPS.has(failed.id) ? `<button id="btn-skip" class="w-full px-3 py-2 rounded-lg btn-ghost text-sm">↷ Skip and continue</button>` : `<div class="text-xs text-slate-500 px-1">(this step is required — cannot be skipped)</div>`}
+      <button id="btn-rollback" class="w-full px-3 py-2 rounded-lg btn-ghost text-sm" style="border-color: rgba(244,63,94,0.4); color: #fca5a5;">⊘ Rollback (clean)</button>
     `;
     document.getElementById("btn-retry").addEventListener("click", () => retryStep(failed.id));
     const sk = document.getElementById("btn-skip");
     if (sk) sk.addEventListener("click", () => skipStep(failed.id));
     document.getElementById("btn-rollback").addEventListener("click", () => rollbackInstall());
-
     loadDiagnosis();
   }
 
@@ -642,43 +1113,33 @@
       diag.classList.remove("hidden");
       diag.innerHTML = `
         <div class="flex items-start gap-3">
-          <div class="text-rose-300 text-xl">⚠</div>
+          <div class="text-rose-300 text-2xl">⚠</div>
           <div class="flex-1">
-            <div class="text-rose-200 font-semibold mb-1">${esc(e.title)} <span class="text-xs text-rose-400">[${esc(e.category)}]</span></div>
-            <div class="text-sm text-rose-100/80 mb-2">${esc(e.why)}</div>
-            <div class="text-sm text-slate-200 mb-1"><span class="text-rose-300 font-medium">Fix:</span></div>
-            <pre class="text-xs mono text-slate-300 bg-black/30 p-3 rounded whitespace-pre-wrap">${esc(e.fix)}</pre>
-            ${e.retryable ? '<div class="text-xs text-emerald-300 mt-2">✓ Safe to retry after applying the fix.</div>' : '<div class="text-xs text-amber-300 mt-2">⚠ Not safely retryable — consider Rollback.</div>'}
+            <div class="text-rose-200 font-semibold mb-1 display-3">${esc(e.title)} <span class="text-xs text-rose-400 mono">[${esc(e.category)}]</span></div>
+            <div class="text-sm text-rose-100/80 mb-3">${esc(e.why)}</div>
+            <div class="text-sm text-slate-200 mb-2"><span class="text-rose-300 font-medium">Fix:</span></div>
+            <pre class="text-xs mono text-slate-300 bg-black/40 p-3 rounded-lg whitespace-pre-wrap">${esc(e.fix)}</pre>
+            ${e.retryable ? '<div class="text-xs text-emerald-300 mt-3">✓ Safe to retry after applying the fix.</div>' : '<div class="text-xs text-amber-300 mt-3">⚠ Not safely retryable — consider Rollback.</div>'}
           </div>
         </div>`;
-    } catch (err) {
-      diag.classList.add("hidden");
-    }
+    } catch { diag.classList.add("hidden"); }
   }
 
   async function retryStep(stepId) {
     try {
       openLogStream(state.installId);
-      await api(`/api/installs/${state.installId}/steps/retry`, {
-        method: "POST",
-        body: JSON.stringify({ step_id: stepId, env_overrides: {} }),
-      });
+      await api(`/api/installs/${state.installId}/steps/retry`, { method: "POST", body: JSON.stringify({ step_id: stepId, env_overrides: {} }) });
       setTimeout(() => refreshInstall(state.installId), 1000);
     } catch (e) { alert(e.message); }
   }
-
   async function skipStep(stepId) {
     if (!confirm(`Skip the "${stepId}" step and continue? The stack will be marked READY but this check did not pass.`)) return;
     try {
       openLogStream(state.installId);
-      await api(`/api/installs/${state.installId}/steps/skip`, {
-        method: "POST",
-        body: JSON.stringify({ step_id: stepId, env_overrides: {} }),
-      });
+      await api(`/api/installs/${state.installId}/steps/skip`, { method: "POST", body: JSON.stringify({ step_id: stepId, env_overrides: {} }) });
       setTimeout(() => refreshInstall(state.installId), 1000);
     } catch (e) { alert(e.message); }
   }
-
   async function rollbackInstall() {
     if (!confirm("This will run ./udp clean and REMOVE all UDP Docker volumes (data loss). Continue?")) return;
     try {
@@ -692,60 +1153,42 @@
   function setStateBadge(s) {
     const el = document.getElementById("install-state");
     el.textContent = s;
-    el.className = "px-3 py-1.5 rounded-full text-xs font-semibold ";
-    if (s === "READY") el.className += "bg-emerald-700/40 text-emerald-300";
-    else if (s === "FAILED") el.className += "bg-rose-700/40 text-rose-300";
-    else el.className += "bg-cyan-700/30 text-cyan-300";
+    el.className = "state-badge " + (s === "READY" ? "ready" : s === "FAILED" ? "failed" : "working");
   }
 
   function renderSteps(steps) {
     const list = document.getElementById("step-list");
     list.innerHTML = "";
-    steps.forEach(s => {
+    steps.forEach((s, i) => {
       const div = document.createElement("div");
       div.id = "step-" + s.id;
-      let icon, color;
-      if (s.status === "success") { icon = "✓"; color = "text-emerald-400"; }
-      else if (s.status === "failed") { icon = "✗"; color = "text-rose-400"; }
-      else if (s.status === "running") { icon = "▶"; color = "text-cyan-400"; }
-      else if (s.status === "skipped") { icon = "↷"; color = "text-slate-500"; }
-      else { icon = "○"; color = "text-slate-500"; }
-      div.className = "flex items-center gap-3 px-3 py-2 rounded " + (s.status === "running" ? "step-running" : "");
-      div.innerHTML = `<div class="w-6 text-center ${color} font-mono">${icon}</div><div class="text-sm flex-1">${esc(s.title)}</div>`;
+      div.className = "pipe-step";
+      div.setAttribute("data-status", s.status);
+      const icon = s.status === "success" ? "✓" : s.status === "failed" ? "✗" : s.status === "running" ? "▸" : s.status === "skipped" ? "↷" : i + 1;
+      div.innerHTML = `<div class="pipe-node">${icon}</div><div class="text-sm text-slate-200 flex-1">${esc(s.title)}</div>`;
       list.appendChild(div);
     });
   }
 
   function updateStepUI(stepId, status) {
-    const rec = state.installRecord;
-    if (!rec) return;
+    const rec = state.installRecord; if (!rec) return;
     const s = rec.steps.find(x => x.id === stepId);
     if (s) s.status = status;
     renderSteps(rec.steps);
   }
 
   function openLogStream(id) {
-    if (state.ws) try { state.ws.close(); } catch(e){}
+    if (state.ws) try { state.ws.close(); } catch {}
     const proto = location.protocol === "https:" ? "wss" : "ws";
     state.ws = new WebSocket(`${proto}://${location.host}/api/installs/${id}/logs`);
-    const logEl = document.getElementById("log-stream");
-    logEl.innerHTML = "";
+    const logEl = document.getElementById("log-stream"); logEl.innerHTML = "";
     state.ws.onmessage = (msg) => {
       let evt;
       try { evt = JSON.parse(msg.data); }
-      catch (e) {
-        const div = document.createElement("div");
-        div.className = "log-line text-rose-400";
-        div.textContent = "[malformed event from server]";
-        logEl.appendChild(div);
-        return;
-      }
+      catch { const div = document.createElement("div"); div.className = "log-line text-rose-400"; div.textContent = "[malformed event from server]"; logEl.appendChild(div); return; }
       handleEvent(evt, logEl);
     };
-    state.ws.onclose = () => {
-      // refresh record state at the end
-      refreshInstall(id);
-    };
+    state.ws.onclose = () => refreshInstall(id);
   }
 
   function handleEvent(evt, logEl) {
@@ -757,110 +1200,87 @@
       if (logEl.children.length > 4000) logEl.removeChild(logEl.firstChild);
       logEl.scrollTop = logEl.scrollHeight;
       document.getElementById("log-step").textContent = evt.step || "";
-    } else if (evt.kind === "step_start") {
-      updateStepUI(evt.step, "running");
-    } else if (evt.kind === "step_end") {
-      updateStepUI(evt.step, evt.status === "success" ? "success" : "failed");
-    } else if (evt.kind === "state") {
+    } else if (evt.kind === "step_start") { updateStepUI(evt.step, "running"); }
+    else if (evt.kind === "step_end") { updateStepUI(evt.step, evt.status === "success" ? "success" : "failed"); }
+    else if (evt.kind === "state") {
       setStateBadge(evt.status);
-      if (evt.status === "READY") {
-        setTimeout(() => refreshInstall(state.installId).then(showSuccess), 400);
-      }
+      if (evt.status === "READY") setTimeout(() => refreshInstall(state.installId).then(showSuccess), 400);
     } else if (evt.kind === "result") {
       if (state.installRecord) state.installRecord.outputs = evt.payload || {};
     } else if (evt.kind === "error") {
-      const div = document.createElement("div");
-      div.className = "log-line text-rose-400";
-      div.textContent = "ERROR: " + (evt.line || "");
-      logEl.appendChild(div);
-      logEl.scrollTop = logEl.scrollHeight;
+      const div = document.createElement("div"); div.className = "log-line text-rose-400"; div.textContent = "ERROR: " + (evt.line || ""); logEl.appendChild(div); logEl.scrollTop = logEl.scrollHeight;
     }
   }
 
   async function refreshInstall(id) {
     const rec = await api(`/api/installs/${id}`);
-    state.installRecord = rec;
-    renderInstall(rec);
-    return rec;
+    state.installRecord = rec; renderInstall(rec); return rec;
   }
 
   // ----- success -----
   function showSuccess() {
-    const rec = state.installRecord;
-    if (!rec) return;
+    const rec = state.installRecord; if (!rec) return;
     navigate("success");
-    const urls = document.getElementById("success-urls");
-    urls.innerHTML = "";
+    const urls = document.getElementById("success-urls"); urls.innerHTML = "";
     Object.values(rec.outputs?.urls || {}).forEach(u => {
       const a = document.createElement("a");
       a.href = u.url; a.target = "_blank"; a.rel = "noopener noreferrer";
-      a.className = "flex items-center justify-between px-4 py-3 rounded-xl border border-slate-800 bg-slate-900 hover:border-cyan-700";
-      a.innerHTML = `<div><div class="font-medium">${esc(u.label)}</div><div class="text-xs text-slate-500 mono break-all">${esc(u.url)}</div></div><div class="text-cyan-400">→</div>`;
+      a.className = "glass glass-hover spot p-5 flex items-center justify-between";
+      a.innerHTML = `<div><div class="font-semibold text-slate-100 mb-1">${esc(u.label)}</div><div class="text-xs text-slate-400 mono break-all">${esc(u.url)}</div></div><div class="grad-text text-2xl">→</div>`;
       urls.appendChild(a);
     });
-    const conns = document.getElementById("success-conns");
-    conns.innerHTML = "";
+    const conns = document.getElementById("success-conns"); conns.innerHTML = "";
     Object.entries(rec.outputs?.connections || {}).forEach(([k, v]) => {
       const div = document.createElement("div");
-      div.className = "px-4 py-2 rounded-lg border border-slate-800 bg-slate-900 mono text-sm flex justify-between items-center";
+      div.className = "glass p-4 mono text-sm flex justify-between items-center";
       const txt = document.createElement("div");
-      const lbl = document.createElement("span"); lbl.className = "text-slate-500 mr-2"; lbl.textContent = k;
-      const val = document.createElement("span"); val.textContent = v;
+      const lbl = document.createElement("span"); lbl.className = "text-slate-500 mr-3 text-xs uppercase tracking-wider"; lbl.textContent = k;
+      const val = document.createElement("span"); val.textContent = v; val.className = "text-slate-200";
       txt.appendChild(lbl); txt.appendChild(val);
       const btn = document.createElement("button");
-      btn.className = "text-xs text-cyan-400"; btn.textContent = "copy";
-      btn.addEventListener("click", () => navigator.clipboard.writeText(v));
+      btn.className = "text-xs btn-ghost py-1 px-3"; btn.textContent = "copy";
+      btn.addEventListener("click", () => { navigator.clipboard.writeText(v); btn.textContent = "copied!"; setTimeout(() => btn.textContent = "copy", 1500); });
       div.appendChild(txt); div.appendChild(btn);
       conns.appendChild(div);
     });
     const ev = document.getElementById("success-evidence");
-    if (rec.outputs?.evidence_dir) {
-      ev.textContent = `evidence captured at ${rec.outputs.evidence_dir}`;
-    } else {
-      ev.textContent = "";
-    }
-    loadDemoQueries();
-    loadStructuredSmoke();
+    ev.textContent = rec.outputs?.evidence_dir ? `evidence captured at ${rec.outputs.evidence_dir}` : "";
+    loadDemoQueries(); loadStructuredSmoke();
   }
 
   async function loadStructuredSmoke() {
     const el = document.getElementById("smoke-results");
-    el.innerHTML = `<div class="text-xs text-slate-500">Running…</div>`;
+    el.innerHTML = `<div class="text-xs text-slate-500 flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-cyan-400 pulse-dot"></div>Running…</div>`;
     try {
       const r = await api(`/api/installs/${state.installId}/smoke-structured`, { method: "POST" });
       renderStructuredSmoke(r);
-    } catch (e) {
-      el.innerHTML = `<div class="text-rose-400 text-xs">${esc(e.message)}</div>`;
-    }
+    } catch (e) { el.innerHTML = `<div class="text-rose-400 text-xs">${esc(e.message)}</div>`; }
   }
 
   function renderStructuredSmoke(r) {
     const el = document.getElementById("smoke-results");
-    if (r.error) {
-      el.innerHTML = `<div class="text-rose-400 text-xs">${esc(r.error)}</div>`;
-      return;
-    }
+    if (r.error) { el.innerHTML = `<div class="text-rose-400 text-sm">${esc(r.error)}</div>`; return; }
     const palette = { passed: 'emerald', warning: 'amber', failed: 'rose' };
     const c = palette[r.overall] || 'slate';
     const header = `
-      <div class="flex items-center justify-between mb-3 pb-3 border-b border-slate-800">
+      <div class="flex items-center justify-between mb-4 pb-4 border-b border-white/5">
         <div>
           <div class="text-xs uppercase tracking-widest text-${c}-300 mb-1">Overall · ${esc(r.overall)}</div>
           <div class="text-sm text-slate-300">${r.passed} passed · ${r.warning} warnings · ${r.failed} failed · ${r.total} total</div>
         </div>
       </div>`;
-    const items = (r.checks || []).map(ch => {
+    const items = (r.checks || []).map((ch, i) => {
       const cp = palette[ch.status] || 'slate';
       const icon = ch.status === 'passed' ? '✓' : (ch.status === 'warning' ? '⚠' : '✗');
       return `
-        <div class="flex items-start gap-3 px-3 py-2 rounded hover:bg-slate-800/40">
+        <div class="flex items-start gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 fade-up" style="animation-delay: ${i * 25}ms">
           <div class="text-${cp}-400 text-base mt-0.5">${icon}</div>
           <div class="flex-1 min-w-0">
             <div class="text-sm mono text-slate-200">${esc(ch.name)}</div>
             <div class="text-xs text-slate-400">${esc(ch.message)}</div>
             ${ch.evidence ? `<div class="text-xs text-slate-600 mono mt-1 break-words">${esc(ch.evidence)}</div>` : ''}
           </div>
-          <div class="text-xs text-slate-500">${ch.duration_ms}ms</div>
+          <div class="text-xs text-slate-500 mono">${ch.duration_ms}ms</div>
         </div>`;
     }).join("");
     el.innerHTML = header + `<div class="space-y-1">${items}</div>`;
@@ -869,15 +1289,12 @@
   document.getElementById("btn-rerun-smoke").addEventListener("click", () => loadStructuredSmoke());
 
   async function loadDemoQueries() {
-    const btnWrap = document.getElementById("demo-query-buttons");
-    btnWrap.innerHTML = "";
+    const btnWrap = document.getElementById("demo-query-buttons"); btnWrap.innerHTML = "";
     let queries;
     try { queries = await api("/api/demo-queries"); } catch (e) { btnWrap.textContent = e.message; return; }
     queries.forEach(q => {
       const b = document.createElement("button");
-      b.className = "px-3 py-1.5 rounded bg-slate-800 hover:bg-cyan-700 text-sm";
-      b.textContent = q.label;
-      b.title = q.description;
+      b.className = "btn-ghost text-sm"; b.textContent = q.label; b.title = q.description;
       b.addEventListener("click", () => runDemoQuery(q.id, q.label));
       btnWrap.appendChild(b);
     });
@@ -885,42 +1302,44 @@
 
   async function runDemoQuery(queryId, label) {
     const out = document.getElementById("demo-query-result");
-    out.textContent = `> running: ${label} …`;
+    out.innerHTML = `<div class="text-cyan-300">> running: ${esc(label)} …</div>`;
     try {
-      const r = await api(`/api/installs/${state.installId}/demo-query`, {
-        method: "POST",
-        body: JSON.stringify({ query_id: queryId }),
-      });
-      if (r.error) {
-        out.innerHTML = `<div class="text-rose-400">ERROR: ${esc(r.error)}</div>`;
-        return;
-      }
-      // Render as table
-      const t = document.createElement("table");
-      t.className = "min-w-full text-xs";
-      const thead = document.createElement("thead"); thead.className = "border-b border-slate-700";
-      const trh = document.createElement("tr");
-      (r.columns || []).forEach(c => {
-        const th = document.createElement("th"); th.className = "text-left px-2 py-1 text-cyan-300"; th.textContent = c;
-        trh.appendChild(th);
-      });
-      thead.appendChild(trh); t.appendChild(thead);
-      const tb = document.createElement("tbody");
-      (r.rows || []).forEach(row => {
-        const tr = document.createElement("tr"); tr.className = "border-b border-slate-800/50";
-        row.forEach(v => { const td = document.createElement("td"); td.className = "px-2 py-1"; td.textContent = v; tr.appendChild(td); });
-        tb.appendChild(tr);
-      });
-      t.appendChild(tb);
-      out.innerHTML = "";
-      const meta = document.createElement("div"); meta.className = "text-slate-500 mb-2";
-      meta.textContent = `${r.row_count} row(s) · sql: ${r.sql}`;
-      out.appendChild(meta);
-      out.appendChild(t);
-    } catch (e) {
-      out.innerHTML = `<div class="text-rose-400">${esc(e.message)}</div>`;
-    }
+      const r = await api(`/api/installs/${state.installId}/demo-query`, { method: "POST", body: JSON.stringify({ query_id: queryId }) });
+      renderQueryResult(out, r);
+    } catch (e) { out.innerHTML = `<div class="text-rose-400">${esc(e.message)}</div>`; }
   }
+
+  function renderQueryResult(out, r) {
+    if (r.error) { out.innerHTML = `<div class="text-rose-400">ERROR: ${esc(r.error)}</div>`; return; }
+    const t = document.createElement("table"); t.className = "min-w-full text-xs";
+    const thead = document.createElement("thead"); thead.className = "border-b border-white/10";
+    const trh = document.createElement("tr");
+    (r.columns || []).forEach(c => {
+      const th = document.createElement("th"); th.className = "text-left px-3 py-2 text-cyan-300 font-semibold"; th.textContent = c; trh.appendChild(th);
+    });
+    thead.appendChild(trh); t.appendChild(thead);
+    const tb = document.createElement("tbody");
+    (r.rows || []).forEach((row, i) => {
+      const tr = document.createElement("tr"); tr.className = "border-b border-white/5" + (i % 2 ? " bg-white/[0.02]" : "");
+      row.forEach(v => { const td = document.createElement("td"); td.className = "px-3 py-2"; td.textContent = v; tr.appendChild(td); });
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    out.innerHTML = "";
+    const meta = document.createElement("div"); meta.className = "text-slate-500 mb-3 text-xs"; meta.textContent = `${r.row_count} row(s) · ${r.sql}`;
+    out.appendChild(meta); out.appendChild(t);
+  }
+
+  // SQL editor
+  document.getElementById("btn-sql-run").addEventListener("click", async () => {
+    const sql = document.getElementById("sql-editor-input").value;
+    const out = document.getElementById("sql-editor-result");
+    out.innerHTML = `<div class="text-cyan-300">> running…</div>`;
+    try {
+      const r = await api(`/api/installs/${state.installId}/sql`, { method: "POST", body: JSON.stringify({ sql }) });
+      renderQueryResult(out, r);
+    } catch (e) { out.innerHTML = `<div class="text-rose-400">${esc(e.message)}</div>`; }
+  });
 
   // ----- ops -----
   document.querySelectorAll(".ops-btn").forEach(b => {
@@ -930,13 +1349,10 @@
       if (action === "clean" && !confirm("This will stop containers AND remove UDP Docker volumes (data loss). Continue?")) return;
       out.textContent = `> ${action}…`;
       try {
-        // re-open ws so we get fresh logs
         openLogStream(state.installId);
         const r = await api(`/api/installs/${state.installId}/control`, { method: "POST", body: JSON.stringify({ action }) });
         out.textContent = `exit ${r.exit_code}`;
-      } catch (e) {
-        out.textContent = e.message;
-      }
+      } catch (e) { out.textContent = e.message; }
     });
   });
 
@@ -946,24 +1362,24 @@
     list.innerHTML = `<div class="text-slate-500 text-sm">Loading…</div>`;
     const items = await api("/api/installs");
     if (!items.length) {
-      list.innerHTML = `<div class="rounded-xl border border-slate-800 bg-slate-900 p-6 text-slate-500 text-sm">No installs yet. Start one from Home.</div>`;
+      list.innerHTML = `<div class="glass p-6 text-slate-500 text-sm">No installs yet. Start one from Home.</div>`;
       return;
     }
     list.innerHTML = "";
     items.forEach(rec => {
       const div = document.createElement("div");
-      div.className = "rounded-xl border border-slate-800 bg-slate-900 p-4 hover:border-cyan-700 cursor-pointer";
+      div.className = "glass glass-hover spot p-4 cursor-pointer";
       const ts = new Date(rec.created_at * 1000).toLocaleString();
+      const stateColor = rec.state==='READY' ? 'emerald' : rec.state==='FAILED' ? 'rose' : 'cyan';
       div.innerHTML = `
         <div class="flex items-center justify-between mb-1">
-          <div class="font-medium mono text-sm">${esc(rec.install_id)}</div>
-          <div class="text-xs px-2 py-0.5 rounded ${rec.state==='READY' ? 'bg-emerald-700/40 text-emerald-300' : rec.state==='FAILED' ? 'bg-rose-700/40 text-rose-300' : 'bg-slate-700 text-slate-300'}">${esc(rec.state)}</div>
+          <div class="font-medium mono text-sm text-slate-200">${esc(rec.install_id)}</div>
+          <div class="text-xs px-2 py-0.5 rounded-md bg-${stateColor}-500/15 text-${stateColor}-300 border border-${stateColor}-500/30">${esc(rec.state)}</div>
         </div>
         <div class="text-xs text-slate-400">${esc(rec.stack_id)} · host ${esc(rec.host)} · ${esc(ts)}</div>
       `;
       div.addEventListener("click", () => {
-        state.installId = rec.install_id;
-        state.installRecord = rec;
+        state.installId = rec.install_id; state.installRecord = rec;
         if (rec.state === "READY") { showSuccess(); }
         else { navigate("install"); renderInstall(rec); openLogStream(rec.install_id); }
       });
@@ -973,6 +1389,7 @@
 
   // boot
   navigate("welcome");
+  setStatusBar(true, "studio · v0.3");
 </script>
 </body>
 </html>
