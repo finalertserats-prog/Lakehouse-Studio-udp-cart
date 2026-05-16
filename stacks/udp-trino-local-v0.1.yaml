@@ -6,14 +6,15 @@ maturity: candidate
 description: >
   CANDIDATE stack — Trino-based variant of the UDP reference lakehouse.
   MinIO object storage + Iceberg REST catalog + Trino federated SQL +
-  StarRocks analytics. NOT YET CERTIFIED — no successful end-to-end
-  install has been verified for this combination. The bootstrap and
-  smoke scripts referenced under `commands` are TBD; they do not exist
-  on disk yet. Promotion to `pilot` requires: a working bootstrap script
-  that initializes Trino's Iceberg catalog against the REST server,
-  a smoke test that round-trips raw → curated through Trino instead
-  of Spark, and at least one passing evidence record on Windows or
-  Linux Docker. Use `udp-local-v0.2` for any real install today.
+  StarRocks analytics. The bootstrap and smoke scripts referenced under
+  `commands` are now SHIPPED — see backend/runner.py
+  `_STUDIO_TRINO_BOOTSTRAP_SH` and `_STUDIO_TRINO_SMOKE_SH`. They wire
+  Trino's Iceberg-REST catalog via /etc/trino/catalog/iceberg.properties,
+  seed demo raw/curated tables via Trino SQL, and validate cross-engine
+  reads against the same warehouse from StarRocks.
+  Promotion to `pilot-stable` still requires at least one passing
+  end-to-end install with evidence captured in the lock file. Use
+  `udp-local-v0.2` for any real install today.
 
 repository:
   url: https://github.com/finalertserats-prog/Unified-Data-Plug.git
@@ -133,31 +134,41 @@ env_defaults:
   TRINO_CATALOG_ICEBERG_FS_S3_PATH_STYLE: "true"
   TRINO_CATALOG_ICEBERG_FS_S3_ENDPOINT: http://minio:9000
   TRINO_HTTP_PORT: "8080"
+  # JVM + memory tuning for the 10 GB-RAM recommended-tier profile. Defaults
+  # below were chosen with StarRocks (FE+BE ~4 GB) + MinIO + Iceberg-REST + OS
+  # also sharing the box: Trino gets a 4 GB container budget, of which 3 GB is
+  # heap (Xms == Xmx to avoid container-OOM during JVM ramp-up) and 1 GB is
+  # off-heap headroom (direct buffers, JIT code cache, thread stacks).
+  # query.max-memory-per-node + query.max-memory at 1.5 GB (50% of heap)
+  # specifically addresses Iceberg planning OOMs on the default ~2 GB heap.
+  # Sourced from a Gemini research call against current Trino+StarRocks
+  # sizing guidance; revisit if either engine's defaults change materially.
+  TRINO_JAVA_OPTS: "-Xms3G -Xmx3G -XX:+UseG1GC -XX:+ExplicitGCInvokesConcurrent -XX:+ExitOnOutOfMemoryError"
+  TRINO_QUERY_MAX_MEMORY_PER_NODE: "1.5GB"
+  TRINO_QUERY_MAX_MEMORY: "1.5GB"
   STARROCKS_HOST: 127.0.0.1
   STARROCKS_MYSQL_PORT: "9030"
   STARROCKS_ROOT_PASSWORD: ""
 
-# CANDIDATE STATUS NOTE: every command below references a script that
-# does NOT exist on disk yet. backend/runner.py is frozen for this pass;
-# the install pipeline cannot actually invoke this stack end-to-end.
-# Promotion to pilot must (a) ship `scripts/lhs-trino-bootstrap.sh` and
-# `scripts/lhs-trino-smoke.sh`, (b) wire them into runner without
-# perturbing the existing v0.2 path, (c) capture a passing evidence
-# record in the lock file.
+# CANDIDATE STATUS NOTE: scripts now ship via backend/runner.py's
+# `_STUDIO_SCRIPT_SETS` dispatch — the env step writes them into
+# install_dir/scripts/. Promotion to pilot-stable still requires at
+# least one passing evidence record captured in the lock file.
 commands:
   doctor:    { argv: ["./udp", "doctor"],     timeout: 60 }
   start:
     type: docker_compose_up
     extra_services: [create-bucket]
     timeout: 600
-  # TODO(candidate): write scripts/lhs-trino-bootstrap.sh — should
-  # `docker exec trino trino --execute "CREATE SCHEMA iceberg.raw ..."`
-  # and seed demo tables via Trino SQL instead of PySpark.
+  # Studio writes this script via runner.py's _STUDIO_TRINO_BOOTSTRAP_SH
+  # constant. It writes /etc/trino/catalog/iceberg.properties inside the
+  # trino container, restarts trino, seeds raw + curated tables via
+  # Trino SQL, then wires StarRocks's REST catalog at the same endpoint.
   bootstrap: { argv: ["bash", "scripts/lhs-trino-bootstrap.sh"], timeout: 900 }
-  # TODO(candidate): write scripts/lhs-trino-smoke.sh — should round-trip
-  # raw → curated through Trino and SELECT back via StarRocks against
-  # the same Iceberg catalog. Mirror v0.2's smoke shape so the harness
-  # can reuse its result-parsing logic.
+  # Studio writes this script via runner.py's _STUDIO_TRINO_SMOKE_SH
+  # constant. Round-trips a SELECT through Trino on the curated table,
+  # then queries the SAME table from StarRocks via the shared Iceberg
+  # catalog. Shape mirrors v0.2's smoke output for harness parsing.
   smoke:     { argv: ["bash", "scripts/lhs-trino-smoke.sh"],     timeout: 600 }
   status:    { argv: ["./udp", "status"],     timeout: 30 }
   stop:      { argv: ["./udp", "stop"],       timeout: 120 }

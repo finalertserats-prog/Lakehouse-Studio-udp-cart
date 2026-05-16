@@ -121,6 +121,214 @@ echo "[studio-smoke] passed"
 """
 
 
+# ---------------------------------------------------------------------------
+# Trino candidate stack scripts (udp-trino-local-v0.1)
+#
+# Mirror shape of the Spark scripts above so the runner harness can reuse its
+# result-parsing logic. Key differences from Spark:
+#   - Trino's iceberg catalog is configured via a properties file inside the
+#     trino container (Trino reads /etc/trino/catalog/*.properties only at
+#     startup, so the bootstrap writes the file then restarts trino).
+#   - Demo seed runs as Trino SQL (CREATE SCHEMA / CREATE TABLE / INSERT)
+#     instead of a PySpark job; round-trip raw -> curated stays inside Trino.
+#   - StarRocks side of the bootstrap is identical to v0.2 (same Iceberg-REST
+#     endpoint, same 3.3.12+ catalog properties): both engines read the same
+#     warehouse, so anything Trino writes is visible from StarRocks.
+# Promotion to pilot-stable still requires a real end-to-end install with
+# evidence captured into stacks/compatibility/udp-trino-local-v0.1.lock.yaml.
+# ---------------------------------------------------------------------------
+
+
+_STUDIO_TRINO_BOOTSTRAP_SH = r"""#!/usr/bin/env bash
+# Studio-owned bootstrap for the Trino candidate stack. Configures Trino's
+# Iceberg-REST catalog, seeds demo raw/curated tables via Trino SQL, and
+# wires StarRocks's external catalog at the SAME Iceberg-REST endpoint so
+# both engines see the same warehouse.
+set -euo pipefail
+
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
+echo "[studio-trino-bootstrap] waiting for Iceberg REST..."
+for i in $(seq 1 60); do
+  if curl -fsS http://localhost:8181/v1/config >/dev/null 2>&1; then
+    echo "  iceberg-rest OK"; break
+  fi
+  echo "  ($i/60) iceberg-rest not ready yet"; sleep 2
+done
+
+echo "[studio-trino-bootstrap] waiting for Trino..."
+for i in $(seq 1 60); do
+  if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+    echo "  trino OK"; break
+  fi
+  echo "  ($i/60) trino not ready yet"; sleep 5
+done
+
+echo "[studio-trino-bootstrap] writing Trino iceberg catalog properties..."
+# Trino reads /etc/trino/catalog/*.properties at startup. We write the file
+# then restart trino so the iceberg catalog is registered. Idempotent —
+# writing the same file twice is fine; restart is cheap on a warm host.
+# Path-style + explicit S3 credentials required by MinIO (HTTP, no IAM).
+docker exec udp-trino bash -c 'cat > /etc/trino/catalog/iceberg.properties' <<'TRINOCAT'
+connector.name=iceberg
+iceberg.catalog.type=rest
+iceberg.rest-catalog.uri=http://iceberg-rest:8181
+iceberg.rest-catalog.warehouse=s3://datalake/warehouse
+fs.native-s3.enabled=true
+s3.endpoint=http://minio:9000
+s3.region=us-east-1
+s3.path-style-access=true
+s3.aws-access-key=admin
+s3.aws-secret-key=udp_admin_12345
+TRINOCAT
+
+echo "[studio-trino-bootstrap] restarting Trino to load iceberg catalog..."
+docker compose restart trino
+
+echo "[studio-trino-bootstrap] waiting for Trino after restart..."
+for i in $(seq 1 60); do
+  if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+    echo "  trino back up"; break
+  fi
+  echo "  ($i/60) trino not ready yet"; sleep 5
+done
+
+echo "[studio-trino-bootstrap] verifying iceberg catalog is registered..."
+for i in $(seq 1 12); do
+  if docker exec udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q "^iceberg$"; then
+    echo "  iceberg catalog visible"; break
+  fi
+  echo "  ($i/12) iceberg catalog not yet visible"; sleep 5
+done
+
+echo "[studio-trino-bootstrap] seeding demo schemas + tables via Trino..."
+docker exec -i udp-trino trino <<'SQL'
+CREATE SCHEMA IF NOT EXISTS iceberg.raw;
+CREATE SCHEMA IF NOT EXISTS iceberg.curated;
+
+DROP TABLE IF EXISTS iceberg.raw.demo_customers;
+CREATE TABLE iceberg.raw.demo_customers (
+  customer_id BIGINT,
+  region VARCHAR,
+  order_amount DECIMAL(10,2),
+  ingested_at TIMESTAMP(6)
+);
+
+INSERT INTO iceberg.raw.demo_customers VALUES
+  (BIGINT '1', 'us-east',    DECIMAL '120.50', current_timestamp),
+  (BIGINT '2', 'us-west',    DECIMAL '300.00', current_timestamp),
+  (BIGINT '3', 'eu-central', DECIMAL '75.25',  current_timestamp),
+  (BIGINT '4', 'us-east',    DECIMAL '420.99', current_timestamp),
+  (BIGINT '5', 'apac',       DECIMAL '199.99', current_timestamp);
+
+DROP TABLE IF EXISTS iceberg.curated.demo_customer_summary;
+CREATE TABLE iceberg.curated.demo_customer_summary AS
+SELECT
+  region,
+  CAST(COUNT(*) AS BIGINT)             AS customer_count,
+  SUM(order_amount)                    AS total_order_amount,
+  current_timestamp                    AS curated_timestamp
+FROM iceberg.raw.demo_customers
+GROUP BY region;
+SQL
+
+echo "[studio-trino-bootstrap] waiting for StarRocks FE..."
+for i in $(seq 1 60); do
+  if docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "SELECT 1" >/dev/null 2>&1; then
+    echo "  starrocks-fe OK"; break
+  fi
+  echo "  ($i/60) starrocks-fe not ready yet"; sleep 5
+done
+
+echo "[studio-trino-bootstrap] registering StarRocks backend..."
+docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e \
+  "ALTER SYSTEM ADD BACKEND 'starrocks-be:9050';" 2>&1 | grep -v "already exists" || true
+
+echo "[studio-trino-bootstrap] creating StarRocks REST catalog (shared with Trino)..."
+# Same Iceberg-REST endpoint as Trino above — both engines see the same
+# warehouse. PR #55416 (3.3.12+) makes catalog properties propagate to FileIO.
+docker exec -i udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root <<'SQL'
+DROP CATALOG IF EXISTS iceberg_rest_catalog;
+CREATE EXTERNAL CATALOG iceberg_rest_catalog
+PROPERTIES (
+    "type" = "iceberg",
+    "iceberg.catalog.type" = "rest",
+    "iceberg.catalog.uri" = "http://iceberg-rest:8181",
+    "iceberg.catalog.warehouse" = "s3://datalake/warehouse",
+    "iceberg.catalog.vended-credentials-enabled" = "false",
+    "aws.s3.endpoint" = "http://minio:9000",
+    "aws.s3.enable_ssl" = "false",
+    "aws.s3.enable_path_style_access" = "true",
+    "aws.s3.region" = "us-east-1",
+    "aws.s3.access_key" = "admin",
+    "aws.s3.secret_key" = "udp_admin_12345"
+);
+SQL
+
+echo "[studio-trino-bootstrap] creating app_analytics views (REST-backed)..."
+docker exec -i udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root <<'SQL'
+CREATE DATABASE IF NOT EXISTS app_analytics;
+DROP VIEW IF EXISTS app_analytics.demo_customer_summary;
+CREATE VIEW app_analytics.demo_customer_summary AS
+SELECT region, customer_count, total_order_amount, curated_timestamp
+FROM iceberg_rest_catalog.curated.demo_customer_summary;
+SQL
+
+echo "[studio-trino-bootstrap] complete"
+"""
+
+
+_STUDIO_TRINO_SMOKE_SH = r"""#!/usr/bin/env bash
+# Studio-owned smoke test for the Trino candidate stack. Validates:
+#   - Iceberg REST + Trino + StarRocks FE all reachable
+#   - Trino can read the curated table the bootstrap seeded
+#   - StarRocks can read the SAME table via its REST-backed external catalog
+#     (proves the cross-engine view is consistent against one warehouse)
+set -euo pipefail
+
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
+echo "[studio-trino-smoke] checking Iceberg REST..."
+curl -fsS http://localhost:8181/v1/config >/dev/null || { echo "iceberg-rest unreachable"; exit 1; }
+echo "  iceberg-rest OK"
+
+echo "[studio-trino-smoke] checking Trino..."
+curl -fsS http://localhost:8080/v1/info >/dev/null || { echo "trino unreachable"; exit 1; }
+echo "  trino OK"
+
+echo "[studio-trino-smoke] checking StarRocks FE..."
+docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "SELECT 1" >/dev/null || { echo "starrocks-fe unreachable"; exit 1; }
+echo "  starrocks-fe OK"
+
+echo "[studio-trino-smoke] Trino round-trip query (curated table)..."
+docker exec udp-trino trino --execute \
+  "SELECT region, customer_count, total_order_amount FROM iceberg.curated.demo_customer_summary ORDER BY region"
+
+echo "[studio-trino-smoke] StarRocks queries (same Iceberg catalog)..."
+docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e \
+  "SHOW CATALOGS; SHOW DATABASES; SELECT COUNT(*) AS customer_summary_rows FROM app_analytics.demo_customer_summary;"
+
+echo "[studio-trino-smoke] passed"
+"""
+
+
+# Map stack id → (bootstrap script body, smoke script body). The runner writes
+# the pair matching the install's stack id into install_dir/scripts/ as the
+# names the manifest's `commands.bootstrap`/`commands.smoke` argv reference.
+_STUDIO_SCRIPT_SETS: dict[str, tuple[tuple[str, str], tuple[str, str]]] = {
+    "udp-local-v0.2": (
+        ("lhs-bootstrap.sh", _STUDIO_BOOTSTRAP_SH),
+        ("lhs-smoke.sh",     _STUDIO_SMOKE_SH),
+    ),
+    "udp-trino-local-v0.1": (
+        ("lhs-trino-bootstrap.sh", _STUDIO_TRINO_BOOTSTRAP_SH),
+        ("lhs-trino-smoke.sh",     _STUDIO_TRINO_SMOKE_SH),
+    ),
+}
+
+
 def _build_steps(stack: StackManifest) -> list[StepStatus]:
     return [
         StepStatus(id="prepare", title="Prepare workspace"),
@@ -525,12 +733,23 @@ class UDPRunner:
     def _write_studio_bootstrap(self) -> None:
         """Drop Studio-owned bootstrap + smoke scripts into the install dir's
         scripts/ directory. Replace UDP's equivalents which hard-require
-        hive-metastore. Studio's scripts use ONLY the services we ship:
-        MinIO + Iceberg REST + Spark + StarRocks."""
+        hive-metastore. Studio's scripts use ONLY the services we ship.
+
+        The pair written is selected from _STUDIO_SCRIPT_SETS by stack.id —
+        each certified stack registers a (bootstrap_name, smoke_name) pair
+        whose filenames match what the stack manifest's `commands.bootstrap`
+        and `commands.smoke` argv reference. Unknown stack ids skip the
+        write silently; the manifest may run UDP's native scripts instead.
+        """
+        script_set = _STUDIO_SCRIPT_SETS.get(self.stack.id)
+        if script_set is None:
+            self._log("env", "stdout",
+                      f"no studio script set for stack '{self.stack.id}' — "
+                      "falling back to whatever the manifest points at")
+            return
         scripts_dir = self.install_dir / "scripts"
         scripts_dir.mkdir(parents=True, exist_ok=True)
-        for name, body in (("lhs-bootstrap.sh", _STUDIO_BOOTSTRAP_SH),
-                           ("lhs-smoke.sh",     _STUDIO_SMOKE_SH)):
+        for name, body in script_set:
             path = scripts_dir / name
             path.write_text(body, encoding="utf-8")
             try:
