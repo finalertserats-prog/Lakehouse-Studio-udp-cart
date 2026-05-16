@@ -939,22 +939,58 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   }
 
   // ----- mouse-tracked glow on .spot cards -----
-  document.addEventListener("mousemove", (e) => {
+  // Previously this called getBoundingClientRect() for every .spot on every
+  // mousemove (60+ Hz × N cards = layout thrash). Now: throttle to RAF,
+  // cache rects per spot, invalidate on scroll/resize/dom-change.
+  const _spotRects = new WeakMap();
+  let _spotRectsValid = false;
+  let _pendingMouse = null;
+  function _invalidateSpotRects() { _spotRectsValid = false; }
+  window.addEventListener("scroll", _invalidateSpotRects, { passive: true });
+  window.addEventListener("resize", _invalidateSpotRects, { passive: true });
+  // Coarse invalidation when the screen changes (different DOM)
+  const _origNavigate = window.navigate;  // will rebind below; placeholder
+  function _refreshSpotRects() {
+    document.querySelectorAll(".spot").forEach(el => _spotRects.set(el, el.getBoundingClientRect()));
+    _spotRectsValid = true;
+  }
+  function _processMouse() {
+    if (!_pendingMouse) return;
+    const e = _pendingMouse; _pendingMouse = null;
+    if (!_spotRectsValid) _refreshSpotRects();
     document.querySelectorAll(".spot").forEach(el => {
-      const r = el.getBoundingClientRect();
-      const x = e.clientX - r.left; const y = e.clientY - r.top;
+      const r = _spotRects.get(el);
+      if (!r) return;
+      const x = e.clientX - r.left, y = e.clientY - r.top;
       if (x >= 0 && y >= 0 && x <= r.width && y <= r.height) {
         el.style.setProperty("--mx", `${x}px`);
         el.style.setProperty("--my", `${y}px`);
       }
     });
-  });
+  }
+  document.addEventListener("mousemove", (e) => {
+    if (!_pendingMouse) requestAnimationFrame(_processMouse);
+    _pendingMouse = e;
+  }, { passive: true });
 
   // ----- animated number counter -----
-  function animateCount(el, from, to, dur = 700, fmt = (v) => String(Math.round(v))) {
+  // Multiple back-to-back animations on the same element would race RAF chains
+  // and flicker between the two interpolations. We track the active token per
+  // element; only the latest token's frame writes textContent. The new
+  // animation starts from the currently-displayed value (not 0), so a rapid
+  // cart change tweens 60→80 instead of snapping to 0 then chasing 80.
+  function animateCount(el, _from, to, dur = 700, fmt = (v) => String(Math.round(v))) {
+    if (!el) return;
+    const token = (el._animToken || 0) + 1;
+    el._animToken = token;
+    // Start from current rendered value to avoid visible reset
+    const current = parseFloat(el.textContent);
+    const from = Number.isFinite(current) ? current : 0;
+    if (Math.abs(to - from) < 0.5) { el.textContent = fmt(to); return; }
     const start = performance.now();
-    const ease = t => 1 - Math.pow(1 - t, 3);
+    const ease = (t) => 1 - Math.pow(1 - t, 3);
     function step(now) {
+      if (el._animToken !== token) return;  // a newer animation took over
       const t = Math.min(1, (now - start) / dur);
       el.textContent = fmt(from + (to - from) * ease(t));
       if (t < 1) requestAnimationFrame(step);
@@ -966,26 +1002,76 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   function authToken() { return localStorage.getItem("lhs_token") || ""; }
   function setAuthToken(v) { if (v) localStorage.setItem("lhs_token", v); else localStorage.removeItem("lhs_token"); }
 
+  // ----- toast / error UX -----
+  function showToast(message, kind = "error") {
+    let el = document.getElementById("lhs-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "lhs-toast";
+      el.style.cssText = "position:fixed;bottom:60px;right:16px;z-index:1000;max-width:420px;padding:12px 16px;border-radius:10px;font-size:13px;line-height:1.4;backdrop-filter:blur(12px);transition:opacity .3s ease;";
+      document.body.appendChild(el);
+    }
+    const palette = kind === "error" ? "rgba(244,63,94,0.92)" : kind === "warn" ? "rgba(245,158,11,0.92)" : "rgba(34,211,238,0.92)";
+    el.style.background = palette;
+    el.style.color = "#0a0a1f";
+    el.style.opacity = "1";
+    el.textContent = message;
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.style.opacity = "0"; }, 4500);
+  }
+
   // ----- api helpers -----
+  // Tracks how many times the user has been re-prompted for a token in the
+  // current page lifetime. Capped to avoid an infinite loop on bad input.
+  let _tokenRetries = 0;
+  const MAX_TOKEN_RETRIES = 2;
+
   async function api(path, opts = {}) {
     const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
     const tok = authToken();
     if (tok) headers["Authorization"] = "Bearer " + tok;
+    const silent = opts.silent === true;
     let r;
-    try { r = await fetch(path, { ...opts, headers }); }
-    catch (e) { setStatusBar(false, "offline"); throw e; }
+    try {
+      r = await fetch(path, { ...opts, headers });
+    } catch (e) {
+      setStatusBar(false, "offline");
+      if (!silent) showToast(`Network error: ${e.message}`);
+      throw e;
+    }
     if (r.status === 401) {
-      const t = prompt("This Studio requires an auth token. Paste your LHS_AUTH_TOKEN:");
-      if (t) { setAuthToken(t.trim()); return api(path, opts); }
+      if (_tokenRetries >= MAX_TOKEN_RETRIES) {
+        setAuthToken("");  // clear bad token so user isn't stuck
+        if (!silent) showToast("Authentication failed. Reload the page and try again.");
+        throw new Error("auth required (max retries exceeded)");
+      }
+      _tokenRetries++;
+      setAuthToken("");  // clear any stale/bad token first
+      const t = prompt(`This Studio requires an auth token (attempt ${_tokenRetries}/${MAX_TOKEN_RETRIES}). Paste your LHS_AUTH_TOKEN:`);
+      if (t && t.trim()) {
+        setAuthToken(t.trim());
+        return api(path, opts);
+      }
+      if (!silent) showToast("Auth cancelled.");
       throw new Error("auth required");
     }
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`${r.status} ${r.statusText}: ${t}`);
+    if (r.status >= 200 && r.status < 300) {
+      _tokenRetries = 0;  // reset on first success
+      setStatusBar(true, "studio · v0.3");
+      return r.json();
     }
-    setStatusBar(true, "studio · v0.3");
-    return r.json();
+    // Surface server errors with the response body when it's helpful
+    let detail = "";
+    try {
+      const body = await r.text();
+      const parsed = JSON.parse(body);
+      detail = parsed.detail ? (typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail)) : body;
+    } catch { /* not JSON */ }
+    const msg = `${r.status} ${r.statusText}${detail ? ": " + detail.slice(0, 200) : ""}`;
+    if (!silent) showToast(msg);
+    throw new Error(msg);
   }
+
   function setStatusBar(ok, text) {
     document.getElementById("status-dot").classList.toggle("off", !ok);
     document.getElementById("status-text").textContent = text;
@@ -1041,12 +1127,18 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
         <div class="text-xs text-cyan-300 mt-4 flex items-center gap-1">Choose <span>→</span></div>
       `;
       div.addEventListener("click", async () => {
-        state.goal = g.id;
-        // Preload the recommended cart for this goal (UDP for all goals in pilot)
-        const rec = await api("/api/cart/recommended");
-        state.cart = []; // start empty so the user can pick — but show the recommendation prominently
-        await loadBuild();
-        navigate("build");
+        // Preserve cart across back-nav if the user picks the SAME goal again.
+        // Different goal → reset (the recommended set may differ in v0.4+).
+        if (state.goal !== g.id) {
+          state.cart = [];
+          state.goal = g.id;
+        }
+        try {
+          await loadBuild();
+          navigate("build");
+        } catch (e) {
+          showToast(`Couldn't load catalog: ${e.message}`);
+        }
       });
       list.appendChild(div);
     });
@@ -1094,7 +1186,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       card.innerHTML = `
         <div class="flex items-baseline justify-between mb-2">
           <div>
-            <div class="text-xs uppercase tracking-widest text-slate-500 mb-1">${cat.order}. ${esc(cat.label)}${optionalTag}</div>
+            <div class="text-xs uppercase tracking-widest text-slate-500 mb-1">${esc(cat.order)}. ${esc(cat.label)}${optionalTag}</div>
             <div class="text-sm text-slate-400">${esc(cat.description || '')}</div>
           </div>
         </div>
@@ -1115,10 +1207,24 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     });
   }
 
+  // Request-versioning: only the most recent in-flight validation result wins.
+  // Prevents fast clicks from settling on a stale response.
+  state._cartReq = 0;
   async function refreshCartValidation() {
-    const v = await api("/api/cart/validate", { method: "POST", body: JSON.stringify({ cart: state.cart }) });
-    state.cartValidation = v;
-    renderCartSidebar(v);
+    const myReq = ++state._cartReq;
+    try {
+      const v = await api("/api/cart/validate", {
+        method: "POST",
+        body: JSON.stringify({ cart: state.cart }),
+      });
+      if (myReq !== state._cartReq) return;  // newer request superseded us
+      state.cartValidation = v;
+      renderCartSidebar(v);
+    } catch (e) {
+      if (myReq !== state._cartReq) return;
+      const btn = document.getElementById("btn-build-continue");
+      if (btn) btn.disabled = true;
+    }
   }
 
   function renderCartSidebar(v) {
@@ -1199,45 +1305,83 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   // ----- NAME YOUR LAKEHOUSE screen (step 3) -----
   // ===========================================================
   async function loadNameScreen() {
-    // Pre-fill some pill suggestions
-    const r = await api("/api/lake-names/suggest?n=6");
-    const pills = document.getElementById("name-pills"); pills.innerHTML = "";
-    (r.suggestions || []).forEach(n => {
-      const b = document.createElement("button");
-      b.className = "px-2.5 py-1 rounded-md bg-white/5 hover:bg-cyan-500/15 border border-white/5 text-slate-300 text-xs mono transition";
-      b.textContent = n;
-      b.addEventListener("click", () => { document.getElementById("input-lake-name").value = n; validateName(); });
-      pills.appendChild(b);
-    });
-    // Pre-fill input with one if empty
-    if (!state.lakeName) {
-      const one = await api("/api/lake-names/suggest");
-      document.getElementById("input-lake-name").value = one.suggestions[0] || "";
-      validateName();
-    } else {
-      document.getElementById("input-lake-name").value = state.lakeName;
-      validateName();
+    const pills = document.getElementById("name-pills");
+    const input = document.getElementById("input-lake-name");
+    pills.innerHTML = "";
+
+    // Fetch up to 7 suggestions in ONE call (one for the pre-fill, 6 for pills)
+    let suggestions = [];
+    let suggestionsFailed = false;
+    try {
+      const r = await api("/api/lake-names/suggest?n=7", { silent: true });
+      suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
+    } catch {
+      suggestionsFailed = true;
     }
+
+    if (suggestions.length === 0) {
+      pills.innerHTML = `<span class="text-rose-300 text-xs">${suggestionsFailed ? "couldn't reach the name suggester — type your own" : "no suggestions returned"}</span>`;
+    } else {
+      suggestions.slice(1).forEach(n => {
+        const b = document.createElement("button");
+        b.className = "px-2.5 py-1 rounded-md bg-white/5 hover:bg-cyan-500/15 border border-white/5 text-slate-300 text-xs mono transition";
+        b.textContent = n;
+        b.addEventListener("click", () => { input.value = n; validateName(); });
+        pills.appendChild(b);
+      });
+    }
+
+    // Pre-fill the input
+    if (state.lakeName) {
+      input.value = state.lakeName;
+    } else if (suggestions.length > 0) {
+      input.value = suggestions[0];
+    }
+    validateName();
   }
+
+  // Request-versioning + 250ms debounce so a fast typist doesn't fire one
+  // POST per keystroke or settle on a stale response.
+  state._nameReq = 0;
+  state._nameDebounce = null;
 
   async function validateName() {
     const v = (document.getElementById("input-lake-name").value || "").trim();
     state.lakeName = v;
     const fb = document.getElementById("name-feedback");
     const btn = document.getElementById("btn-name-continue");
-    if (!v) { fb.textContent = "pick a name to continue"; btn.disabled = true; return; }
-    const r = await api("/api/lake-names/validate", { method: "POST", body: JSON.stringify({ name: v }) });
-    if (r.valid) {
-      fb.innerHTML = `<span class="text-emerald-300">✓ '${esc(r.normalized)}' looks good</span>`;
-      btn.disabled = false;
-      state.lakeName = r.normalized;
-    } else {
-      fb.innerHTML = `<span class="text-rose-300">✗ ${esc(r.reason || 'invalid')}</span>`;
+    if (!v) {
+      fb.textContent = "pick a name to continue";
+      btn.disabled = true;
+      return;
+    }
+    fb.innerHTML = `<span class="text-slate-500">checking…</span>`;
+    btn.disabled = true;
+    const myReq = ++state._nameReq;
+    try {
+      const r = await api("/api/lake-names/validate", {
+        method: "POST", body: JSON.stringify({ name: v }), silent: true,
+      });
+      if (myReq !== state._nameReq) return;
+      if (r.valid) {
+        fb.innerHTML = `<span class="text-emerald-300">✓ '${esc(r.normalized)}' looks good</span>`;
+        btn.disabled = false;
+        state.lakeName = r.normalized;
+      } else {
+        fb.innerHTML = `<span class="text-rose-300">✗ ${esc(r.reason || 'invalid')}</span>`;
+        btn.disabled = true;
+      }
+    } catch {
+      if (myReq !== state._nameReq) return;
+      fb.innerHTML = `<span class="text-amber-300">⚠ couldn't reach validator — try again</span>`;
       btn.disabled = true;
     }
   }
 
-  document.getElementById("input-lake-name").addEventListener("input", () => validateName());
+  document.getElementById("input-lake-name").addEventListener("input", () => {
+    if (state._nameDebounce) clearTimeout(state._nameDebounce);
+    state._nameDebounce = setTimeout(() => validateName(), 250);
+  });
   document.getElementById("btn-suggest-name").addEventListener("click", async () => {
     const r = await api("/api/lake-names/suggest");
     document.getElementById("input-lake-name").value = r.suggestions[0] || "";
@@ -1272,13 +1416,14 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     const bars = s.breakdown.map(d => {
       const cls = d.score >= 80 ? 'good' : (d.score >= 60 ? 'mid' : 'bad');
       const txtC = d.score >= 80 ? 'emerald' : (d.score >= 60 ? 'amber' : 'rose');
+      const sc = Number(d.score) || 0;
       return `
         <div class="space-y-1.5">
           <div class="flex items-baseline justify-between text-xs">
             <span class="text-slate-300">${esc(d.label)}</span>
-            <span class="mono text-${txtC}-300">${d.score} / 100</span>
+            <span class="mono text-${txtC}-300">${sc} / 100</span>
           </div>
-          <div class="score-bar"><div class="score-fill ${cls}" style="width: ${d.score}%"></div></div>
+          <div class="score-bar"><div class="score-fill ${cls}" style="width: ${sc}%"></div></div>
           <div class="text-xs text-slate-500">${esc(d.note)}</div>
         </div>
       `;
@@ -1310,14 +1455,14 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       div.className = "tier-card spot" + (selected ? " selected" : "");
       const cheapest = t.cheapest_overall;
       const priceTag = cheapest
-        ? `<div class="mt-4 pt-4 border-t border-white/5"><div class="text-xs text-slate-500 mb-0.5">from</div><div class="display-3 grad-text"><span class="price-num" data-target="${cheapest.usd_month}">$${cheapest.usd_month}</span><span class="text-base text-slate-400 font-normal">/mo</span></div><div class="text-xs text-slate-400 mt-1">${esc(cheapest.provider_name)} · ${esc(cheapest.plan)}</div></div>`
+        ? `<div class="mt-4 pt-4 border-t border-white/5"><div class="text-xs text-slate-500 mb-0.5">from</div><div class="display-3 grad-text"><span class="price-num">$${esc(cheapest.usd_month)}</span><span class="text-base text-slate-400 font-normal">/mo</span></div><div class="text-xs text-slate-400 mt-1">${esc(cheapest.provider_name)} · ${esc(cheapest.plan)}</div></div>`
         : `<div class="mt-4 pt-4 border-t border-white/5"><div class="text-xs text-rose-400">no listed VPS plan fits</div></div>`;
-      const compList = t.components.map(c => `<div class="flex justify-between text-xs"><span class="text-slate-400">${esc(c.name)}</span><span class="mono text-slate-300">${c.cpu}c · ${c.ram_gb}G · ${c.disk_gb}G</span></div>`).join("");
+      const compList = t.components.map(c => `<div class="flex justify-between text-xs"><span class="text-slate-400">${esc(c.name)}</span><span class="mono text-slate-300">${esc(c.cpu)}c · ${esc(c.ram_gb)}G · ${esc(c.disk_gb)}G</span></div>`).join("");
       div.innerHTML = `
         <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">${esc(t.label)}</div>
         <div class="text-sm text-slate-400 mb-3 leading-relaxed">${esc(t.blurb)}</div>
-        <div class="mono text-lg text-slate-100 mb-1">${t.totals.cpu} vCPU · ${t.totals.ram_gb} GB · ${t.totals.disk_gb} GB</div>
-        <div class="text-xs text-slate-500 mb-3">incl. host overhead ${t.overhead.cpu}c / ${t.overhead.ram_gb}G / ${t.overhead.disk_gb}G</div>
+        <div class="mono text-lg text-slate-100 mb-1">${esc(t.totals.cpu)} vCPU · ${esc(t.totals.ram_gb)} GB · ${esc(t.totals.disk_gb)} GB</div>
+        <div class="text-xs text-slate-500 mb-3">incl. host overhead ${esc(t.overhead.cpu)}c / ${esc(t.overhead.ram_gb)}G / ${esc(t.overhead.disk_gb)}G</div>
         <details class="text-xs text-slate-400">
           <summary class="cursor-pointer hover:text-slate-200">per-component breakdown</summary>
           <div class="mt-2 space-y-1">${compList}</div>
@@ -1378,10 +1523,10 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       div.innerHTML = `
         <div class="flex items-baseline justify-between mb-2">
           <div class="font-semibold text-slate-100">${esc(p.provider_name)}</div>
-          <div class="grad-text font-bold">$${p.usd_month}<span class="text-slate-400 font-normal text-sm">/mo</span></div>
+          <div class="grad-text font-bold">$${esc(p.usd_month)}<span class="text-slate-400 font-normal text-sm">/mo</span></div>
         </div>
         <div class="text-sm mono text-slate-200 mb-2">${esc(p.plan)}</div>
-        <div class="text-xs text-slate-500 mb-1">${p.cpu} vCPU · ${p.ram_gb} GB RAM · ${p.disk_gb} GB disk · ${p.traffic_tb} TB traffic</div>
+        <div class="text-xs text-slate-500 mb-1">${esc(p.cpu)} vCPU · ${esc(p.ram_gb)} GB RAM · ${esc(p.disk_gb)} GB disk · ${esc(p.traffic_tb)} TB traffic</div>
         <div class="text-xs text-slate-500">${esc(p.location)}</div>
         ${i === 0 ? '<div class="text-xs text-cyan-300 mt-3 flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-cyan-400"></span> Cheapest fit · sign up →</div>' : ''}
       `;
@@ -1564,8 +1709,10 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       div.id = "step-" + s.id;
       div.className = "pipe-step";
       div.setAttribute("data-status", s.status);
-      const icon = s.status === "success" ? "✓" : s.status === "failed" ? "✗" : s.status === "running" ? "▸" : s.status === "skipped" ? "↷" : i + 1;
-      div.innerHTML = `<div class="pipe-node">${icon}</div><div class="text-sm text-slate-200 flex-1">${esc(s.title)}</div>`;
+      // Allowlist the icon — only ever one of these glyphs OR a numeric step index
+      const ICONS = { success: "✓", failed: "✗", running: "▸", skipped: "↷" };
+      const icon = ICONS[s.status] || String(i + 1);
+      div.innerHTML = `<div class="pipe-node">${esc(icon)}</div><div class="text-sm text-slate-200 flex-1">${esc(s.title)}</div>`;
       list.appendChild(div);
     });
   }
@@ -1577,18 +1724,105 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     renderSteps(rec.steps);
   }
 
-  function openLogStream(id) {
-    if (state.ws) try { state.ws.close(); } catch {}
+  // WebSocket lifecycle — central helper that owns cleanup, sequence
+  // resume (?last_seq=N), exponential reconnect on unexpected close, and
+  // explicit close on navigate-away.
+  function closeWebSocket(opts = {}) {
+    const ws = state.ws;
+    if (!ws) return;
+    // Detach handlers first so the close event we cause doesn't trigger
+    // reconnect or refreshInstall.
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    try { ws.close(1000, opts.reason || "client-close"); } catch {}
+    state.ws = null;
+    state._wsReconnectAttempts = 0;
+    if (state._wsReconnectTimer) { clearTimeout(state._wsReconnectTimer); state._wsReconnectTimer = null; }
+  }
+
+  function openLogStream(id, opts = {}) {
+    // Always close any prior socket cleanly (suppress its reconnect side-effects).
+    closeWebSocket({ reason: "switch-install" });
+    const logEl = document.getElementById("log-stream");
+    if (logEl && !opts.resumeOnly) logEl.innerHTML = "";
+
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    state.ws = new WebSocket(`${proto}://${location.host}/api/installs/${id}/logs`);
-    const logEl = document.getElementById("log-stream"); logEl.innerHTML = "";
-    state.ws.onmessage = (msg) => {
+    const lastSeq = state._wsLastSeq?.[id] || 0;
+    const qs = lastSeq > 0 ? `?last_seq=${lastSeq}` : "";
+    const url = `${proto}://${location.host}/api/installs/${id}/logs${qs}`;
+    let ws;
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      showToast(`Log stream failed: ${e.message}`, "warn");
+      return;
+    }
+    state.ws = ws;
+    state._wsInstallId = id;
+    state._wsLastSeq = state._wsLastSeq || {};
+
+    ws.onopen = () => {
+      // Reset backoff once we successfully connect
+      state._wsReconnectAttempts = 0;
+    };
+
+    ws.onmessage = (msg) => {
+      // Only handle events from the CURRENT ws — older sockets may still
+      // deliver if a rapid switch happened.
+      if (ws !== state.ws) return;
       let evt;
-      try { evt = JSON.parse(msg.data); }
-      catch { const div = document.createElement("div"); div.className = "log-line text-rose-400"; div.textContent = "[malformed event from server]"; logEl.appendChild(div); return; }
+      try {
+        evt = JSON.parse(msg.data);
+      } catch {
+        const div = document.createElement("div");
+        div.className = "log-line text-rose-400";
+        div.textContent = "[malformed event from server]";
+        if (logEl) logEl.appendChild(div);
+        return;
+      }
+      if (evt.kind === "reset") {
+        // Server says our resume point was too old; clear local log.
+        if (logEl) logEl.innerHTML = "";
+        state._wsLastSeq[id] = 0;
+        return;
+      }
+      if (typeof evt.seq === "number") state._wsLastSeq[id] = evt.seq;
       handleEvent(evt, logEl);
     };
-    state.ws.onclose = () => refreshInstall(id);
+
+    ws.onerror = () => {
+      // onerror always precedes onclose. Don't double-toast; let close handle it.
+      if (ws !== state.ws) return;
+    };
+
+    ws.onclose = (event) => {
+      if (ws !== state.ws) return;  // we already moved on
+      // 1000 (normal) or 1001 (going away) → don't reconnect
+      // 1008 (policy/origin) or 4001 (auth) → user issue, don't reconnect
+      // Anything else → exponential backoff reconnect up to 5 attempts
+      if (event.wasClean || event.code === 1000 || event.code === 1001 ||
+          event.code === 1008 || event.code === 4001) {
+        // Normal close. Refresh the install record so the UI sees terminal state.
+        if (event.code === 1008 || event.code === 4001) {
+          showToast(`Log stream closed (code ${event.code})`, "warn");
+        }
+        refreshInstall(id).catch(() => {});
+        return;
+      }
+      // Network drop — try to reconnect with backoff
+      const attempts = state._wsReconnectAttempts || 0;
+      if (attempts >= 5) {
+        showToast("Log stream lost — reconnect failed after 5 attempts");
+        refreshInstall(id).catch(() => {});
+        return;
+      }
+      const delay = Math.min(1000 * Math.pow(2, attempts), 30_000);
+      const jitter = Math.random() * 500;
+      state._wsReconnectAttempts = attempts + 1;
+      showToast(`Log stream dropped — reconnecting in ${Math.round((delay + jitter) / 1000)}s`, "warn");
+      state._wsReconnectTimer = setTimeout(() => {
+        if (state._wsInstallId === id) openLogStream(id, { resumeOnly: true });
+      }, delay + jitter);
+    };
   }
 
   function handleEvent(evt, logEl) {
@@ -1792,13 +2026,13 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       const icon = ch.status === 'passed' ? '✓' : (ch.status === 'warning' ? '⚠' : '✗');
       return `
         <div class="flex items-start gap-3 px-3 py-2.5 rounded-lg hover:bg-white/5 fade-up" style="animation-delay: ${i * 25}ms">
-          <div class="text-${cp}-400 text-base mt-0.5">${icon}</div>
+          <div class="text-${cp}-400 text-base mt-0.5">${esc(icon)}</div>
           <div class="flex-1 min-w-0">
             <div class="text-sm mono text-slate-200">${esc(ch.name)}</div>
             <div class="text-xs text-slate-400">${esc(ch.message)}</div>
             ${ch.evidence ? `<div class="text-xs text-slate-600 mono mt-1 break-words">${esc(ch.evidence)}</div>` : ''}
           </div>
-          <div class="text-xs text-slate-500 mono">${ch.duration_ms}ms</div>
+          <div class="text-xs text-slate-500 mono">${esc(ch.duration_ms)}ms</div>
         </div>`;
     }).join("");
     el.innerHTML = header + `<div class="space-y-1">${items}</div>`;
