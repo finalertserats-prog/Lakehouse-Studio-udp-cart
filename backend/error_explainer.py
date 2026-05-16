@@ -134,6 +134,36 @@ _PATTERNS: list[dict] = [
         "fix": "Check the BE container logs: `docker logs udp-starrocks-be`. If you see 'no available network', edit docker-compose.yml's BE command to use the right subnet (default is 172.16.0.0/12). Re-run start.",
         "retryable": True,
     },
+    {
+        # Specific to the Windows-only StarRocks BE -> MinIO smoke failure.
+        # The AWS SDK inside StarRocks BE fails DNS resolution against the
+        # MinIO service name when running on Docker Desktop for Windows.
+        # Documented in stacks/compatibility/udp-local-v0.2.lock.yaml.
+        "category": "starrocks_minio_windows",
+        "match": re.compile(
+            r"(?:UnknownHostException.*minio|"
+            r"java\.net\.UnknownHostException:\s*minio|"
+            r"S3Exception.*UnknownHost|"
+            r"unable to find valid certification path.*minio)",
+            re.IGNORECASE,
+        ),
+        "title": "StarRocks to MinIO unreachable (documented Windows quirk)",
+        "why": (
+            "StarRocks BE's AWS SDK can't resolve the 'minio' service name when "
+            "running on Docker Desktop for Windows. This is a documented, "
+            "Linux-only-fixable interaction — the lakehouse data IS readable "
+            "via Spark; only the StarRocks SELECT-from-Iceberg-on-MinIO path "
+            "fails. Lock file evidence (2026-05-16) shows the same pattern: "
+            "smoke fails, finalize passes after skip."
+        ),
+        "fix": (
+            "Recovery on Windows: click 'Skip' on the failed smoke step, then "
+            "'Continue' to let finalize complete. The stack will reach READY "
+            "and Spark queries work fully. For full StarRocks support, deploy "
+            "on Linux — same code path is reported working there."
+        ),
+        "retryable": False,  # retrying won't help on Windows
+    },
 ]
 
 
