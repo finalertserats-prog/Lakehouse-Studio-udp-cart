@@ -12,6 +12,7 @@ from typing import Optional
 from .config import WORK_DIR
 from .events import bus
 from .models import LogEvent, StepStatus
+from .notifications import notify
 from .redact import redact, sanitize_env_overrides, quote_env_value, SECRET_KEYS
 from .stack_manifest import StackManifest
 from .state import store
@@ -742,11 +743,45 @@ class UDPRunner:
                     if step_id == "finalize":
                         self._set_state("READY")
                         self._emit("state", status="READY")
+                        try:
+                            await notify(
+                                self.install_id,
+                                "install_completed",
+                                "info",
+                                f"Install ready: {self.stack.id}",
+                                self._completion_body(),
+                                links={"success": f"/installs/{self.install_id}"},
+                            )
+                        except Exception:
+                            pass  # never let notifications break the install
                         return
+                    # Smoke-specific notification before the FAILED transition
+                    if step_id == "smoke":
+                        try:
+                            await notify(
+                                self.install_id,
+                                "smoke_failed",
+                                "warn",
+                                f"Smoke test failed: {self.stack.id}",
+                                self._step_error_tail("smoke"),
+                            )
+                        except Exception:
+                            pass  # never let notifications break the install
                     return self._fail(f"{step_id} failed")
 
             self._set_state("READY")
             self._emit("state", status="READY")
+            try:
+                await notify(
+                    self.install_id,
+                    "install_completed",
+                    "info",
+                    f"Install ready: {self.stack.id}",
+                    self._completion_body(),
+                    links={"success": f"/installs/{self.install_id}"},
+                )
+            except Exception:
+                pass  # never let notifications break the install
         except asyncio.CancelledError:
             self._fail("cancelled")
         except Exception as e:
@@ -756,6 +791,58 @@ class UDPRunner:
         store.update_state(self.install_id, "FAILED", error=msg)
         self._emit("state", status="FAILED", payload={"error": msg})
         self._emit("error", line=msg)
+        # Fire-and-forget notification — never let dispatcher errors break the install.
+        try:
+            failing_step = self._current_failing_step() or "unknown"
+            asyncio.create_task(notify(
+                self.install_id,
+                "install_failed",
+                "critical",
+                f"Install failed at {failing_step}",
+                self._step_error_tail(failing_step) or msg,
+                links={"diagnose": f"/api/installs/{self.install_id}/diagnose"},
+            ))
+        except Exception:
+            pass  # never let notifications break the install
+
+    # ---------- notification body helpers ----------
+
+    def _completion_body(self) -> str:
+        try:
+            urls = self.stack.output_urls(self.host)
+        except Exception:
+            urls = {}
+        lines = [f"install_dir: {self.install_dir}"]
+        if urls:
+            lines.append("services:")
+            for name, url in urls.items():
+                lines.append(f"  {name}: {url}")
+        return "\n".join(lines)
+
+    def _step_error_tail(self, step_id: str, max_chars: int = 800) -> str:
+        try:
+            rec = store.get(self.install_id)
+            if not rec:
+                return ""
+            for s in rec.steps:
+                if s.id == step_id and s.message:
+                    msg = s.message
+                    return msg if len(msg) <= max_chars else msg[-max_chars:]
+        except Exception:
+            return ""
+        return ""
+
+    def _current_failing_step(self) -> Optional[str]:
+        try:
+            rec = store.get(self.install_id)
+            if not rec:
+                return None
+            for s in rec.steps:
+                if s.status == "failed":
+                    return s.id
+        except Exception:
+            return None
+        return None
 
 
 def make_steps(stack: StackManifest) -> list[StepStatus]:

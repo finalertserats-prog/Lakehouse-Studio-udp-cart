@@ -39,6 +39,7 @@ from .compliance import get_compliance, validate_compliance
 from .templates import get_template_detail, list_templates, validate_templates
 from .demo_query import list_queries, run_demo_query
 from .error_explainer import explain as explain_error
+from . import ai_assistant as ai_mod
 from .lake_namer import suggest as suggest_lake_names, is_valid as is_valid_lake_name, normalize as normalize_lake_name
 from .paths import InstallDirError, validate_install_dir
 from .providers import match_plans, cheapest_overall
@@ -50,9 +51,13 @@ from .stack_manifest import list_manifests, load_manifest
 from .state import store
 from .structured_smoke import run_structured_smoke
 from . import ingest as ingest_mod
+from . import data_sources as data_sources_mod
 from . import table_explorer
 from . import backup as backup_mod
+from . import monitoring as monitoring_mod
 from . import tls_wizard as tls_mod
+from . import caddy_tls as caddy_mod
+from . import upgrade_executor as upgrade_exec_mod
 
 app = FastAPI(title="LakeHouse Studio", version="0.1.0")
 
@@ -106,6 +111,17 @@ def _make_install_task_wrapper(install_id: str, coro_factory):
                     ))
             except Exception:
                 logger.exception("crash-handler itself failed for %s", install_id)
+            try:
+                await notify(
+                    install_id,
+                    "install_failed",
+                    "critical",
+                    f"Install failed at orchestrator",
+                    f"orchestrator crash: {type(e).__name__}: {e}",
+                    links={"diagnose": f"/api/installs/{install_id}/diagnose"},
+                )
+            except Exception:
+                pass  # never let notifications break the install
         finally:
             _INSTALL_TASKS.pop(install_id, None)
     return _wrapped
@@ -410,9 +426,6 @@ async def post_stack_upgrade_simulate(stack_id: str, body: UpgradeSimulateReques
     """Dry-run an upgrade. Overlays proposed tags on the lock, runs registry
     precheck + walks known-incompatible + walks constraints. Returns a
     verdict (pass | unknown | fail). Never mutates the lock.
-
-    TODO v0.4.1: POST /api/installs/{install_id}/upgrades/execute that takes
-    {proposed, backup_id} and runs the install pipeline against the overlay.
     """
     try:
         load_manifest(stack_id)
@@ -421,6 +434,74 @@ async def post_stack_upgrade_simulate(stack_id: str, body: UpgradeSimulateReques
     if load_lock(stack_id) is None:
         raise HTTPException(404, f"no compatibility lock for stack '{stack_id}'")
     return await simulate_upgrade(stack_id, body.proposed)
+
+
+# DESTRUCTIVE — actually swaps the running stack's images. Requires a
+# backup_id (no exceptions). Any failure after compose-down triggers rollback
+# via backup restore + base compose up. See backend/upgrade_executor.py for
+# the full pipeline.
+class UpgradeExecuteRequest(BaseModel):
+    proposed: dict[str, str] = Field(min_length=1, max_length=32)
+    backup_id: str = Field(min_length=1, max_length=64)
+
+
+@app.post("/api/installs/{install_id}/upgrades/execute", dependencies=[AuthDep])
+async def post_install_upgrade_execute(install_id: str, body: UpgradeExecuteRequest):
+    """Execute a previously-simulated upgrade against a live install.
+
+    DESTRUCTIVE. Requires backup_id (must belong to install_id). Pipeline:
+    preflight -> simulate -> compose down -> image pull -> compose up
+    (with docker-compose.upgrade.yml overlay) -> smoke. Any failure after
+    compose-down triggers rollback (restore backup + base compose up).
+
+    Refuses (409) if the install is in a RUNNING_STATES state or already
+    has an in-flight install/upgrade task. The lock file is NEVER mutated
+    on success — the response carries `proposed_new_lock` for manual PR.
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    # Race against in-flight install/retry/skip tasks.
+    if install_id in _INSTALL_TASKS and not _INSTALL_TASKS[install_id].done():
+        raise HTTPException(409, "an install task is still running; cancel before upgrade")
+    if rec.state in RUNNING_STATES:
+        raise HTTPException(409, f"cannot upgrade while state is {rec.state}; cancel first")
+    try:
+        result = await upgrade_exec_mod.execute_upgrade(
+            install_id=install_id,
+            proposed=body.proposed,
+            backup_id=body.backup_id,
+            running_states=RUNNING_STATES,
+            install_tasks=_INSTALL_TASKS,
+        )
+    except upgrade_exec_mod.UpgradeExecutionError as e:
+        # Pre-execution invariants (unknown component, missing lock, etc.).
+        msg = str(e)
+        # Unknown component / bad proposed shape -> 400; missing install/lock -> 404.
+        if "unknown component" in msg or "must be non-empty" in msg or "is required" in msg:
+            raise HTTPException(400, msg)
+        if "not found" in msg or "no compatibility lock" in msg or "does not exist" in msg:
+            raise HTTPException(404, msg)
+        raise HTTPException(409, msg)
+    return result.model_dump()
+
+
+@app.get("/api/installs/{install_id}/upgrades/executions", dependencies=[AuthDep])
+def list_upgrade_executions(install_id: str):
+    """List previous upgrade executions for an install (most recent first)."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    return [e.model_dump() for e in upgrade_exec_mod.list_executions(install_id)]
+
+
+@app.get("/api/upgrades/executions/{execution_id}", dependencies=[AuthDep])
+def get_upgrade_execution(execution_id: str):
+    """Fetch a single upgrade execution by id."""
+    e = upgrade_exec_mod.get_execution(execution_id)
+    if e is None:
+        raise HTTPException(404, "execution not found")
+    return e.model_dump()
 
 
 @app.post("/api/stacks/{stack_id}/compatibility/precheck", dependencies=[AuthDep])
@@ -718,6 +799,133 @@ def post_password_strength(install_id: str, body: PasswordStrengthRequest):
     return tls_mod.password_strength_hint(body.password)
 
 
+# ---------- Caddy TLS sidecar (opt-in HTTPS-by-default hardening) ----------
+#
+# These two routes write/remove the docker-compose.tls.yml override + Caddyfile
+# in the install_dir. They DO NOT touch the base docker-compose.yml the
+# install pipeline writes -- that file is FROZEN (certified-stack contract).
+# Activation is an explicit `docker compose ... up -d caddy` the operator
+# runs themselves; we surface the command so they retain control.
+
+
+@app.post("/api/installs/{install_id}/tls/caddy/enable", dependencies=[AuthDep])
+async def post_caddy_enable(install_id: str, body: caddy_mod.TlsProfile):
+    """Write a Caddy TLS sidecar override into the install_dir.
+
+    Refuses if the install is mid-pipeline (RUNNING_STATES) -- flipping
+    on a TLS sidecar while the stack is being clone/started would race
+    docker compose. Returns the override path + the exact activate
+    command the operator runs from the install_dir.
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state in RUNNING_STATES:
+        raise HTTPException(
+            409,
+            f"cannot enable TLS sidecar while install state is {rec.state}; "
+            f"wait for it to reach a terminal state first",
+        )
+    try:
+        override_path = await caddy_mod.write_caddy_override(install_id, body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "compose_file_path": str(override_path),
+        "activate_command": caddy_mod.caddy_activate_command(install_id),
+        "kind": body.kind,
+        "domain": body.domain,
+    }
+
+
+@app.post("/api/installs/{install_id}/tls/caddy/disable", dependencies=[AuthDep])
+async def post_caddy_disable(install_id: str):
+    """Remove the Caddy override + Caddyfile from the install_dir.
+
+    Refuses if the install is mid-pipeline. The caller is responsible
+    for running the returned deactivate command FIRST -- the route does
+    not stop the caddy container itself (the operator retains control
+    over their stack lifecycle).
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state in RUNNING_STATES:
+        raise HTTPException(
+            409,
+            f"cannot disable TLS sidecar while install state is {rec.state}; "
+            f"wait for it to reach a terminal state first",
+        )
+    try:
+        await caddy_mod.disable_caddy_override(install_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "disabled": True,
+        "deactivate_command": caddy_mod.caddy_deactivate_command(install_id),
+    }
+
+
+# ---------- Prometheus + Grafana monitoring sidecar (opt-in operational tooling) ----------
+#
+# Same pattern as the Caddy TLS sidecar above: write a docker-compose
+# override + supporting config into the install_dir, return the activate
+# command, never touch the base compose file or the install pipeline.
+# Monitoring is NOT part of the certified lock file — it's an opt-in
+# operational layer the operator adopts on their own terms.
+
+
+@app.post("/api/installs/{install_id}/monitoring/enable", dependencies=[AuthDep])
+async def post_monitoring_enable(install_id: str, body: monitoring_mod.MonitoringProfile):
+    """Write the docker-compose.metrics.yml override + monitoring/ subtree.
+
+    Refuses if the install is mid-pipeline (RUNNING_STATES) — same reasoning
+    as the Caddy sidecar: layering an override on a workspace that's still
+    being cloned/started races docker compose.
+
+    If the caller doesn't pin grafana_admin_password, a 24-char random secret
+    is generated and returned ONCE in the response. The server never stores
+    it; the operator must save it.
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state in RUNNING_STATES:
+        raise HTTPException(
+            409,
+            f"cannot enable monitoring sidecar while install state is {rec.state}; "
+            f"wait for it to reach a terminal state first",
+        )
+    try:
+        return await monitoring_mod.enable_monitoring(install_id, body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/installs/{install_id}/monitoring/disable", dependencies=[AuthDep])
+async def post_monitoring_disable(install_id: str):
+    """Remove the override file + the monitoring/ subdir from the install_dir.
+
+    Refuses if the install is mid-pipeline. The caller is responsible for
+    running the returned shutdown hint FIRST — the route does not stop the
+    prometheus/grafana containers (the operator retains stack-lifecycle
+    control, same as the Caddy sidecar).
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    if rec.state in RUNNING_STATES:
+        raise HTTPException(
+            409,
+            f"cannot disable monitoring sidecar while install state is {rec.state}; "
+            f"wait for it to reach a terminal state first",
+        )
+    try:
+        return await monitoring_mod.disable_monitoring(install_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ---------- Backup / Restore ----------
 
 class BackupCreateRequest(BaseModel):
@@ -945,6 +1153,30 @@ async def post_notifications_test(body: NotificationTestRequest):
     return {"ok": ok, "detail": detail}
 
 
+# ---------- AI Assistant ("Ask Studio") ----------
+
+@app.get("/api/ai/status")
+def get_ai_status():
+    """Public status: {enabled, model, reason}. No secrets returned.
+
+    Unauthenticated so the chat panel can render its disabled-state badge
+    before the user even has a token configured.
+    """
+    return ai_mod.status()
+
+
+@app.post("/api/ai/ask", response_model=ai_mod.ChatResponse, dependencies=[AuthDep])
+async def post_ai_ask(body: ai_mod.ChatRequest):
+    """Grounded answer over project context (lock + state + error catalog + docs).
+
+    Returns a clear "AI unavailable" response (not 5xx) when the API key is
+    missing, the SDK isn't installed, or the upstream call fails — so the
+    UI degrades cleanly. Pydantic enforces question <= 2000 chars and
+    history <= 5 turns.
+    """
+    return await ai_mod.ask(body)
+
+
 # ---------- CSV ingest + Table Explorer ----------
 
 class IngestRequest(BaseModel):
@@ -1039,6 +1271,73 @@ def get_ingest_job(install_id: str, job_id: str):
     job = ingest_mod.get_job(job_id)
     if not job or job.install_id != install_id:
         raise HTTPException(404, "ingest job not found")
+    return job.model_dump()
+
+
+# ---------- External data sources (Postgres for now) ----------
+
+class PostgresIngestRequest(BaseModel):
+    source_id: str = Field(min_length=1, max_length=64)
+    table_name: str = Field(min_length=1, max_length=256)
+    target: dict = Field(default_factory=dict)  # {database, table}
+
+
+@app.post("/api/installs/{install_id}/data-sources", dependencies=[AuthDep])
+async def post_data_source(install_id: str, body: data_sources_mod.DataSourceCreateRequest):
+    """Register an external data source (Postgres). Stored credential is
+    encrypted at rest and never echoed back. The response uses the scrubbed
+    DataSource model (has_password: bool, no plaintext)."""
+    _require_install_ready(install_id)
+    try:
+        record = await data_sources_mod.create_source(install_id, body)
+    except data_sources_mod.WeakPasswordError as e:
+        raise HTTPException(400, str(e))
+    return record.model_dump()
+
+
+@app.get("/api/installs/{install_id}/data-sources", dependencies=[AuthDep])
+async def get_data_sources(install_id: str):
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    sources = await data_sources_mod.list_sources(install_id)
+    return [s.model_dump() for s in sources]
+
+
+@app.post("/api/data-sources/{source_id}/test", dependencies=[AuthDep])
+async def post_data_source_test(source_id: str):
+    """Open a real connection with a 5s hard timeout. Returns
+    {ok, latency_ms, server_version, schemas, error}."""
+    try:
+        result = await data_sources_mod.test_source(source_id)
+    except data_sources_mod.DataSourceNotFoundError:
+        raise HTTPException(404, "data source not found")
+    return result
+
+
+@app.delete("/api/data-sources/{source_id}", status_code=204, dependencies=[AuthDep])
+async def delete_data_source(source_id: str):
+    src = await data_sources_mod.get_source(source_id)
+    if src is None:
+        raise HTTPException(404, "data source not found")
+    await data_sources_mod.delete_source(source_id)
+    return None
+
+
+@app.post("/api/installs/{install_id}/ingest/postgres", dependencies=[AuthDep])
+async def post_ingest_postgres(install_id: str, body: PostgresIngestRequest):
+    """Kick off a Postgres -> Iceberg ingest job. v0.4.1 is a stub that walks
+    the IngestJob lifecycle and ends with a 'pending v0.5' message."""
+    _require_install_ready(install_id)
+    try:
+        job = await ingest_mod.kick_off_postgres_ingest(
+            install_id=install_id,
+            source_id=body.source_id,
+            table_name=body.table_name,
+            target=body.target,
+        )
+    except ingest_mod.UploadInvalidError as e:
+        raise HTTPException(400, str(e))
     return job.model_dump()
 
 
