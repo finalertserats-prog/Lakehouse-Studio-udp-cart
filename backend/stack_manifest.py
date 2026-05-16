@@ -60,11 +60,33 @@ class StackManifest:
         return {k: v.format(host=host) for k, v in conns.items()}
 
 
+# Files in stacks/ that are NOT stack manifests (e.g. the component catalog).
+# These are handled by their own loaders.
+_NON_STACK_YAML = {"components-catalog.yaml"}
+
+
 def list_manifests() -> list[StackManifest]:
-    out = []
+    """Load every *.yaml in stacks/ that looks like a stack manifest.
+
+    A file is treated as a stack manifest only if it (a) is not on the
+    skip list and (b) parses to a dict with an `id` field. Anything else
+    is logged and skipped — adding a new YAML file to stacks/ for an
+    unrelated purpose should never crash the install endpoint."""
+    import logging
+    log = logging.getLogger("lhs.stack_manifest")
+    out: list[StackManifest] = []
     for p in sorted(STACKS_DIR.glob("*.yaml")):
-        with p.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        if p.name in _NON_STACK_YAML:
+            continue
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except Exception as e:
+            log.warning("skipping %s: yaml parse failed (%s)", p.name, e)
+            continue
+        if not isinstance(data, dict) or "id" not in data:
+            log.warning("skipping %s: not a stack manifest (missing top-level 'id')", p.name)
+            continue
         out.append(StackManifest(data, p))
     return out
 
