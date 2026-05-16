@@ -11,7 +11,12 @@ description: >
 
 repository:
   url: https://github.com/finalertserats-prog/Unified-Data-Plug.git
-  ref: main
+  # NOTE: UDP's actual GitHub default branch is currently named
+  # `claude/review-repo-udp-H7jt4`, not `main`. The studio-install-stability
+  # PR (PR #6) landed there. `main` is stuck on an older snapshot until the
+  # repo owner merges/renames. Track the default branch here so installs
+  # get the fixes immediately.
+  ref: claude/review-repo-udp-H7jt4
   install_dir: udp
 
 components:
