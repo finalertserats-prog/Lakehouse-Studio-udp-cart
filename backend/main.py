@@ -2118,13 +2118,27 @@ def root():
 
 @app.get("/healthz")
 def healthz():
+    # Validators surface both errors AND warnings in the same problems list.
+    # Warnings (prefixed with "warning —") describe expected non-fatal states
+    # like a candidate-status stack reference — they should be visible but
+    # MUST NOT flip `ok` to false.
+    def _is_error(msg: str) -> bool:
+        return "warning —" not in (msg or "")
+    cat_errors = [p for p in _CATALOG_PROBLEMS if _is_error(p)]
+    tpl_errors = [p for p in _TEMPLATE_PROBLEMS if _is_error(p)]
+    comp_errors = [p for p in _COMPLIANCE_PROBLEMS if _is_error(p)]
     return {
-        "ok": not _CATALOG_PROBLEMS,
+        "ok": not (cat_errors or tpl_errors or comp_errors),
         "catalog_problems": _CATALOG_PROBLEMS,
         "compat_problems": _COMPAT_PROBLEMS,
         "certified_stacks": list_locks(),
         "template_problems": _TEMPLATE_PROBLEMS,
         "compliance_problems": _COMPLIANCE_PROBLEMS,
+        "errors_count": len(cat_errors) + len(tpl_errors) + len(comp_errors),
+        "warnings_count": (
+            len(_CATALOG_PROBLEMS) + len(_TEMPLATE_PROBLEMS) + len(_COMPLIANCE_PROBLEMS)
+            - len(cat_errors) - len(tpl_errors) - len(comp_errors)
+        ),
     }
 
 

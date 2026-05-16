@@ -93,7 +93,6 @@ templates:
     hero_use_cases: ["Multi-engine reads against the same Iceberg tables", "Run BI + ETL + ad-hoc SQL on one open stack"]
     pending_components:
       - { name: Dagster, role: orchestration, eta: v0.4, reason: "Asset-first scheduling for production ETL" }
-      - { name: Trino, role: federated_sql, eta: v0.4, reason: "Federate queries across data sources" }
       - { name: "Prometheus + Grafana", role: observability, eta: v0.4, reason: "Per-component metrics + alerting" }
     compliance_tags: []
 
@@ -109,7 +108,6 @@ templates:
     hero_use_cases: ["Open analytics without managed-warehouse pricing", "Same lakehouse for ELT + BI"]
     pending_components:
       - { name: Dagster, role: orchestration, eta: v0.4, reason: "Asset-first scheduling for ELT" }
-      - { name: Trino, role: federated_sql, eta: v0.4, reason: "Federate queries across data sources" }
     compliance_tags: []
 
   - id: ai_research
@@ -123,7 +121,6 @@ templates:
     readiness: pilot
     hero_use_cases: ["Versioned datasets via Iceberg snapshots", "Multi-engine reads from one warehouse"]
     pending_components:
-      - { name: Trino, role: federated_sql, eta: v0.4, reason: "Cross-source feature lookups" }
       - { name: "JupyterHub (multi-user)", role: notebook, eta: v0.5, reason: "Shared research environment" }
       - { name: MLflow, role: tracking, eta: v0.6, reason: "Experiment tracking + model registry" }
     compliance_tags: []
@@ -157,7 +154,6 @@ templates:
     pending_components:
       - { name: "Nessie (branching catalog)", role: catalog, eta: v0.5, reason: "Point-in-time audit + rollback semantics" }
       - { name: "WORM bucket policy", role: object_storage, eta: v0.5, reason: "Immutable audit logs" }
-      - { name: Trino, role: federated_sql, eta: v0.4, reason: "Cross-system reconciliation queries" }
     compliance_tags: [pci_dss, soc2]
 
   - id: streaming
