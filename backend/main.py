@@ -26,9 +26,12 @@ from .catalog import (
 )
 from .compatibility import (
     list_locks,
+    list_upgrade_candidates,
     load_lock,
+    load_upgrades,
     lock_summary,
     precheck_image_availability,
+    simulate_upgrade,
     validate_against_catalog,
 )
 from .health import get_stack_health
@@ -48,6 +51,7 @@ from .state import store
 from .structured_smoke import run_structured_smoke
 from . import ingest as ingest_mod
 from . import table_explorer
+from . import backup as backup_mod
 
 app = FastAPI(title="LakeHouse Studio", version="0.1.0")
 
@@ -378,6 +382,46 @@ def get_stack_compatibility(stack_id: str):
     }
 
 
+@app.get("/api/stacks/{stack_id}/upgrades", dependencies=[AuthDep])
+def get_stack_upgrades(stack_id: str):
+    """Hand-curated upgrade candidates for this stack.
+
+    Reads stacks/compatibility/{stack_id}.upgrades.yaml. Empty list if no
+    upgrades file exists. UI surfaces this as a 'N updates available' badge.
+    """
+    try:
+        load_manifest(stack_id)
+    except KeyError:
+        raise HTTPException(404, f"Stack {stack_id} not found")
+    return {
+        "stack_id": stack_id,
+        "candidates": list_upgrade_candidates(stack_id),
+        "has_upgrades_file": load_upgrades(stack_id) is not None,
+    }
+
+
+class UpgradeSimulateRequest(BaseModel):
+    proposed: dict[str, str] = Field(min_length=1, max_length=32)
+
+
+@app.post("/api/stacks/{stack_id}/upgrades/simulate", dependencies=[AuthDep])
+async def post_stack_upgrade_simulate(stack_id: str, body: UpgradeSimulateRequest):
+    """Dry-run an upgrade. Overlays proposed tags on the lock, runs registry
+    precheck + walks known-incompatible + walks constraints. Returns a
+    verdict (pass | unknown | fail). Never mutates the lock.
+
+    TODO v0.4.1: POST /api/installs/{install_id}/upgrades/execute that takes
+    {proposed, backup_id} and runs the install pipeline against the overlay.
+    """
+    try:
+        load_manifest(stack_id)
+    except KeyError:
+        raise HTTPException(404, f"Stack {stack_id} not found")
+    if load_lock(stack_id) is None:
+        raise HTTPException(404, f"no compatibility lock for stack '{stack_id}'")
+    return await simulate_upgrade(stack_id, body.proposed)
+
+
 @app.post("/api/stacks/{stack_id}/compatibility/precheck", dependencies=[AuthDep])
 async def post_stack_compat_precheck(stack_id: str, timeout: int = 10):
     """Verify every image+tag in the lock file STILL exists on its registry.
@@ -573,6 +617,57 @@ async def post_uninstall(install_id: str):
     except UninstallError as e:
         raise HTTPException(409, str(e))
     return result
+
+
+# ---------- Backup / Restore ----------
+
+class BackupCreateRequest(BaseModel):
+    kind: str = Field(default="metadata", pattern=r"^(metadata|full)$")
+
+
+@app.post("/api/installs/{install_id}/backups", dependencies=[AuthDep])
+async def post_install_backup(install_id: str, body: BackupCreateRequest):
+    """Create a backup tarball for the given install. kind: metadata | full."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    try:
+        record = await backup_mod.create_backup(install_id, kind=body.kind)  # type: ignore[arg-type]
+    except backup_mod.BackupError as e:
+        raise HTTPException(409, str(e))
+    return record.model_dump()
+
+
+@app.get("/api/installs/{install_id}/backups", dependencies=[AuthDep])
+async def list_install_backups(install_id: str):
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    return [r.model_dump() for r in await backup_mod.list_backups(install_id)]
+
+
+@app.post("/api/backups/{backup_id}/restore", dependencies=[AuthDep])
+async def post_backup_restore(backup_id: str):
+    """Restore a backup over its source install. Refuses if install is in
+    a RUNNING_STATES state or has a live install task."""
+    try:
+        result = await backup_mod.restore_backup(
+            backup_id,
+            running_states=RUNNING_STATES,
+            install_tasks=_INSTALL_TASKS,
+        )
+    except backup_mod.BackupError as e:
+        raise HTTPException(409, str(e))
+    return result.model_dump()
+
+
+@app.delete("/api/backups/{backup_id}", status_code=204, dependencies=[AuthDep])
+async def delete_backup_route(backup_id: str):
+    try:
+        await backup_mod.delete_backup(backup_id)
+    except backup_mod.BackupError as e:
+        raise HTTPException(404, str(e))
+    return None
 
 
 @app.post("/api/installs/{install_id}/steps/rollback", dependencies=[AuthDep])

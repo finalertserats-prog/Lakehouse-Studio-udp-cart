@@ -1,0 +1,33 @@
+# Upgrade candidates for udp-local-v0.2
+# =====================================
+# Sibling to the lock file. Hand-curated for v0.4 — every candidate
+# tag MUST have been confirmed via `docker manifest inspect` before
+# landing here. Loader rejects unknown tags at validate time.
+#
+# A successful simulate_upgrade returns a verdict; it never mutates
+# the lock file in place. Promotion goes through a PR with a fresh
+# evidence block in the lock file.
+
+schema_version: "1.0"
+stack_id: udp-local-v0.2
+
+candidates:
+  - component_id: starrocks-fe
+    tag: "3.3.13"
+    source: hand_curated
+    discovered_at: "2026-05-16"
+    notes: |
+      Newer 3.3.x bump. Verified on Docker Hub. Keeps PR #55416 fix
+      (Iceberg REST FileIO propagation). Pair with starrocks-be:3.3.13
+      to satisfy the FE/BE same-version constraint.
+
+  - component_id: starrocks-be
+    tag: "3.3.13"
+    source: hand_curated
+    discovered_at: "2026-05-16"
+    notes: |
+      Match FE bump. Verified on Docker Hub.
+
+# Cached feasibility verdicts. Append-only — every entry has an
+# evidence link (install_id or PR ref).
+pairwise_tested: []

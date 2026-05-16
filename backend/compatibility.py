@@ -150,6 +150,169 @@ async def precheck_image_availability(stack_id: str, timeout: int = 10) -> dict:
     }
 
 
+@lru_cache(maxsize=32)
+def load_upgrades(stack_id: str) -> dict[str, Any] | None:
+    """Load a stack's upgrade candidates from the sibling .upgrades.yaml file.
+    Returns None if no upgrades file exists (acceptable — candidates are opt-in).
+    """
+    path = COMPAT_DIR / f"{stack_id}.upgrades.yaml"
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise CompatibilityError(f"{path.name}: root must be a mapping")
+    return data
+
+
+def list_upgrade_candidates(stack_id: str) -> list[dict[str, Any]]:
+    """Per-candidate rows: current_tag from lock + candidate_tag + feasibility hint.
+    Empty list if no upgrades file exists.
+    """
+    upgrades = load_upgrades(stack_id)
+    if upgrades is None:
+        return []
+    lock = load_lock(stack_id) or {}
+    lock_by_id = {c["id"]: c for c in lock.get("components", [])}
+    cached = {
+        # key = (component_id, candidate_tag) -> verdict
+        (entry["component_id"], entry["tag"]): entry.get("verdict")
+        for entry in (upgrades.get("pairwise_tested") or [])
+        if isinstance(entry, dict)
+    }
+    out = []
+    for cand in upgrades.get("candidates", []) or []:
+        cid = cand.get("component_id")
+        cur = lock_by_id.get(cid, {})
+        out.append({
+            "component_id": cid,
+            "component_name": cur.get("name", cid),
+            "current_tag": cur.get("tag"),
+            "candidate_tag": cand.get("tag"),
+            "source": cand.get("source"),
+            "discovered_at": cand.get("discovered_at"),
+            "notes": cand.get("notes"),
+            "feasibility_hint": cached.get((cid, cand.get("tag"))),  # pass | unknown | fail | None
+        })
+    return out
+
+
+async def simulate_upgrade(stack_id: str, proposed: dict[str, str]) -> dict[str, Any]:
+    """Dry-run an upgrade. Overlays `proposed: {component_id: tag}` on the
+    lock, runs registry precheck on the overlay, walks incompatible[] and
+    constraints[] for known-bad / unknown-pair / pass-cached results.
+
+    Returns {verdict, proposed, image_checks, constraint_results, incompatible_hits}.
+    Never mutates the lock — promotion requires a human PR with evidence.
+    """
+    lock = load_lock(stack_id)
+    if lock is None:
+        return {"verdict": "fail", "error": f"no lock file for {stack_id}",
+                "proposed": proposed, "image_checks": [], "constraint_results": [],
+                "incompatible_hits": []}
+    upgrades = load_upgrades(stack_id) or {}
+    cached_pairwise = {
+        (entry["component_id"], entry["tag"]): entry.get("verdict")
+        for entry in (upgrades.get("pairwise_tested") or [])
+        if isinstance(entry, dict)
+    }
+
+    lock_by_id = {c["id"]: dict(c) for c in lock.get("components", [])}
+    for cid, new_tag in proposed.items():
+        if cid not in lock_by_id:
+            return {"verdict": "fail", "error": f"unknown component '{cid}'",
+                    "proposed": proposed, "image_checks": [], "constraint_results": [],
+                    "incompatible_hits": []}
+        lock_by_id[cid]["tag"] = new_tag
+
+    # Registry precheck on the OVERLAY (not the original lock).
+    image_checks: list[dict] = []
+    if shutil.which("docker") is not None:
+        async def _check_one_overlay(image: str, tag: str) -> dict:
+            ref = f"{image}:{tag}"
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "manifest", "inspect", ref,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+                stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=10)
+                stdout = stdout_b.decode("utf-8", "replace")
+                stderr = stderr_b.decode("utf-8", "replace")
+                if proc.returncode == 0 and stdout.strip().startswith("{"):
+                    return {"image": image, "tag": tag, "status": "available", "detail": None}
+                err = (stderr or stdout).strip().splitlines()[0][:200] if (stderr or stdout) else ""
+                if "no such manifest" in err.lower() or "not found" in err.lower():
+                    return {"image": image, "tag": tag, "status": "missing", "detail": err}
+                return {"image": image, "tag": tag, "status": "unknown", "detail": err}
+            except Exception as e:
+                return {"image": image, "tag": tag, "status": "unknown",
+                        "detail": f"{type(e).__name__}: {e}"}
+        tasks = []
+        for cid in proposed.keys():
+            comp = lock_by_id[cid]
+            img, tg = comp.get("image"), comp.get("tag")
+            if img and tg:
+                tasks.append(_check_one_overlay(img, tg))
+        image_checks = await asyncio.gather(*tasks) if tasks else []
+    else:
+        image_checks = [{"image": "?", "tag": "?", "status": "unknown",
+                         "detail": "docker CLI not on PATH"}]
+
+    # Walk known-incompatible combinations. Match by `component:tag` strings.
+    incompatible_hits: list[dict] = []
+    for entry in lock.get("incompatible", []) or []:
+        combos = entry.get("combination", []) or []
+        for combo in combos:
+            if isinstance(combo, str) and ":" in combo:
+                cid, tg = combo.split(":", 1)
+                if proposed.get(cid) == tg:
+                    incompatible_hits.append({
+                        "matched": combo, "reason": entry.get("reason", ""),
+                    })
+
+    # Walk pairwise constraints. Mark each rule pass | unknown | pass-cached.
+    proposed_ids = set(proposed.keys())
+    constraint_results: list[dict] = []
+    for c in lock.get("constraints", []) or []:
+        pair = c.get("between", []) or []
+        touches = bool(set(pair) & proposed_ids)
+        if not touches:
+            constraint_results.append({"between": pair, "rule": c.get("rule"), "status": "pass",
+                                       "detail": "proposed change does not affect this pair"})
+            continue
+        # Check cache for any of the proposed entries that participate in this pair.
+        cached_hit = False
+        for cid in (set(pair) & proposed_ids):
+            if (cid, proposed[cid]) in cached_pairwise:
+                cached_hit = True
+                break
+        if cached_hit:
+            constraint_results.append({"between": pair, "rule": c.get("rule"),
+                                       "status": "pass-cached",
+                                       "detail": "matches pairwise_tested entry"})
+        else:
+            constraint_results.append({"between": pair, "rule": c.get("rule"),
+                                       "status": "unknown",
+                                       "detail": "no cached evidence — needs manual validation"})
+
+    if incompatible_hits or any(ck["status"] == "missing" for ck in image_checks):
+        verdict = "fail"
+    elif any(cr["status"] == "unknown" for cr in constraint_results):
+        verdict = "unknown"
+    elif any(ck["status"] == "unknown" for ck in image_checks):
+        verdict = "unknown"
+    else:
+        verdict = "pass"
+
+    return {
+        "verdict": verdict,
+        "proposed": proposed,
+        "image_checks": image_checks,
+        "constraint_results": constraint_results,
+        "incompatible_hits": incompatible_hits,
+    }
+
+
 def lock_summary(stack_id: str) -> dict[str, Any] | None:
     """A small summary of the lock for surfacing in the UI / healthz."""
     lock = load_lock(stack_id)
