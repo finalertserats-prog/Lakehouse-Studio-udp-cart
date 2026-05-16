@@ -84,18 +84,26 @@ def _emit(install_id: str, line: str, *, stream: str = "stdout") -> None:
     ))
 
 
-def _backup_dir_for(install_id: str) -> Path:
+def _backup_dir_for(install_id: str, *, make: bool = True) -> Path:
+    """Return the per-install backup dir.
+
+    `make=True` (default) creates the directory; legacy write paths assumed
+    this side effect. `make=False` is for READ-ONLY callers (the DR drill
+    integrity probe, listing endpoints) where mkdir on a bogus install_id
+    would silently create a phantom backup directory. Codex-flagged 2026-05-17.
+    """
     d = _BACKUPS_ROOT / install_id
-    d.mkdir(parents=True, exist_ok=True)
+    if make:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _tar_path(install_id: str, backup_id: str) -> Path:
-    return _backup_dir_for(install_id) / f"{backup_id}.tar.gz"
+def _tar_path(install_id: str, backup_id: str, *, make: bool = True) -> Path:
+    return _backup_dir_for(install_id, make=make) / f"{backup_id}.tar.gz"
 
 
-def _sidecar_path(install_id: str, backup_id: str) -> Path:
-    return _backup_dir_for(install_id) / f"{backup_id}.tar.gz.json"
+def _sidecar_path(install_id: str, backup_id: str, *, make: bool = True) -> Path:
+    return _backup_dir_for(install_id, make=make) / f"{backup_id}.tar.gz.json"
 
 
 async def _docker_exec(args: list[str], *, timeout: int = 300) -> tuple[int, str, str]:
@@ -689,3 +697,283 @@ def get_scheduler() -> BackupScheduler:
     if _GLOBAL_SCHEDULER is None:
         _GLOBAL_SCHEDULER = BackupScheduler()
     return _GLOBAL_SCHEDULER
+
+
+# ---------------------------------------------------------------------------
+# DR drill — non-destructive backup integrity verification
+#
+# A "DR drill" verifies that backup tarballs are READABLE and structurally
+# sane WITHOUT touching the live install. We do NOT call restore_backup
+# here because that's destructive (it overwrites the install_dir and can
+# trigger an mc mirror restore). The drill walks the most recent backup
+# for each install, opens its .tar.gz, validates the manifest sidecar
+# matches the tarball contents, parses install_record.json, and confirms
+# that `full` backups contain a minio_data tree.
+#
+# Opt-in via LHS_DR_DRILL_ENABLED. Interval defaults to weekly (604800s)
+# and can be tuned via LHS_DR_DRILL_INTERVAL_SECONDS.
+# ---------------------------------------------------------------------------
+
+
+class DrillResult(BaseModel):
+    backup_id: str
+    install_id: str
+    kind: BackupKind
+    size_bytes: int
+    members_count: int
+    has_install_record: bool
+    has_minio_data: bool  # True iff a minio_data/* member was present
+    install_record_ok: bool  # parsed cleanly + install_id matches
+    ok: bool
+    errors: list[str] = Field(default_factory=list)
+    drilled_at: float
+
+
+def _verify_sync(install_id: str, backup_id: str) -> DrillResult:
+    """Synchronous integrity check on one backup tarball. Runs in a worker
+    thread (gzip + tar are CPU-bound) so the scheduler loop isn't blocked
+    by a multi-GB `full` backup."""
+    # Read-only paths: never create the per-install dir as a side effect.
+    tar_path = _tar_path(install_id, backup_id, make=False)
+    sidecar = _sidecar_path(install_id, backup_id, make=False)
+
+    errors: list[str] = []
+    members_count = 0
+    has_install_record = False
+    has_minio_data = False
+    install_record_ok = False
+    size_bytes = 0
+    kind: BackupKind = "metadata"
+
+    if not sidecar.exists():
+        errors.append(f"sidecar manifest missing at {sidecar.name}")
+    else:
+        try:
+            sidecar_data = json.loads(sidecar.read_text(encoding="utf-8"))
+            kind = sidecar_data.get("kind") or "metadata"
+            size_bytes = int(sidecar_data.get("size_bytes") or 0)
+        except Exception as e:
+            errors.append(f"sidecar parse failed: {type(e).__name__}: {e}")
+
+    if not tar_path.exists():
+        errors.append(f"tarball missing at {tar_path.name}")
+        return DrillResult(
+            backup_id=backup_id, install_id=install_id, kind=kind,
+            size_bytes=size_bytes, members_count=0,
+            has_install_record=False, has_minio_data=False,
+            install_record_ok=False, ok=False, errors=errors,
+            drilled_at=time.time(),
+        )
+
+    try:
+        with tarfile.open(tar_path, mode="r:gz") as tar:
+            for member in tar:
+                members_count += 1
+                if member.name == "install_record.json":
+                    has_install_record = True
+                    # Cap on install_record.json — realistically a few KB.
+                    # Without this, a corrupted tarball could OOM the worker
+                    # via an unbounded `f.read()`. Codex-flagged 2026-05-17.
+                    _INSTALL_RECORD_MAX_BYTES = 1 * 1024 * 1024  # 1 MB
+                    if int(getattr(member, "size", 0) or 0) > _INSTALL_RECORD_MAX_BYTES:
+                        errors.append(
+                            f"install_record.json suspiciously large "
+                            f"({member.size} bytes) — refusing to read"
+                        )
+                    else:
+                        try:
+                            f = tar.extractfile(member)
+                            if f is None:
+                                errors.append("install_record.json is not a regular file")
+                            else:
+                                raw = f.read(_INSTALL_RECORD_MAX_BYTES + 1).decode("utf-8")
+                                if len(raw) > _INSTALL_RECORD_MAX_BYTES:
+                                    errors.append(
+                                        "install_record.json exceeded read cap"
+                                    )
+                                else:
+                                    doc = json.loads(raw)
+                                    if doc.get("install_id") != install_id:
+                                        errors.append(
+                                            f"install_record.json install_id mismatch: "
+                                            f"got {doc.get('install_id')!r}, want {install_id!r}"
+                                        )
+                                    else:
+                                        install_record_ok = True
+                        except Exception as e:
+                            errors.append(
+                                f"install_record.json parse failed: {type(e).__name__}: {e}"
+                            )
+                elif member.name.startswith("minio_data/"):
+                    has_minio_data = True
+    except tarfile.TarError as e:
+        errors.append(f"tar open/iter failed: {type(e).__name__}: {e}")
+    except OSError as e:
+        errors.append(f"tar I/O failed: {type(e).__name__}: {e}")
+
+    if not has_install_record and not errors:
+        errors.append("tarball missing install_record.json")
+    if kind == "full" and not has_minio_data and not errors:
+        errors.append("kind=full but tarball has no minio_data/ tree")
+
+    return DrillResult(
+        backup_id=backup_id,
+        install_id=install_id,
+        kind=kind,
+        size_bytes=size_bytes,
+        members_count=members_count,
+        has_install_record=has_install_record,
+        has_minio_data=has_minio_data,
+        install_record_ok=install_record_ok,
+        ok=(not errors),
+        errors=errors,
+        drilled_at=time.time(),
+    )
+
+
+async def verify_backup(install_id: str, backup_id: str) -> DrillResult:
+    """Non-destructive backup integrity check. Returns a DrillResult."""
+    return await asyncio.to_thread(_verify_sync, install_id, backup_id)
+
+
+async def verify_latest_backups() -> list[DrillResult]:
+    """Verify the most recent backup for every install that has at least
+    one. Returns the per-install DrillResult list (empty when no backups
+    exist anywhere on disk)."""
+    out: list[DrillResult] = []
+    if not _BACKUPS_ROOT.exists():
+        return out
+    for install_dir in sorted(_BACKUPS_ROOT.iterdir()):
+        if not install_dir.is_dir():
+            continue
+        install_id = install_dir.name
+        try:
+            records = await list_backups(install_id)
+        except Exception:
+            _log.exception("list_backups failed for %s", install_id)
+            continue
+        if not records:
+            continue
+        # list_backups returns sidecars in glob order — pick newest by created_at.
+        latest = max(records, key=lambda r: r.created_at)
+        try:
+            result = await verify_backup(install_id, latest.backup_id)
+        except Exception as e:
+            result = DrillResult(
+                backup_id=latest.backup_id,
+                install_id=install_id,
+                kind=latest.kind,
+                size_bytes=latest.size_bytes,
+                members_count=0,
+                has_install_record=False, has_minio_data=False,
+                install_record_ok=False, ok=False,
+                errors=[f"verify raised: {type(e).__name__}: {e}"],
+                drilled_at=time.time(),
+            )
+        out.append(result)
+        if result.ok:
+            _emit(install_id,
+                  f"[dr-drill] backup {latest.backup_id[:12]} OK "
+                  f"(kind={result.kind}, {result.members_count} members)")
+        else:
+            _emit(install_id,
+                  f"[dr-drill] backup {latest.backup_id[:12]} FAILED: "
+                  f"{'; '.join(result.errors[:3])}",
+                  stream="stderr")
+    return out
+
+
+_DRILL_LOG = logging.getLogger("lhs.backup.dr-drill")
+_DRILL_INTERVAL_ENV = "LHS_DR_DRILL_INTERVAL_SECONDS"
+_DRILL_ENABLED_ENV = "LHS_DR_DRILL_ENABLED"
+_DRILL_DEFAULT_INTERVAL = 604800.0  # one week
+
+
+def is_drill_enabled() -> bool:
+    raw = os.environ.get(_DRILL_ENABLED_ENV)
+    if not raw:
+        return False
+    return raw.strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _drill_interval_seconds() -> float:
+    raw = os.environ.get(_DRILL_INTERVAL_ENV)
+    if not raw:
+        return _DRILL_DEFAULT_INTERVAL
+    try:
+        n = float(raw.strip())
+    except ValueError:
+        _DRILL_LOG.warning(
+            "invalid %s=%r; falling back to %d",
+            _DRILL_INTERVAL_ENV, raw, int(_DRILL_DEFAULT_INTERVAL),
+        )
+        return _DRILL_DEFAULT_INTERVAL
+    if n <= 0:
+        _DRILL_LOG.warning(
+            "%s=%s must be > 0; falling back to %d",
+            _DRILL_INTERVAL_ENV, n, int(_DRILL_DEFAULT_INTERVAL),
+        )
+        return _DRILL_DEFAULT_INTERVAL
+    return n
+
+
+class BackupDrillScheduler:
+    """Periodic non-destructive backup integrity verifier.
+
+    Mirrors the AuditSubscriber/RetentionScheduler shape. Opt-in via
+    LHS_DR_DRILL_ENABLED. Per-iteration exceptions are caught so a single
+    bad backup can't crash the loop."""
+
+    def __init__(self) -> None:
+        self._task: Optional[asyncio.Task] = None
+        self._stop = asyncio.Event()
+
+    async def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        self._stop.clear()
+        self._task = asyncio.create_task(self._run(), name="backup-dr-drill")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.sleep(_drill_interval_seconds())
+            except asyncio.CancelledError:
+                raise
+            if self._stop.is_set():
+                break
+            try:
+                results = await verify_latest_backups()
+                bad = [r for r in results if not r.ok]
+                _DRILL_LOG.info(
+                    "dr-drill verified %d backups (%d failed)",
+                    len(results), len(bad),
+                )
+            except Exception:
+                _DRILL_LOG.exception("dr-drill iteration failed")
+
+
+_GLOBAL_DRILL_SCHEDULER: Optional[BackupDrillScheduler] = None
+
+
+def get_drill_scheduler() -> BackupDrillScheduler:
+    """Lazy singleton accessor for the DR drill scheduler."""
+    global _GLOBAL_DRILL_SCHEDULER
+    if _GLOBAL_DRILL_SCHEDULER is None:
+        _GLOBAL_DRILL_SCHEDULER = BackupDrillScheduler()
+    return _GLOBAL_DRILL_SCHEDULER
+
+
+def reset_drill_scheduler_for_tests() -> None:
+    global _GLOBAL_DRILL_SCHEDULER
+    _GLOBAL_DRILL_SCHEDULER = None
