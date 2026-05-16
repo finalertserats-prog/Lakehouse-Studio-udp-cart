@@ -212,6 +212,15 @@ class StateStore:
             rec.updated_at = time.time()
             self._persist_locked()
 
+    def delete(self, install_id: str) -> bool:
+        """Permanently remove an install record. Returns True if it existed."""
+        with self._lock:
+            existed = install_id in self._records
+            self._records.pop(install_id, None)
+            if existed:
+                self._persist_locked(force=True)
+            return existed
+
     def set_outputs(self, install_id: str, outputs: dict) -> None:
         with self._lock:
             rec = self._records.get(install_id)

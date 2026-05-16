@@ -964,6 +964,11 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       <button class="ops-btn btn-ghost text-sm" data-action="smoke">Re-run smoke test</button>
       <button class="ops-btn btn-ghost text-sm" data-action="stop">Stop stack</button>
       <button class="ops-btn btn-ghost text-sm" data-action="clean" style="border-color: rgba(244,63,94,0.4); color: #fca5a5;">Clean (destroy volumes)</button>
+      <div class="flex-1"></div>
+      <button id="btn-uninstall" class="text-sm px-3 py-1.5 rounded font-medium"
+        style="background: rgba(244,63,94,0.15); border: 1px solid rgba(244,63,94,0.45); color: #fca5a5;">
+        ⊘ Uninstall and forget
+      </button>
     </div>
     <div id="ops-output" class="terminal p-4 mt-3 text-xs mono whitespace-pre-wrap min-h-[60px] text-slate-300"></div>
   </section>
@@ -2260,6 +2265,53 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       const r = await api(`/api/installs/${state.installId}/sql`, { method: "POST", body: JSON.stringify({ sql }) });
       renderQueryResult(out, r);
     } catch (e) { out.innerHTML = `<div class="text-rose-400">${esc(e.message)}</div>`; }
+  });
+
+  // ----- uninstall (destructive — two-step confirm) -----
+  document.getElementById("btn-uninstall").addEventListener("click", async () => {
+    if (!state.installId) return;
+    const name = state.installRecord?.lake_name || "this lakehouse";
+    // Step 1: data-loss confirm
+    const ok1 = confirm(
+      `Uninstall "${name}"?\n\n` +
+      `This will:\n` +
+      `  · run ./udp clean (stop containers + delete Docker volumes)\n` +
+      `  · remove the cloned UDP repo from disk\n` +
+      `  · archive evidence files to evidence/.archive/\n` +
+      `  · delete this install from Studio\n\n` +
+      `All lakehouse data will be LOST.`
+    );
+    if (!ok1) return;
+    // Step 2: type-the-name confirm for the truly irreversible bit
+    const confirmName = prompt(
+      `Type "${name}" exactly to confirm uninstall:`,
+      ""
+    );
+    if (confirmName !== name) {
+      if (confirmName !== null) showToast("Name didn't match — uninstall cancelled.", "warn");
+      return;
+    }
+    const out = document.getElementById("ops-output");
+    out.textContent = "> uninstalling…";
+    try {
+      // Keep WS open so we see the per-step events
+      openLogStream(state.installId);
+      const r = await api(`/api/installs/${state.installId}/uninstall`, { method: "POST" });
+      out.innerHTML = `<div class="text-emerald-300">✓ ${esc(name)} uninstalled.</div>` +
+        (r.steps || []).map(s => {
+          const cls = s.status === "passed" ? "text-emerald-400" : s.status === "warning" ? "text-amber-400" : s.status === "failed" ? "text-rose-400" : "text-slate-500";
+          const icon = s.status === "passed" ? "✓" : s.status === "warning" ? "⚠" : s.status === "failed" ? "✗" : "·";
+          return `<div class="${cls}">${icon} ${esc(s.name)} — ${esc(s.status)}${s.detail ? ': ' + esc(s.detail) : ''}</div>`;
+        }).join("");
+      showToast(`${name} uninstalled — install removed from Studio.`, "info");
+      // Reset state and bounce to welcome after a beat
+      state.installId = null;
+      state.installRecord = null;
+      state._confettiFired = false;
+      setTimeout(() => navigate("welcome"), 2500);
+    } catch (e) {
+      out.innerHTML = `<div class="text-rose-400">${esc(e.message)}</div>`;
+    }
   });
 
   // ----- ops -----

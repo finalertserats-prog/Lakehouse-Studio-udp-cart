@@ -416,6 +416,25 @@ async def post_step_skip(install_id: str, body: StepActionRequest):
     return {"skipped": body.step_id, "resumed_at": next_id}
 
 
+@app.post("/api/installs/{install_id}/uninstall", dependencies=[AuthDep])
+async def post_uninstall(install_id: str):
+    """Full uninstall: wipe the deployed stack AND remove from Studio.
+    Order: docker clean → archive evidence → rm install_dir → delete record."""
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    try:
+        m = load_manifest(rec.stack_id)
+    except KeyError:
+        raise HTTPException(404, "stack not found")
+    from .uninstall import uninstall as _do_uninstall, UninstallError
+    try:
+        result = await _do_uninstall(install_id, m, RUNNING_STATES, _INSTALL_TASKS)
+    except UninstallError as e:
+        raise HTTPException(409, str(e))
+    return result
+
+
 @app.post("/api/installs/{install_id}/steps/rollback", dependencies=[AuthDep])
 async def post_step_rollback(install_id: str):
     """Run ./udp clean to tear down the stack and remove volumes."""
