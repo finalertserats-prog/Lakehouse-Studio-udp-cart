@@ -506,3 +506,377 @@ async def ask(req: ChatRequest) -> ChatResponse:
         suggested_actions=actions,
         model=MODEL_NAME,
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-component recommendation (basic LLM-grounded; no ML)
+#
+# A focused, single-component variant of `ask()` for the cart UI: given one
+# component the operator is hovering / considering, return a structured
+# recommendation grounded in the component catalog entry, sibling alternates
+# in the same category, and any lock-file incompatibilities. No corpus,
+# no embeddings — just the catalog + the user's optional context.
+# ---------------------------------------------------------------------------
+
+
+class ComponentRecommendationRequest(BaseModel):
+    component_id: str = Field(min_length=1, max_length=128)
+    # Optional user context — all heuristic, all forwarded to the prompt.
+    size_tier: Optional[Literal["minimal", "recommended", "comfortable"]] = None
+    goal: Optional[str] = Field(default=None, max_length=128)
+    cart: Optional[list[str]] = None
+    # Capped free-text "what are you trying to do" hint. Pure pass-through.
+    notes: Optional[str] = Field(default=None, max_length=600)
+
+
+class ComponentRecommendation(BaseModel):
+    component_id: str
+    verdict: Literal["good_fit", "consider_alternate", "warn", "unknown"]
+    headline: str
+    rationale: str
+    alternates: list[dict[str, str]] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
+    confidence: Literal["high", "medium", "low"] = "medium"
+    model: Optional[str] = None
+
+
+def _siblings(component_id: str) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
+    """Return (this_component, siblings_in_same_category). Raises only on
+    catalog load failure — unknown component returns (None, [])."""
+    from .catalog import component_index  # local import — keeps module load cheap
+
+    idx = component_index()
+    target = idx.get(component_id)
+    if target is None:
+        return None, []
+    cat_id = target.get("category_id")
+    siblings = [
+        c for cid, c in idx.items()
+        if cid != component_id and c.get("category_id") == cat_id
+    ]
+    return target, siblings
+
+
+def _component_card(c: dict[str, Any]) -> str:
+    """One-line description of a component for the prompt."""
+    flags: list[str] = []
+    if c.get("recommended"):
+        flags.append("recommended")
+    if c.get("compatible"):
+        flags.append("compatible")
+    if c.get("coming_soon"):
+        flags.append("coming_soon")
+    flag_str = f" [{', '.join(flags)}]" if flags else ""
+    name = c.get("name") or c.get("id")
+    version = c.get("version") or ""
+    tagline = (c.get("tagline") or "")[:120]
+    bits = [f"- {c.get('id')} ({name})"]
+    if version:
+        bits.append(f"v{version}")
+    bits.append(flag_str.strip())
+    if tagline:
+        bits.append(f"— {tagline}")
+    return " ".join(b for b in bits if b)
+
+
+def _incompat_for_component(component_id: str) -> list[tuple[str, str]]:
+    """Pull (stack_id, reason) tuples for any incompatible-combination
+    entries across known lock files that name this component. Best-effort —
+    silently swallows lock load errors so a malformed lock can't crash the
+    recommender."""
+    out: list[tuple[str, str]] = []
+    try:
+        for sid in list_locks():
+            try:
+                lock = lock_summary(sid) or {}
+            except Exception:
+                continue
+            for entry in lock.get("incompatible") or []:
+                combo = entry.get("combination") or []
+                if any(component_id == _strip_tag(c) for c in combo):
+                    reason = (entry.get("reason") or "")[:200]
+                    out.append((sid, f"{' + '.join(combo)} :: {reason}"))
+    except Exception:
+        return out
+    return out
+
+
+def _strip_tag(combo_entry: str) -> str:
+    """`trino:latest` → `trino`. Combo entries in lock files mix bare ids
+    and image:tag references; we match on the bare id."""
+    if not isinstance(combo_entry, str):
+        return ""
+    return combo_entry.split(":", 1)[0]
+
+
+_RECOMMEND_SYSTEM_PROMPT_TEMPLATE = """You are "Studio Recommender", a focused \
+helper that gives the operator a one-page take on whether a specific component \
+fits their stack. You are NOT the chat assistant — keep this answer crisp.
+
+GROUNDING RULES:
+1. Answer ONLY from the SNAPSHOT below. Do NOT invent alternates that aren't \
+   listed. Do NOT invent version numbers, capabilities, or constraints.
+2. If the snapshot doesn't support a verdict, return verdict "unknown" and \
+   say what additional context would help.
+3. Be explicit about trade-offs — the operator is the decision-maker.
+
+OUTPUT FORMAT (STRICT JSON, no prose around it):
+{{
+  "verdict": "good_fit" | "consider_alternate" | "warn" | "unknown",
+  "headline": "<one sentence, <= 120 chars>",
+  "rationale": "<2-4 sentences, plain prose, no markdown>",
+  "alternates": [
+    {{"component_id": "<id>", "why": "<one line, <= 140 chars>"}}
+  ]
+}}
+
+- verdict "good_fit" — recommended choice for this context
+- verdict "consider_alternate" — workable, but a sibling is a better match
+- verdict "warn" — known incompatibility or risk in this context
+- verdict "unknown" — snapshot is too sparse to commit
+- "alternates" is at most 3, ordered best-first; omit entirely if none apply
+
+=========================== SNAPSHOT ===========================
+
+## Component in scope
+{component_card}
+
+## Siblings in the same category
+{siblings_block}
+
+## Operator context
+size_tier: {size_tier}
+goal: {goal}
+cart: {cart}
+notes: {notes}
+
+## Relevant lock-file incompatibilities (component name appears in combination)
+{incompat_block}
+
+## Compatibility policy excerpt
+{compat_doc}
+
+============================ END SNAPSHOT ============================
+"""
+
+
+def _build_recommend_prompt(
+    req: ComponentRecommendationRequest,
+) -> tuple[str, list[Citation], Optional[dict[str, Any]]]:
+    """Returns (system_prompt, citations, target_component_or_None)."""
+    target, siblings = _siblings(req.component_id)
+    citations: list[Citation] = []
+    if target is None:
+        component_card = f"(no component '{req.component_id}' in catalog)"
+        siblings_block = "(unknown component — no siblings)"
+        incompat_block = "(skipped)"
+    else:
+        component_card = _component_card(target)
+        siblings_block = (
+            "\n".join(_component_card(s) for s in siblings[:10])
+            or "(no siblings in this category)"
+        )
+        incompat_entries = _incompat_for_component(req.component_id)
+        if incompat_entries:
+            incompat_block = "\n".join(
+                f"  - (lock {sid}) {detail}" for sid, detail in incompat_entries[:8]
+            )
+            for sid, _ in incompat_entries[:4]:
+                citations.append(Citation(
+                    kind="lock", label=f"lock:{sid}",
+                    detail="incompatibility match"
+                ))
+        else:
+            incompat_block = "(none for this component in any loaded lock)"
+        citations.append(Citation(
+            kind="install_state",
+            label=f"catalog:{req.component_id}",
+            detail=f"category={target.get('category_id')}",
+        ))
+
+    compat_doc = _load_compat_doc()
+    if compat_doc:
+        citations.append(Citation(
+            kind="doc", label="doc:COMPATIBILITY.md",
+            detail=f"{len(compat_doc)} chars loaded",
+        ))
+
+    prompt = _RECOMMEND_SYSTEM_PROMPT_TEMPLATE.format(
+        component_card=component_card,
+        siblings_block=siblings_block,
+        size_tier=req.size_tier or "(unset)",
+        goal=req.goal or "(unset)",
+        cart=", ".join(req.cart) if req.cart else "(empty)",
+        notes=redact(req.notes) if req.notes else "(none)",
+        incompat_block=incompat_block,
+        compat_doc=compat_doc[:4096] if compat_doc else "(unavailable)",
+    )
+    return prompt, citations, target
+
+
+def _disabled_recommendation(component_id: str) -> ComponentRecommendation:
+    return ComponentRecommendation(
+        component_id=component_id,
+        verdict="unknown",
+        headline="AI recommender disabled",
+        rationale=(
+            "Set ANTHROPIC_API_KEY (and pip install anthropic>=0.40.0) on the "
+            "Studio server to enable per-component recommendations. The "
+            "catalog still shows the component and its siblings."
+        ),
+        alternates=[],
+        citations=[],
+        confidence="low",
+        model=None,
+    )
+
+
+def _parse_recommend_json(text: str) -> Optional[dict[str, Any]]:
+    """Best-effort: extract the first JSON object from the model output."""
+    import json as _json
+    import re as _re
+    if not text:
+        return None
+    try:
+        return _json.loads(text)
+    except _json.JSONDecodeError:
+        pass
+    m = _re.search(r"\{.*\}", text, _re.DOTALL)
+    if not m:
+        return None
+    try:
+        return _json.loads(m.group(0))
+    except _json.JSONDecodeError:
+        return None
+
+
+async def recommend_component(
+    req: ComponentRecommendationRequest,
+) -> ComponentRecommendation:
+    """One-shot, single-component recommendation. Grounded in the catalog
+    entry + siblings + lock-file incompatibilities + the operator's context."""
+    if not is_enabled():
+        return _disabled_recommendation(req.component_id)
+
+    try:
+        system_prompt, citations, target = _build_recommend_prompt(req)
+    except Exception as e:
+        log.exception("ai recommend: prompt build failed: %s", e)
+        return ComponentRecommendation(
+            component_id=req.component_id,
+            verdict="unknown",
+            headline="Couldn't assemble grounded prompt",
+            rationale=f"{type(e).__name__} while loading catalog or lock files. "
+                      "Retry once; if it persists check /healthz.",
+            alternates=[], citations=[], confidence="low", model=None,
+        )
+
+    # Unknown component → short-circuit before paying for an LLM call.
+    if target is None:
+        return ComponentRecommendation(
+            component_id=req.component_id,
+            verdict="unknown",
+            headline=f"Component '{req.component_id}' is not in the catalog",
+            rationale=(
+                "Studio's component catalog does not contain this id. Check "
+                "the spelling against /api/catalog or add the component to "
+                "stacks/components-catalog.yaml before requesting a recommendation."
+            ),
+            alternates=[], citations=citations,
+            confidence="high", model=None,
+        )
+
+    try:
+        import anthropic  # type: ignore
+    except ImportError:
+        return _disabled_recommendation(req.component_id)
+
+    try:
+        client = anthropic.AsyncAnthropic(
+            api_key=os.environ["ANTHROPIC_API_KEY"],
+            timeout=_RESPONSE_TIMEOUT_SEC,
+        )
+        resp = await client.messages.create(
+            model=MODEL_NAME,
+            # Recommendations are small — cap tighter than chat.
+            max_tokens=min(_MAX_OUTPUT_TOKENS, 500),
+            system=system_prompt,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Recommend on component '{req.component_id}' for the operator. "
+                    "Reply with ONLY the JSON object specified in the system prompt — "
+                    "no prose around it."
+                ),
+            }],
+        )
+    except Exception as e:
+        log.warning("ai recommend: Anthropic call failed: %s: %s",
+                    type(e).__name__, e)
+        return ComponentRecommendation(
+            component_id=req.component_id,
+            verdict="unknown",
+            headline="AI recommender temporarily unavailable",
+            rationale=f"Upstream error ({type(e).__name__}). Retry in a moment; "
+                      "Studio's other features are unaffected.",
+            alternates=[], citations=citations,
+            confidence="low", model=MODEL_NAME,
+        )
+
+    raw_text = ""
+    try:
+        for block in resp.content:
+            if getattr(block, "type", "") == "text":
+                raw_text += getattr(block, "text", "")
+    except Exception:
+        pass
+
+    parsed = _parse_recommend_json(raw_text)
+    if not isinstance(parsed, dict):
+        return ComponentRecommendation(
+            component_id=req.component_id,
+            verdict="unknown",
+            headline="Model returned malformed JSON",
+            rationale=(raw_text[:400] or "Empty response from model.").strip(),
+            alternates=[], citations=citations,
+            confidence="low", model=MODEL_NAME,
+        )
+
+    verdict_raw = str(parsed.get("verdict") or "").strip().lower()
+    verdict: Literal["good_fit", "consider_alternate", "warn", "unknown"] = (
+        verdict_raw  # type: ignore[assignment]
+        if verdict_raw in {"good_fit", "consider_alternate", "warn", "unknown"}
+        else "unknown"
+    )
+    headline = str(parsed.get("headline") or "").strip()[:160]
+    rationale = str(parsed.get("rationale") or "").strip()[:1200]
+
+    alternates_raw = parsed.get("alternates") or []
+    sibling_ids = {s.get("id") for s in _siblings(req.component_id)[1]}
+    alternates: list[dict[str, str]] = []
+    if isinstance(alternates_raw, list):
+        for entry in alternates_raw[:3]:
+            if not isinstance(entry, dict):
+                continue
+            aid = str(entry.get("component_id") or "").strip()
+            why = str(entry.get("why") or "").strip()[:200]
+            # Guard against the model inventing an id not in the catalog.
+            if aid and aid in sibling_ids:
+                alternates.append({"component_id": aid, "why": why})
+
+    # Confidence: high if we have a real verdict + at least one citation
+    # the model could ground on; medium if no incompatibilities surfaced.
+    confidence: Literal["high", "medium", "low"] = (
+        "high" if verdict != "unknown" and citations else "medium"
+    )
+
+    return ComponentRecommendation(
+        component_id=req.component_id,
+        verdict=verdict,
+        headline=headline or "(no headline)",
+        rationale=rationale or "(no rationale)",
+        alternates=alternates,
+        citations=citations,
+        confidence=confidence,
+        model=MODEL_NAME,
+    )
