@@ -385,6 +385,82 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 999px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
+
+    /* ---------------- V0.4 CARDS (collapsible) ---------------- */
+    .chevron {
+      display: inline-block; transition: transform .2s ease;
+      color: var(--ink-dim); font-size: 18px; line-height: 1;
+    }
+    .chevron.open { transform: rotate(180deg); color: var(--cyan); }
+    .card-head { user-select: none; }
+    .card-head:hover .chevron { color: var(--cyan); }
+    .v04-table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+    }
+    .v04-table th, .v04-table td {
+      padding: 10px 12px; text-align: left;
+      border-bottom: 1px solid var(--hairline);
+      color: var(--ink);
+    }
+    .v04-table th {
+      font-weight: 600; color: var(--ink-dim);
+      text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em;
+      background: rgba(255,255,255,0.02);
+    }
+    .v04-table tr:last-child td { border-bottom: none; }
+    .v04-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .v04-empty {
+      text-align: center; padding: 32px 16px;
+      color: var(--ink-faint); font-size: 13px;
+      border: 1px dashed var(--hairline); border-radius: 12px;
+    }
+    .v04-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+    }
+    .v04-badge.ok    { background: rgba(52,211,153,0.12); color: #6ee7b7; border: 1px solid rgba(52,211,153,0.3); }
+    .v04-badge.warn  { background: rgba(245,158,11,0.12); color: #fcd34d; border: 1px solid rgba(245,158,11,0.3); }
+    .v04-badge.err   { background: rgba(244,63,94,0.12);  color: #fda4af; border: 1px solid rgba(244,63,94,0.3); }
+    .v04-badge.info  { background: rgba(34,211,238,0.12); color: #67e8f9; border: 1px solid rgba(34,211,238,0.3); }
+
+    /* Tree view for tables explorer */
+    .tree-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border-radius: 8px;
+      cursor: pointer; transition: background .15s ease;
+      color: var(--ink);
+    }
+    .tree-row:hover { background: rgba(255,255,255,0.04); }
+    .tree-row.active { background: rgba(34,211,238,0.10); color: #67e8f9; }
+    .tree-ns { font-weight: 600; color: var(--ink-dim); padding-left: 4px; }
+    .tree-tbl { font-family: 'JetBrains Mono', monospace; padding-left: 24px; font-size: 13px; }
+
+    /* Drop zone */
+    .drop-zone {
+      border: 2px dashed var(--hairline-2);
+      border-radius: 14px; padding: 28px;
+      text-align: center; transition: all .2s ease;
+      cursor: pointer; background: rgba(255,255,255,0.02);
+    }
+    .drop-zone.drag { border-color: var(--cyan); background: rgba(34,211,238,0.06); }
+
+    /* Password strength meter */
+    .pwd-meter {
+      height: 6px; border-radius: 999px; background: rgba(255,255,255,0.06);
+      overflow: hidden; margin-top: 6px;
+    }
+    .pwd-meter-fill {
+      height: 100%; transition: width .25s ease, background .25s ease;
+      border-radius: 999px;
+    }
+
+    /* Confirm modal */
+    .v04-modal {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(7,6,26,0.78); backdrop-filter: blur(8px);
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
   </style>
 </head>
 <body>
@@ -531,6 +607,7 @@
     <nav class="flex items-center gap-1 text-sm">
       <button data-nav="welcome"  class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Home</button>
       <button data-nav="installs" class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Installs</button>
+      <button data-nav="settings" class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Settings</button>
       <a href="https://github.com/finalertserats-prog/Lakehouse-Studio-udp-cart" target="_blank" class="px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200">GitHub <span class="text-xs">↗</span></a>
     </nav>
   </div>
@@ -989,6 +1066,188 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     </div>
     <div id="sql-editor-result" class="terminal p-5 mb-8 text-xs mono min-h-[80px] text-slate-300 overflow-x-auto"></div>
 
+    <!-- ============== V0.4 CARDS ============== -->
+    <h3 class="display-3 mb-4 mt-8">Stack operations <span class="text-sm font-normal text-slate-400 ml-2">(v0.4)</span></h3>
+
+    <!-- 1. Backups & restore (expanded by default) -->
+    <div class="glass p-5 mb-4" data-card="backups">
+      <div class="card-head flex items-center justify-between cursor-pointer" onclick="toggleCard(this, 'backups')">
+        <h3 class="display-3 flex items-center gap-3">
+          Backups &amp; restore
+          <span id="backups-count-badge" class="v04-badge info hidden"></span>
+        </h3>
+        <span class="chevron open">&#9662;</span>
+      </div>
+      <div class="card-body mt-4">
+        <div class="flex flex-wrap items-center gap-3 mb-4">
+          <label class="text-xs text-slate-400 mono">kind</label>
+          <select id="backup-kind-select" class="input mono text-sm" style="width: auto; padding: 6px 12px;">
+            <option value="metadata">metadata (fast, schemas only)</option>
+            <option value="full">full (data + metadata)</option>
+          </select>
+          <button id="btn-create-backup" class="btn-primary text-sm">Create backup</button>
+          <button id="btn-refresh-backups" class="btn-ghost text-sm">&#8635; Refresh</button>
+        </div>
+        <div id="backups-error" class="text-xs text-rose-300 mb-2 hidden"></div>
+        <div id="backups-list">
+          <div class="v04-empty">Loading backups&#8230;</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Updates available (collapsed) -->
+    <div class="glass p-5 mb-4" data-card="upgrades">
+      <div class="card-head flex items-center justify-between cursor-pointer" onclick="toggleCard(this, 'upgrades')">
+        <h3 class="display-3 flex items-center gap-3">
+          Updates available
+          <span id="upgrades-count-badge" class="v04-badge warn hidden">0</span>
+        </h3>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="card-body mt-4 hidden">
+        <div class="flex items-center gap-3 mb-4">
+          <button id="btn-refresh-upgrades" class="btn-ghost text-sm">&#8635; Refresh</button>
+          <span class="text-xs text-slate-500">Execute coming in v0.4.1</span>
+        </div>
+        <div id="upgrades-error" class="text-xs text-rose-300 mb-2 hidden"></div>
+        <div id="upgrades-list">
+          <div class="v04-empty">Click Refresh to check for updates.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. Tables explorer (collapsed) -->
+    <div class="glass p-5 mb-4" data-card="tables">
+      <div class="card-head flex items-center justify-between cursor-pointer" onclick="toggleCard(this, 'tables')">
+        <h3 class="display-3">Lakehouse tables</h3>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="card-body mt-4 hidden">
+        <div class="flex items-center gap-3 mb-4">
+          <button id="btn-refresh-tables" class="btn-ghost text-sm">&#8635; Refresh</button>
+          <span class="text-xs text-slate-500">Cached for 30s server-side</span>
+        </div>
+        <div id="tables-error" class="text-xs text-rose-300 mb-2 hidden"></div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div id="tables-tree" class="glass-strong p-3 md:col-span-1 min-h-[200px]">
+            <div class="v04-empty">Loading&#8230;</div>
+          </div>
+          <div id="tables-detail" class="glass-strong p-4 md:col-span-2 min-h-[200px]">
+            <div class="v04-empty">Select a table from the tree to view details.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. Data ingest (collapsed) -->
+    <div class="glass p-5 mb-4" data-card="ingest">
+      <div class="card-head flex items-center justify-between cursor-pointer" onclick="toggleCard(this, 'ingest')">
+        <h3 class="display-3">Upload data</h3>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="card-body mt-4 hidden">
+        <div id="ingest-error" class="text-xs text-rose-300 mb-2 hidden"></div>
+        <div id="ingest-dropzone" class="drop-zone mb-4">
+          <input id="ingest-file-input" type="file" accept=".csv" class="hidden" />
+          <div class="text-slate-300 text-sm mb-1">Drop a CSV file here, or <span class="grad-text font-semibold">click to browse</span></div>
+          <div class="text-xs text-slate-500">CSV only for v0.4 &middot; up to 100 MB</div>
+        </div>
+        <div id="ingest-preview" class="hidden">
+          <div class="text-xs text-slate-400 mb-2 mono">
+            File: <span id="ingest-filename" class="text-slate-200"></span>
+            &middot; <span id="ingest-filesize" class="text-slate-200"></span>
+            &middot; <span id="ingest-upload-id" class="text-cyan-300"></span>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div>
+              <label class="text-xs text-slate-400 mono block mb-1">Target database</label>
+              <input id="ingest-target-db" class="input mono text-sm" placeholder="e.g. app_analytics" />
+            </div>
+            <div>
+              <label class="text-xs text-slate-400 mono block mb-1">Target table</label>
+              <input id="ingest-target-tbl" class="input mono text-sm" placeholder="e.g. customers" />
+            </div>
+          </div>
+          <div class="mb-4">
+            <div class="text-xs text-slate-400 mono mb-2">Schema preview (edit types if needed)</div>
+            <div id="ingest-schema-table" class="glass-strong p-3 overflow-x-auto"></div>
+          </div>
+          <div class="flex items-center gap-3">
+            <button id="btn-ingest-start" class="btn-primary text-sm">Ingest</button>
+            <button id="btn-ingest-reset" class="btn-ghost text-sm">Cancel</button>
+            <span id="ingest-job-status" class="text-xs mono text-slate-400"></span>
+          </div>
+        </div>
+        <div id="ingest-jobs" class="mt-4"></div>
+      </div>
+    </div>
+
+    <!-- 5. Security & TLS (collapsed) -->
+    <div class="glass p-5 mb-6" data-card="security">
+      <div class="card-head flex items-center justify-between cursor-pointer" onclick="toggleCard(this, 'security')">
+        <h3 class="display-3">Security &amp; TLS</h3>
+        <span class="chevron">&#9662;</span>
+      </div>
+      <div class="card-body mt-4 hidden">
+        <!-- Password rotation -->
+        <div class="mb-6">
+          <h4 class="font-display font-semibold text-slate-200 mb-2">Password rotation</h4>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            <div>
+              <label class="text-xs text-slate-400 mono block mb-1">Service</label>
+              <select id="sec-svc-select" class="input mono text-sm">
+                <option value="minio">minio</option>
+                <option value="starrocks">starrocks</option>
+              </select>
+            </div>
+            <div class="md:col-span-2">
+              <label class="text-xs text-slate-400 mono block mb-1">New password</label>
+              <input id="sec-new-pwd" type="password" class="input mono text-sm" placeholder="enter a strong password" autocomplete="new-password" />
+              <div class="pwd-meter"><div id="sec-pwd-fill" class="pwd-meter-fill" style="width:0%; background:#64748b;"></div></div>
+              <div id="sec-pwd-label" class="text-xs mt-1 text-slate-500 mono">strength: &mdash;</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-3 mb-3">
+            <button id="btn-rotate-pwd" class="btn-primary text-sm">Rotate</button>
+            <button id="btn-toggle-pwd" class="btn-ghost text-sm">Show</button>
+          </div>
+          <div id="sec-rotate-hint" class="text-xs text-amber-200/80"></div>
+          <div id="sec-rotate-result" class="text-xs mono mt-2"></div>
+        </div>
+
+        <!-- TLS certs -->
+        <div>
+          <h4 class="font-display font-semibold text-slate-200 mb-2">TLS certificates</h4>
+          <div class="text-xs text-slate-500 mb-3">Let&rsquo;s Encrypt is <span class="v04-badge warn">v0.4.1 &mdash; pending Caddy sidecar</span></div>
+          <div class="glass-strong p-4 mb-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+              <div>
+                <label class="text-xs text-slate-400 mono block mb-1">Domain (CN)</label>
+                <input id="tls-domain" class="input mono text-sm" placeholder="e.g. lake.local" />
+              </div>
+              <div>
+                <label class="text-xs text-slate-400 mono block mb-1">Valid days</label>
+                <input id="tls-valid-days" type="number" min="1" max="3650" value="365" class="input mono text-sm" />
+              </div>
+              <div>
+                <label class="text-xs text-slate-400 mono block mb-1">Key size</label>
+                <select id="tls-key-size" class="input mono text-sm">
+                  <option value="2048">2048</option>
+                  <option value="4096" selected>4096</option>
+                </select>
+              </div>
+            </div>
+            <button id="btn-tls-generate" class="btn-primary text-sm">Generate self-signed cert</button>
+            <div id="tls-gen-result" class="text-xs mono mt-2"></div>
+          </div>
+          <div id="tls-error" class="text-xs text-rose-300 mb-2 hidden"></div>
+          <div id="tls-list">
+            <div class="v04-empty">Loading certificates&#8230;</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <h3 class="display-3 mb-4 mt-2">Day-2 operations</h3>
     <div class="glass p-4 flex flex-wrap gap-2">
       <button class="ops-btn btn-ghost text-sm" data-action="status">Status</button>
@@ -1011,6 +1270,30 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       <p class="text-slate-400 mt-2">History of installs Studio has driven on this machine.</p>
     </div>
     <div id="installs-list" class="space-y-2"></div>
+  </section>
+
+  <!-- ============== SETTINGS (v0.4) ============== -->
+  <section id="screen-settings" class="screen hidden fade-up">
+    <div class="mb-8">
+      <h2 class="display-2 grad-text-soft inline-block">Settings</h2>
+      <p class="text-slate-400 mt-2">Studio-wide configuration. Per-stack settings live on the success screen.</p>
+    </div>
+
+    <!-- Alerts subsection -->
+    <div class="glass p-5 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="display-3">Alerts &amp; notifications</h3>
+        <button id="btn-refresh-notif" class="btn-ghost text-sm">&#8635; Refresh</button>
+      </div>
+      <div id="notif-error" class="text-xs text-rose-300 mb-2 hidden"></div>
+      <div id="notif-config-view">
+        <div class="v04-empty">Loading notification config&#8230;</div>
+      </div>
+      <div class="mt-4 text-xs text-slate-500">
+        Configure <span class="mono text-cyan-300">/api/notifications/config</span> via
+        <span class="mono text-cyan-300">docs/examples/notifications.yaml</span>.
+      </div>
+    </div>
   </section>
 
 </main>
