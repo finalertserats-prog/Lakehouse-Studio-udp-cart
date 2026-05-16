@@ -29,6 +29,7 @@ from .compatibility import (
     precheck_image_availability,
     validate_against_catalog,
 )
+from .health import get_stack_health
 from .demo_query import list_queries, run_demo_query
 from .error_explainer import explain as explain_error
 from .lake_namer import suggest as suggest_lake_names, is_valid as is_valid_lake_name, normalize as normalize_lake_name
@@ -545,6 +546,24 @@ async def post_structured_smoke(install_id: str):
     if not rec:
         raise HTTPException(404, "install not found")
     return await run_structured_smoke()
+
+
+@app.get("/api/installs/{install_id}/health", dependencies=[AuthDep])
+async def get_install_health(install_id: str):
+    """Live per-service health snapshot for an installed stack.
+
+    Read-only: container state via `docker compose ps` + an HTTP/TCP probe
+    per component. Safe to call repeatedly (the UI polls this for the
+    health dashboard). Does not touch state.
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise HTTPException(404, "install not found")
+    try:
+        m = load_manifest(rec.stack_id)
+    except KeyError:
+        raise HTTPException(404, "stack not found")
+    return await get_stack_health(m, Path(rec.install_dir), host=rec.host)
 
 
 @app.get("/api/installs/{install_id}/diagnose", dependencies=[AuthDep])

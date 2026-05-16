@@ -910,6 +910,16 @@
     <h3 class="display-3 mb-4 mt-2">Service URLs</h3>
     <div id="success-urls" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8"></div>
 
+    <div class="flex items-center justify-between mb-4 mt-2">
+      <h3 class="display-3">Live health</h3>
+      <div class="flex items-center gap-3">
+        <span id="health-overall-badge" class="text-xs px-2.5 py-1 rounded-full font-semibold tracking-wider bg-slate-500/15 border border-slate-500/30 text-slate-300">— checking —</span>
+        <span id="health-checked-at" class="text-xs text-slate-500 mono"></span>
+        <button id="btn-health-refresh" class="btn-ghost text-xs">↻ Refresh</button>
+      </div>
+    </div>
+    <div id="health-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-8"></div>
+
     <h3 class="display-3 mb-4">Connections</h3>
     <div id="success-conns" class="space-y-2 mb-8"></div>
 
@@ -1036,6 +1046,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     });
     setStepper(screen);
     if (screen === "installs") loadInstalls();
+    if (screen !== "success" && typeof stopHealthPolling === "function") stopHealthPolling();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => navigate(b.dataset.nav)));
@@ -2066,7 +2077,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     });
     const ev = document.getElementById("success-evidence");
     ev.textContent = rec.outputs?.evidence_dir ? `evidence captured at ${rec.outputs.evidence_dir}` : "";
-    loadDemoQueries(); loadStructuredSmoke();
+    loadDemoQueries(); loadStructuredSmoke(); startHealthPolling(rec.install_id);
     // Celebrate — fire confetti once per success (not on every refresh / installs-list re-entry).
     if (!state._confettiFired) { fireConfetti(); state._confettiFired = true; }
   }
@@ -2213,6 +2224,75 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   }
 
   document.getElementById("btn-rerun-smoke").addEventListener("click", () => loadStructuredSmoke());
+
+  // ----- Live health dashboard (read-only polling) -----
+  let _healthTimer = null;
+  function _healthStatusClasses(s) {
+    switch (s) {
+      case "healthy":  return ["bg-emerald-500/15","border-emerald-500/30","text-emerald-300","● healthy"];
+      case "degraded": return ["bg-amber-500/15","border-amber-500/30","text-amber-300","● degraded"];
+      case "down":     return ["bg-rose-500/15","border-rose-500/30","text-rose-300","● down"];
+      default:         return ["bg-slate-500/15","border-slate-500/30","text-slate-300","● unknown"];
+    }
+  }
+  function _probeBadge(p) {
+    const map = { passed: "text-emerald-300", warning: "text-amber-300", failed: "text-rose-300", unknown: "text-slate-400", skipped: "text-slate-500" };
+    const cls = map[p?.status] || "text-slate-400";
+    const dot = p?.status === "passed" ? "✓" : p?.status === "failed" ? "✗" : p?.status === "warning" ? "!" : "·";
+    return `<span class="${cls} mono text-xs">${dot} ${esc(p?.status || "unknown")}</span>`;
+  }
+  function renderHealth(data) {
+    const grid = document.getElementById("health-grid");
+    const badge = document.getElementById("health-overall-badge");
+    const ts = document.getElementById("health-checked-at");
+    if (!grid || !badge) return;
+    const [bg, bd, tc, label] = _healthStatusClasses(data.overall);
+    badge.className = `text-xs px-2.5 py-1 rounded-full font-semibold tracking-wider ${bg} border ${bd} ${tc}`;
+    badge.textContent = label;
+    const dt = new Date((data.checked_at || 0) * 1000);
+    ts.textContent = data.checked_at ? `checked ${dt.toLocaleTimeString()} · ${data.duration_ms}ms` : "";
+    grid.innerHTML = "";
+    (data.services || []).forEach(s => {
+      const card = document.createElement("div");
+      card.className = "glass p-4";
+      const stateColor =
+        s.container_state === "running" ? "text-emerald-300" :
+        s.container_state === "exited" || s.container_state === "dead" ? "text-rose-300" :
+        s.container_state === "restarting" || s.container_state === "created" ? "text-amber-300" :
+        "text-slate-400";
+      card.innerHTML = `
+        <div class="flex items-start justify-between mb-1">
+          <div class="font-display text-sm text-white">${esc(s.name)}</div>
+          <div class="mono text-[10px] text-slate-500">${esc(s.service_name)}</div>
+        </div>
+        <div class="text-xs ${stateColor} mb-2 mono">container: ${esc(s.container_state)}</div>
+        <div class="flex items-center justify-between">
+          ${_probeBadge(s.probe)}
+          <span class="mono text-[10px] text-slate-500" title="${esc(s.probe?.detail || '')}">${esc((s.probe?.detail || '').slice(0, 40))}</span>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+  async function loadHealth(installId) {
+    if (!installId) return;
+    try {
+      const data = await api(`/api/installs/${installId}/health`);
+      renderHealth(data);
+    } catch (e) {
+      const grid = document.getElementById("health-grid");
+      if (grid) grid.innerHTML = `<div class="text-rose-400 text-sm col-span-3">health probe failed: ${esc(e.message)}</div>`;
+    }
+  }
+  function startHealthPolling(installId) {
+    stopHealthPolling();
+    loadHealth(installId);
+    _healthTimer = setInterval(() => loadHealth(installId), 10000);
+  }
+  function stopHealthPolling() {
+    if (_healthTimer) { clearInterval(_healthTimer); _healthTimer = null; }
+  }
+  document.getElementById("btn-health-refresh")?.addEventListener("click", () => loadHealth(state.installId));
 
   async function loadDemoQueries() {
     const btnWrap = document.getElementById("demo-query-buttons"); btnWrap.innerHTML = "";
