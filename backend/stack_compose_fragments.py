@@ -277,10 +277,20 @@ def _render_polaris_fragment(env: dict) -> str:
         "      postgres-polaris:\n"
         "        condition: service_healthy\n"
         "    environment:\n"
-        "      POLARIS_PERSISTENCE_TYPE: jdbc\n"
-        "      POLARIS_PERSISTENCE_JDBC_URL: jdbc:postgresql://postgres-polaris:5432/polaris\n"
-        "      POLARIS_PERSISTENCE_JDBC_USER: polaris\n"
-        "      POLARIS_PERSISTENCE_JDBC_PASSWORD: ${POLARIS_DB_PASSWORD:-polaris_password_pilot}\n"
+        # Codex P0 fix 2026-05-17: Polaris 1.4.x uses Quarkus datasource
+        # env vars + the persistence type is `relational-jdbc`, not `jdbc`.
+        # The bootstrap script also expects POLARIS_BOOTSTRAP_CREDENTIALS
+        # to seed the realm's root principal credential — without it the
+        # script's token request to /api/catalog/v1/oauth/tokens 401s.
+        "      POLARIS_PERSISTENCE_TYPE: relational-jdbc\n"
+        "      QUARKUS_DATASOURCE_DB_KIND: postgresql\n"
+        "      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres-polaris:5432/polaris\n"
+        "      QUARKUS_DATASOURCE_USERNAME: polaris\n"
+        "      QUARKUS_DATASOURCE_PASSWORD: ${POLARIS_DB_PASSWORD:-polaris_password_pilot}\n"
+        "      # Bootstrap credential the runner_extra_scripts polaris\n"
+        "      # bootstrap uses to obtain the first OAuth2 token. Format\n"
+        "      # is `realm,client_id:client_secret`.\n"
+        "      POLARIS_BOOTSTRAP_CREDENTIALS: ${POLARIS_BOOTSTRAP_CREDENTIALS:-default-realm,root:s3cr3t}\n"
         "    ports:\n"
         "      - \"8181:8181\"\n"
         "      - \"8182:8182\"\n"
