@@ -24,4 +24,8 @@ USER root
 ADD https://repo1.maven.org/maven2/io/delta/delta-spark_2.12/3.2.1/delta-spark_2.12-3.2.1.jar /opt/spark/jars/
 ADD https://repo1.maven.org/maven2/io/delta/delta-storage/3.2.1/delta-storage-3.2.1.jar /opt/spark/jars/
 RUN chmod 644 /opt/spark/jars/delta-*.jar
-USER spark
+# NOTE: tabulario/spark-iceberg:3.5.5_1.8.1 has no `spark` user (it runs as
+# root by default — verified via `docker run --rm ... id` returning uid=0).
+# A trailing `USER spark` here caused every container start to fail with
+# "unable to find user spark: no matching entries in passwd file" (Hudi
+# attempt 12, 2026-05-17). Stay as root to match the base image.
