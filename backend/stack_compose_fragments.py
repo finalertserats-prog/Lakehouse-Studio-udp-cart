@@ -513,7 +513,7 @@ def _render_polaris_fragment(env: dict) -> str:
         # script's token request to /api/catalog/v1/oauth/tokens 401s.
         "      POLARIS_PERSISTENCE_TYPE: relational-jdbc\n"
         "      QUARKUS_DATASOURCE_DB_KIND: postgresql\n"
-        "      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres-polaris:5432/polaris\n"
+        "      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres-polaris:5432/polaris?sslmode=disable\n"
         "      QUARKUS_DATASOURCE_USERNAME: polaris\n"
         "      QUARKUS_DATASOURCE_PASSWORD: ${POLARIS_DB_PASSWORD:-polaris_password_pilot}\n"
         "      # Bootstrap credential the runner_extra_scripts polaris\n"

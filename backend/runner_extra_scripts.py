@@ -1022,7 +1022,7 @@ PROPERTIES (
     "iceberg.catalog.oauth2.server-uri" = "http://polaris:8181/api/catalog/v1/oauth/tokens",
     "iceberg.catalog.oauth2.credential" = "${CLIENT_ID}:${CLIENT_SECRET}",
     "iceberg.catalog.oauth2.scope" = "PRINCIPAL_ROLE:ALL",
-    "iceberg.catalog.vended-credentials-enabled" = "false",
+    "iceberg.catalog.vended-credentials-enabled" = "true",
     "aws.s3.endpoint" = "http://minio:9000",
     "aws.s3.enable_ssl" = "false",
     "aws.s3.enable_path_style_access" = "true",
