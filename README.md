@@ -11,12 +11,28 @@ UI-driven, compatibility-validated installer and operator for open data lakehous
 
 ## Certified stacks
 
-| Stack ID | Description | Status |
-|---|---|---|
-| `udp-local-v0.2` | **Unified Data Plug** — MinIO + Iceberg REST + Spark + StarRocks | ![pilot-stable](https://img.shields.io/badge/status-pilot--stable-green) |
-| `udp-trino-local-v0.1` | **UDP Trino variant** — swap Spark for Trino | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
+| Stack ID | Table Format | Catalog | Engines | Status |
+|---|---|---|---|---|
+| `udp-local-v0.2` | Iceberg | Iceberg REST | Spark + StarRocks | ![pilot-stable](https://img.shields.io/badge/status-pilot--stable-green) |
+| `udp-trino-local-v0.1` | Iceberg | Iceberg REST | Trino + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
+| `iceberg-nessie-trino-local-v0.1` | Iceberg | **Nessie** (git-for-data) | Trino + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
+| `iceberg-polaris-spark-local-v0.1` | Iceberg | **Polaris** (RBAC + cred vending) | Spark + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
+| `hudi-hms-spark-local-v0.1` | **Hudi** (streaming-first) | Hive Metastore + Postgres | Spark | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
+| `delta-hms-spark-trino-local-v0.1` | **Delta Lake** | Hive Metastore + Postgres | Spark + Trino | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
 
-Promotion to `pilot-stable` requires at least one passing end-to-end install captured as an `evidence[]` record in the stack's `.lock.yaml`. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+Promotion to `pilot-stable` requires at least one passing end-to-end install captured as an `evidence[]` record in the stack's `.lock.yaml`. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) and the [stability matrix](docs/STABILITY_MATRIX.md) for the honest state of every stack × OS combination.
+
+### Optional add-ons (opt-in via env flags)
+
+Layer any of these on top of any stack via the override-compose pattern:
+
+| Add-on | Env flag | Purpose |
+|---|---|---|
+| Apache Airflow 2.10 | `LHS_AIRFLOW_ENABLED=true` | DAG scheduler — auto-includes Postgres backing |
+| Dagster 1.9 | `LHS_DAGSTER_ENABLED=true` | Asset-first orchestrator — Dagit UI + daemon |
+| Apache Superset 4.1 | `LHS_SUPERSET_ENABLED=true` | Open-source BI — auto-wires to StarRocks (MySQL dialect) or Trino |
+
+Overlay modules live at `backend/{airflow,dagster,superset}_overlay.py`. Each writes a `docker-compose.<name>.yml` next to the base compose; the runner appends them via `-f` during the start step when the env flag is on.
 
 ## Feature pillars
 

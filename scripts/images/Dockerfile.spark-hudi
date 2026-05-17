@@ -1,0 +1,27 @@
+# Bake recipe for lakehousestudio/spark-hudi:3.5.0_0.15.0
+#
+# This image extends the certified Spark+Iceberg image with the Hudi 0.15
+# Spark runtime bundle jar. Used by the hudi-hms-spark-local-v0.1 stack.
+#
+# Source: Gemini research dispatch 2026-05-17 — verified that the Maven
+# Central jar `hudi-spark3.5-bundle_2.12:0.15.0` is the canonical bundle
+# for Spark 3.5 + Hudi 0.15 (Hudi's official quickstart docs reference
+# this exact coordinate).
+#
+# Build:
+#   docker build -f scripts/images/Dockerfile.spark-hudi \
+#     -t lakehousestudio/spark-hudi:3.5.0_0.15.0 .
+#
+# Publish (when ready):
+#   docker push lakehousestudio/spark-hudi:3.5.0_0.15.0
+#
+# The candidate-status lock file at
+# stacks/compatibility/hudi-hms-spark-local-v0.1.lock.yaml flags the
+# image-bake as a P0 gate for pilot-stable promotion — until this image
+# is published, the hudi stack cannot install.
+
+FROM tabulario/spark-iceberg:3.5.5_1.8.1
+USER root
+ADD https://repo1.maven.org/maven2/org/apache/hudi/hudi-spark3.5-bundle_2.12/0.15.0/hudi-spark3.5-bundle_2.12-0.15.0.jar /opt/spark/jars/
+RUN chmod 644 /opt/spark/jars/hudi-spark3.5-bundle_2.12-0.15.0.jar
+USER spark

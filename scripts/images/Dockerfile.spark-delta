@@ -1,0 +1,27 @@
+# Bake recipe for lakehousestudio/spark-delta:3.5.0_3.2.1
+#
+# This image extends the certified Spark+Iceberg image with delta-spark
+# 3.2.1 (the canonical Delta Lake runtime for Spark 3.5.x).
+#
+# Source: Gemini research dispatch 2026-05-17 — verified Maven Central
+# coordinates `io.delta:delta-spark_2.12:3.2.1` + the transitive
+# `io.delta:delta-storage:3.2.1` that delta-spark requires at runtime.
+#
+# Build:
+#   docker build -f scripts/images/Dockerfile.spark-delta \
+#     -t lakehousestudio/spark-delta:3.5.0_3.2.1 .
+#
+# Publish (when ready):
+#   docker push lakehousestudio/spark-delta:3.5.0_3.2.1
+#
+# The candidate-status lock file at
+# stacks/compatibility/delta-hms-spark-trino-local-v0.1.lock.yaml flags
+# the image-bake as a P0 gate for pilot-stable promotion — until this
+# image is published, the delta stack cannot install.
+
+FROM tabulario/spark-iceberg:3.5.5_1.8.1
+USER root
+ADD https://repo1.maven.org/maven2/io/delta/delta-spark_2.12/3.2.1/delta-spark_2.12-3.2.1.jar /opt/spark/jars/
+ADD https://repo1.maven.org/maven2/io/delta/delta-storage/3.2.1/delta-storage-3.2.1.jar /opt/spark/jars/
+RUN chmod 644 /opt/spark/jars/delta-*.jar
+USER spark
