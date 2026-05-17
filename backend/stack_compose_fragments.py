@@ -49,7 +49,7 @@ log = logging.getLogger("lhs.stack_compose_fragments")
 # ---- pinned image tags (verified 2026-05-17 against stack manifests) ----
 _NESSIE_IMAGE = "ghcr.io/projectnessie/nessie:0.99.0"
 _HMS_IMAGE = "bitsondatadev/hive-metastore:latest"
-_POLARIS_IMAGE = "apache/polaris:1.0.1"
+_POLARIS_IMAGE = "apache/polaris:1.4.1"  # bumped from 1.0.1 — that tag never published; 1.4.1 is real + has CVE fixes (Gemini research 2026-05-17, verified via docker manifest inspect)
 _POSTGRES_IMAGE = "postgres:15-alpine"
 
 

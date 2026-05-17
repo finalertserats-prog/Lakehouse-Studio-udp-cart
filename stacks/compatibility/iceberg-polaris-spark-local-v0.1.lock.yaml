@@ -37,7 +37,7 @@ status_notes: |
 
   SOURCE-VERIFIED marriages (read from upstream docs / image manifests
   on 2026-05-17 — no runtime evidence yet):
-    - apache/polaris:1.0.1 exists on Docker Hub and is the first stable
+    - apache/polaris:1.4.1 exists on Docker Hub and is the first stable
       post-Apache-donation tag (polaris.apache.org/docs/releases).
     - tabulario/spark-iceberg:3.5.5_1.8.1 is the same image v0.2 ships
       and is known to include the Iceberg 1.8 REST client with OAuth2
@@ -48,15 +48,15 @@ status_notes: |
     - MinIO path-style + http-endpoint axioms are identical to v0.2.
 
   AXIOMATICALLY-CLAIMED marriages (need install evidence to prove):
-    - That Polaris 1.0.1's OAuth2 client-credentials flow round-trips
+    - That Polaris 1.4.1's OAuth2 client-credentials flow round-trips
       end-to-end with the Iceberg 1.8 client bundled in tabulario/
       spark-iceberg:3.5.5_1.8.1 — never runtime-checked.
-    - That Polaris 1.0.1's storage-credential vending hands back FileIO
+    - That Polaris 1.4.1's storage-credential vending hands back FileIO
       properties StarRocks 3.3.12 honors verbatim (in particular that
       StarRocks's external catalog respects vended creds vs. catalog-
       level creds when both are present) — never runtime-checked.
     - That Polaris's Postgres-backed persistence layer schema-init runs
-      cleanly on postgres:15-alpine — Polaris 1.0.1 changelog notes
+      cleanly on postgres:15-alpine — Polaris 1.4.1 changelog notes
       schema migration changes since 0.x; not yet runtime-validated.
     - Whether the Windows AWS-SDK→MinIO UnknownHostException from v0.2
       reproduces here. Same StarRocks, same MinIO, Polaris in front
@@ -64,7 +64,7 @@ status_notes: |
       auth side, but identical S3-side surface — likely same caveat.
 
   Why this stack matters:
-    - Apache Polaris 1.0.1 is the first stable release post-Apache-donation
+    - Apache Polaris 1.4.1 is the first stable release post-Apache-donation
       (the project was contributed by Snowflake and graduated through the
       Apache Incubator). 1.0.1 is the version Polaris itself promotes as
       the recommended starting point for new deployments. This stack
@@ -131,11 +131,11 @@ components:
     name: Apache Polaris (Iceberg REST catalog)
     role: catalog
     image: apache/polaris
-    tag: "1.0.1"
+    tag: "1.4.1"
     registry_url: https://hub.docker.com/r/apache/polaris/tags
     upstream_url: https://polaris.apache.org/
     notes: |
-      Apache Polaris 1.0.1 — the first stable release post-Apache-donation
+      Apache Polaris 1.4.1 — the first stable release post-Apache-donation
       from Snowflake. Exposes the Iceberg REST spec at
       `http://polaris:8181/api/catalog`. All clients (Spark, StarRocks)
       must run the OAuth2 client-credentials flow against
@@ -224,18 +224,18 @@ constraints:
     verified: "Both consume POLARIS_BASE_URI=http://polaris:8181, POLARIS_OAUTH_URI=http://polaris:8181/api/catalog/v1/oauth/tokens, and POLARIS_WAREHOUSE=studio_catalog from env_defaults (TBD in the manifest). Runtime verification pending."
 
   - between: [polaris, spark-iceberg, starrocks-fe]
-    rule: "TABLE FORMAT ⇄ CATALOG version range marriage: Polaris 1.0.1 implements Iceberg REST spec v1 + the OAuth2 client-credentials profile. The Iceberg 1.8 client in tabulario/spark-iceberg:3.5.5_1.8.1 and the Iceberg 1.5 client embedded in StarRocks 3.3.12 both speak this spec — so the version floors are: polaris >= 1.0.0 (first stable spec implementation), spark-iceberg client >= 1.6 (for oauth2-server-uri property), starrocks >= 3.3.x (for iceberg.rest.security.type=oauth2 property). Bumping Polaris above 1.0.1 requires re-checking both clients."
+    rule: "TABLE FORMAT ⇄ CATALOG version range marriage: Polaris 1.4.1 implements Iceberg REST spec v1 + the OAuth2 client-credentials profile. The Iceberg 1.8 client in tabulario/spark-iceberg:3.5.5_1.8.1 and the Iceberg 1.5 client embedded in StarRocks 3.3.12 both speak this spec — so the version floors are: polaris >= 1.0.0 (first stable spec implementation), spark-iceberg client >= 1.6 (for oauth2-server-uri property), starrocks >= 3.3.x (for iceberg.rest.security.type=oauth2 property). Bumping Polaris above 1.0.1 requires re-checking both clients."
     verified: "source review 2026-05-17 — polaris.apache.org/docs/quickstart + iceberg.apache.org/docs/latest/configuration/ + StarRocks 3.3 docs."
     evidence: "TBD — needs install run"
 
   - between: [polaris, postgres]
-    rule: "BACKING DB ⇄ CATALOG schema/driver pin: Polaris 1.0.1 uses the Quarkus-based persistence layer with built-in Postgres support. The Polaris image bundles the postgresql JDBC driver compatible with Postgres 13-16, but schema-migration logic against postgres:15-alpine is the known-good path Polaris itself documents in its quickstart. Polaris 1.0 changed the JDBC store schema vs. 0.x — DO NOT mount a Polaris 0.x Postgres volume into a 1.0 deployment."
+    rule: "BACKING DB ⇄ CATALOG schema/driver pin: Polaris 1.4.1 uses the Quarkus-based persistence layer with built-in Postgres support. The Polaris image bundles the postgresql JDBC driver compatible with Postgres 13-16, but schema-migration logic against postgres:15-alpine is the known-good path Polaris itself documents in its quickstart. Polaris 1.0 changed the JDBC store schema vs. 0.x — DO NOT mount a Polaris 0.x Postgres volume into a 1.0 deployment."
     verified: "source review 2026-05-17 — polaris.apache.org/docs/quickstart references postgres:15-alpine in compose examples; Polaris 1.0.0 release notes call out the migration."
     evidence: "TBD — needs install run"
-    known_issue: "Same as the HMS-based candidates: postgres:16 is technically supported by the driver but not yet runtime-validated against Polaris 1.0.1's migration scripts. Stay on 15-alpine for the marriage to hold."
+    known_issue: "Same as the HMS-based candidates: postgres:16 is technically supported by the driver but not yet runtime-validated against Polaris 1.4.1's migration scripts. Stay on 15-alpine for the marriage to hold."
 
   - between: [polaris, spark-iceberg, starrocks-fe]
-    rule: "TLS/AUTH boundary: Polaris's OAuth2 token-flow uses the `client_credentials` grant type and returns short-lived bearer tokens (default TTL is 1 hour per Polaris 1.0.1 config). Spark and StarRocks Iceberg clients must REFRESH the token before expiry — the Iceberg 1.8 client implements automatic refresh by re-running the token flow when a 401 comes back. StarRocks 3.3.12's implementation also supports refresh, but the token-cache window is per-FE-session, not per-query. A long-running BE query that outlives the FE's cached token gets a 401 from Polaris mid-scan."
+    rule: "TLS/AUTH boundary: Polaris's OAuth2 token-flow uses the `client_credentials` grant type and returns short-lived bearer tokens (default TTL is 1 hour per Polaris 1.4.1 config). Spark and StarRocks Iceberg clients must REFRESH the token before expiry — the Iceberg 1.8 client implements automatic refresh by re-running the token flow when a 401 comes back. StarRocks 3.3.12's implementation also supports refresh, but the token-cache window is per-FE-session, not per-query. A long-running BE query that outlives the FE's cached token gets a 401 from Polaris mid-scan."
     verified: "source review 2026-05-17 — Polaris config docs for token TTL; Iceberg client REST docs for refresh behavior; StarRocks 3.3 catalog refresh docs."
     evidence: "TBD — needs install run"
     known_issue: "If the BE-side query takes >1h, the cached token expires mid-scan. Workaround for pilot-stable: bump Polaris token TTL to 24h via `polaris.authentication.token-ttl`."
@@ -307,7 +307,7 @@ incompatible:
   - combination: ["apache/polaris:latest"]
     reason: "Floating `latest` tag moves with every Polaris release; the OAuth2 token-flow contract has had property-name changes during the incubation period. The lock-file contract requires a stable tag."
     discovered: "2026-05-17"
-    workaround: "Pin to `apache/polaris:1.0.1` (the locked tag) or bump explicitly with re-verification against the OAuth2 token flow."
+    workaround: "Pin to `apache/polaris:1.4.1` (the locked tag) or bump explicitly with re-verification against the OAuth2 token flow."
 
   - combination: ["spark:3.5.1_1.5.2"]
     reason: "Tag was REMOVED from Docker Hub after UDP shipped — carried-over caveat from udp-local-v0.2. Any fresh install fails at `docker compose up` with 'not found' error."
@@ -324,27 +324,27 @@ incompatible:
     discovered: "2026-05-17"
     workaround: "Pin to `postgres:15-alpine` (the locked tag) or bump explicitly with re-verification."
 
-  - combination: ["apache/polaris:1.0.1", "polaris-0.x Postgres data volume"]
+  - combination: ["apache/polaris:1.4.1", "polaris-0.x Postgres data volume"]
     reason: "Polaris 1.0 changed the JDBC schema vs. the 0.x incubator releases. Mounting a Postgres volume that was previously bootstrapped by Polaris 0.x into a 1.0.1 container produces schema-mismatch errors at first start — Polaris's migration logic does NOT cover the 0.x→1.0 jump cleanly. The volume must be fresh."
     discovered: "2026-05-17"
-    workaround: "Start with a fresh Postgres volume for Polaris 1.0.1. If migrating from 0.x, dump and re-bootstrap rather than relying on in-place migration."
+    workaround: "Start with a fresh Postgres volume for Polaris 1.4.1. If migrating from 0.x, dump and re-bootstrap rather than relying on in-place migration."
 
-  - combination: ["apache/polaris:1.0.1", "iceberg-rest:1.6.0 in the same stack"]
+  - combination: ["apache/polaris:1.4.1", "iceberg-rest:1.6.0 in the same stack"]
     reason: "Two competing Iceberg REST servers on the same MinIO warehouse leads to two separate catalogs that both claim authority for the same tables. Clients pointed at one cannot see tables created via the other. Polaris and tabulario/iceberg-rest are alternatives, NOT complements."
     discovered: "2026-05-17"
     workaround: "Pick one catalog server per stack. This lock chooses Polaris; udp-local-v0.2 chooses tabulario/iceberg-rest."
 
-  - combination: ["apache/polaris:1.0.1", "spark/starrocks clients without oauth2 properties"]
-    reason: "Polaris 1.0.1 has authentication enabled by default — there is no `authentication.enabled=false` shortcut to bypass OAuth2 for local dev (unlike Nessie, where unauthenticated plain-HTTP is the default). Any client missing `rest.auth.type=oauth2` + credential + server-uri gets 401 on every Iceberg-REST call."
+  - combination: ["apache/polaris:1.4.1", "spark/starrocks clients without oauth2 properties"]
+    reason: "Polaris 1.4.1 has authentication enabled by default — there is no `authentication.enabled=false` shortcut to bypass OAuth2 for local dev (unlike Nessie, where unauthenticated plain-HTTP is the default). Any client missing `rest.auth.type=oauth2` + credential + server-uri gets 401 on every Iceberg-REST call."
     discovered: "2026-05-17"
     workaround: "Bootstrap MUST inject OAuth2 properties into both Spark's spark-defaults.conf and StarRocks's external-catalog config. There is no 'just turn auth off' path for Polaris."
 
-  - combination: ["apache/polaris:1.0.1", "ephemeral postgres volume"]
+  - combination: ["apache/polaris:1.4.1", "ephemeral postgres volume"]
     reason: "Without a persistent Postgres volume, every Polaris restart re-bootstraps and generates a NEW root client_id/client_secret. Any client config that hardcoded the previous pair gets 401s on next session. This is a durability + identity-binding contract, not a Polaris bug."
     discovered: "2026-05-17"
     workaround: "Always declare a named volume for `/var/lib/postgresql/data` (or a host bind-mount on Linux). Track this as a host-prep requirement in the install docs."
 
-  - combination: ["apache/polaris:1.0.1 with token-ttl=1h", "BE query >1h"]
+  - combination: ["apache/polaris:1.4.1 with token-ttl=1h", "BE query >1h"]
     reason: "Polaris's default OAuth2 token TTL is 1 hour. StarRocks BE-side scan that outlives the FE's cached token gets 401s mid-scan because the BE re-requests S3 credentials via the expired token. Long-running ETL queries are the typical trigger."
     discovered: "2026-05-17"
     workaround: "Bump `polaris.authentication.token-ttl` to 24h (or longer) in Polaris config for ETL-heavy workloads. Pilot-stable docs must call this out."

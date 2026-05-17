@@ -66,14 +66,14 @@ components:
   - id: polaris
     name: Apache Polaris
     category: catalog
-    # Polaris 1.0.1 — the first GA release after Snowflake's June 2025
-    # 1.0 cut. Earlier release-candidates required JDBC schema
-    # bootstrap steps that 1.0.1 automates via the `polaris-admin`
-    # bootstrap-realm command. Ports: 8181 = Iceberg REST + management
-    # API, 8182 = management/metrics. Bump only after re-validating
-    # Spark + StarRocks catalog reads against the new release.
-    version: "1.0.1"
-    image: apache/polaris:1.0.1
+    # Polaris 1.4.1 — bumped from initially-pinned 1.0.1 after probe
+    # revealed apache/polaris:1.0.1 was NEVER published on Docker Hub
+    # (only 1.4.x tags exist). 1.4.1 is the current stable + includes
+    # the CVE-2026-42809 + CVE-2026-42812 security fixes. Ports:
+    # 8181 = Iceberg REST + management API, 8182 = management/metrics.
+    # Verified 2026-05-17 via `docker manifest inspect`.
+    version: "1.4.1"
+    image: apache/polaris:1.4.1
     service_name: polaris
     ports: [8181, 8182]
     resource_profiles:

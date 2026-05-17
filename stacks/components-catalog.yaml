@@ -451,7 +451,7 @@ categories:
         resource_profile_summary: "Recommended tier: 1 CPU, 2 GB RAM (+1 GB for Postgres backing), 10 GB disk. Postgres disk grows with table count."
       - id: polaris
         name: Apache Polaris
-        version: "1.0.1"
+        version: "1.4.1"
         maturity: beta
         recommended: false
         status_badge: "Candidate"
@@ -485,10 +485,12 @@ categories:
           - "External-catalog federation (mount remote catalogs as namespaces)"
           - "Pluggable persistence (Postgres backing supported)"
         why_this_version: >
-          Pinned to 1.0.1 — the first stable release after Apache GA in
-          early 2026. Earlier 0.x releases (under Snowflake's pre-donation
-          branding) have incompatible REST schemas. Image:
-          `apache/polaris:1.0.1`.
+          Pinned to 1.4.1 — current stable. Bumped from initial 1.0.1
+          pin after probe revealed apache/polaris:1.0.1 was never
+          published on Docker Hub (only 1.4.x tags exist). 1.4.1
+          includes the CVE-2026-42809 + CVE-2026-42812 fixes flagged
+          by Gemini research 2026-05-17. Verified via
+          `docker manifest inspect apache/polaris:1.4.1`.
         resource_profile_summary: "Recommended tier: 2 CPU, 4 GB RAM, 10 GB disk. Postgres backing recommended at scale; H2 file backend works for dev."
 
   - id: object_storage
