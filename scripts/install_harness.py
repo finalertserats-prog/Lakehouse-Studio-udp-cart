@@ -306,15 +306,29 @@ def render_promote_instructions(
 
 def docker_compose_down(install_dir: Path, project_name: str, *,
                         runner=subprocess) -> int:
-    """Run ``docker compose -p <project> down`` from install_dir. Returns rc.
+    """Run ``docker compose -p <project> down --remove-orphans`` from install_dir.
+    Returns rc.
 
-    Never destructive of volumes — we want lake data to survive for re-attach.
+    Volumes survive by default — we want lake data to live for re-attach.
+    --remove-orphans catches stale containers from previous installs that
+    re-used the same project name (e.g. when a teardown failed mid-flight
+    and the next install re-uses the install_dir).
     """
     if not install_dir.exists() or not (install_dir / "docker-compose.yml").exists():
-        return 0
+        # Fall back to project-level down even without a compose file on
+        # disk — compose tracks projects in Docker even after the source
+        # compose.yml is deleted (as long as containers exist).
+        try:
+            completed = runner.run(
+                ["docker", "compose", "-p", project_name, "down", "--remove-orphans"],
+                capture_output=True, text=True, timeout=180,
+            )
+            return completed.returncode
+        except Exception:
+            return 0
     try:
         completed = runner.run(
-            ["docker", "compose", "-p", project_name, "down"],
+            ["docker", "compose", "-p", project_name, "down", "--remove-orphans"],
             cwd=str(install_dir),
             capture_output=True,
             text=True,
@@ -536,7 +550,16 @@ async def _run_harness(args: argparse.Namespace) -> int:
     capturer = _EventCapturer(install_id)
     await capturer.start()
 
-    project_name = stack.env_defaults.get("UDP_PROJECT_NAME") or stack.id
+    # Project name MUST match what `docker compose up` actually used.
+    # The runner doesn't pass `-p`, so compose auto-derives the project
+    # name from the install_dir basename (sanitized — lowercase, no spaces).
+    # Using stack.env_defaults["UDP_PROJECT_NAME"] is WRONG because that
+    # env var is only an env-default exposed to the containers; it never
+    # makes it into compose's project naming. Bug found 2026-05-17 when
+    # the udp-local-v0.2 teardown was a no-op because it called
+    # `docker compose -p unified-data-plug down` for containers actually
+    # running under project `udp` (= install_dir name).
+    project_name = install_dir.name.lower().replace(" ", "_").replace("/", "_")
 
     teardown_done = False
 

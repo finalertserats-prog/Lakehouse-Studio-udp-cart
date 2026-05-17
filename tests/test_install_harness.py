@@ -313,12 +313,23 @@ class TestPromoteInstructions:
 # ---------------------------------------------------------------------------
 
 class TestTeardown:
-    def test_docker_compose_down_skipped_when_no_compose_file(self, harness, tmp_path):
-        # install_dir exists but no docker-compose.yml -> short-circuit, no call.
+    def test_docker_compose_down_falls_back_to_project_level_when_no_compose_file(
+        self, harness, tmp_path
+    ):
+        """v0.6.2 — when the compose file is missing (e.g. previous teardown
+        removed install_dir but containers stayed up due to a project-name
+        mismatch), we still try `docker compose -p <project> down` so the
+        runtime project state gets cleaned up. Otherwise stale containers
+        from previous installs block the next install via port collisions.
+        """
         fake_subprocess = MagicMock()
+        fake_subprocess.run.return_value = MagicMock(returncode=0)
         rc = harness.docker_compose_down(tmp_path, "test-project", runner=fake_subprocess)
         assert rc == 0
-        fake_subprocess.run.assert_not_called()
+        # SHOULD have called compose down at the project level.
+        fake_subprocess.run.assert_called_once()
+        argv = fake_subprocess.run.call_args.args[0]
+        assert argv == ["docker", "compose", "-p", "test-project", "down", "--remove-orphans"]
 
     def test_docker_compose_down_invokes_correct_argv(self, harness, tmp_path):
         # Make it LOOK like a UDP clone.
@@ -329,8 +340,10 @@ class TestTeardown:
         assert rc == 0
         fake_subprocess.run.assert_called_once()
         argv = fake_subprocess.run.call_args.args[0]
-        assert argv == ["docker", "compose", "-p", "udp-pnc", "down"]
-        # No volume-destroying flag.
+        # --remove-orphans added 2026-05-17 to catch stale containers from
+        # previous installs that re-used the project name.
+        assert argv == ["docker", "compose", "-p", "udp-pnc", "down", "--remove-orphans"]
+        # No volume-destroying flag — lake data must survive teardown.
         assert "-v" not in argv
         assert "--volumes" not in argv
         # Working directory is the install dir.
