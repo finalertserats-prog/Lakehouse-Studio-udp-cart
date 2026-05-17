@@ -793,28 +793,41 @@ for i in $(seq 1 120); do
   if [ "$i" = "120" ]; then echo "postgres-polaris never came up"; exit 1; fi
 done
 
-echo "[studio-polaris-bootstrap] waiting for Polaris..."
-for i in $(seq 1 120); do
-  if curl -fsS "${POLARIS_CATALOG_URI%/api/catalog}/q/health" >/dev/null 2>&1 \
-     || curl -fsS "${POLARIS_CATALOG_URI}/v1/config" >/dev/null 2>&1; then
-    echo "  polaris OK"; break
+echo "[studio-polaris-bootstrap] waiting for Polaris + obtaining root OAuth2 token..."
+# Live VPS debug 2026-05-17 (inst_d58762cb19 + inst_945d4eca29):
+# the previous readiness probe hit ${POLARIS_CATALOG_URI}/v1/config
+# every 5s. That endpoint is auth-gated in Polaris 1.4.x, so the
+# container logs filled with `GET /api/catalog/v1/config HTTP/1.1 401`
+# noise and we never proved Polaris was actually serviceable. The
+# REAL readiness signal we need is: can we mint a bootstrap token?
+# So we collapse "wait" + "get token" into ONE retry loop -- the
+# loop only exits when the OAuth2 endpoint returns a valid
+# access_token. No more 401 tail-spin.
+#
+# POLARIS_BOOTSTRAP_CREDENTIALS=<realm>,<clientId>,<clientSecret> on
+# the polaris container seeds the realm's root principal credential.
+ROOT_TOKEN=""
+for i in $(seq 1 60); do
+  TOKEN_RESP=$(curl -fsS -X POST "${POLARIS_CATALOG_URI}/v1/oauth/tokens" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=client_credentials&client_id=${POLARIS_ROOT_CLIENT_ID:-root}&client_secret=${POLARIS_ROOT_CLIENT_SECRET:-s3cr3t}&scope=PRINCIPAL_ROLE:ALL" \
+    2>/dev/null) || TOKEN_RESP=""
+  if [ -n "${TOKEN_RESP}" ]; then
+    ROOT_TOKEN=$(printf '%s' "${TOKEN_RESP}" \
+      | python3 -c "import sys,json;
+try: print(json.load(sys.stdin).get('access_token',''))
+except Exception: print('')" 2>/dev/null \
+      || printf '%s' "${TOKEN_RESP}" | sed -n 's/.*\"access_token\":\"\([^\"]*\)\".*/\1/p')
   fi
-  echo "  ($i/120) polaris not ready yet"; sleep 5
-  if [ "$i" = "120" ]; then echo "polaris never came up"; exit 1; fi
+  if [ -n "${ROOT_TOKEN}" ]; then
+    echo "  polaris OK â€” root token acquired"
+    break
+  fi
+  echo "  ($i/60) waiting for polaris token endpoint..."; sleep 5
 done
-
-echo "[studio-polaris-bootstrap] obtaining root OAuth2 token..."
-# Polaris ships with a bootstrap root credential injected via
-# POLARIS_BOOTSTRAP_CREDENTIALS=default-realm,root,<id>,<secret> on the
-# polaris container. We exchange those for an access token.
-ROOT_TOKEN=$(curl -fsS -X POST "${POLARIS_CATALOG_URI}/v1/oauth/tokens" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=${POLARIS_ROOT_CLIENT_ID:-root}&client_secret=${POLARIS_ROOT_CLIENT_SECRET:-s3cr3t}&scope=PRINCIPAL_ROLE:ALL" \
-  | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
 if [ -z "${ROOT_TOKEN}" ]; then
-  echo "failed to obtain Polaris root token â€” check POLARIS_BOOTSTRAP_CREDENTIALS"; exit 1
+  echo "polaris never issued bootstrap token â€” check POLARIS_BOOTSTRAP_CREDENTIALS"; exit 1
 fi
-echo "  root token acquired"
 
 echo "[studio-polaris-bootstrap] creating Polaris catalog '${CATALOG_NAME}' (idempotent)..."
 # 409 on a re-run means already exists â€” treat as success.

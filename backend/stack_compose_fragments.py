@@ -571,10 +571,18 @@ def _render_polaris_fragment(env: dict) -> str:
         "      - \"8181:8181\"\n"
         "      - \"8182:8182\"\n"
         "    healthcheck:\n"
-        "      test: [\"CMD\", \"curl\", \"-fsS\", \"http://localhost:8182/q/health\"]\n"
-        "      interval: 15s\n"
+        # Live VPS debug 2026-05-17 (inst_d58762cb19 + inst_945d4eca29):
+        # Polaris container logs showed `GET /q/health` returning 404 in
+        # a tight loop -- that path isn't exposed by the Polaris 1.4.x
+        # image (Quarkus health is on the management port but auth-gated
+        # in this build). Switch to a pure TCP probe: if the catalog
+        # port is accepting connections, the JVM is up. Avoids the
+        # 401-loop noise from auth-gated HTTP probes.
+        "      test: [\"CMD-SHELL\", \"bash -c 'echo > /dev/tcp/127.0.0.1/8181' || exit 1\"]\n"
+        "      interval: 10s\n"
         "      timeout: 5s\n"
-        "      retries: 12\n"
+        "      retries: 30\n"
+        "      start_period: 60s\n"
         "    networks:\n"
         "      - default\n"
         "volumes:\n"
