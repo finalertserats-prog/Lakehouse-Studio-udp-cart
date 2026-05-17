@@ -418,9 +418,23 @@ def _render_nessie_properties(env: dict) -> str:
     through NESSIE_CATALOG_SERVICE_S3_* env vars + the
     `urn:nessie-secret:quarkus:<name>` reverse-mapping all failed on
     Nessie 0.99 -- SmallRye env-var reverse-mapping is unreliable for
-    dotted-hyphenated secret-config names. The canonical projectnessie
-    reference compose at docker/catalog-auth-s3/docker-compose.yml uses
-    dotted-lowercase Quarkus properties directly, so we do the same.
+    dotted-hyphenated secret-config names. We then tried the URN form
+    in this properties file directly, and Nessie 0.99 STILL refused to
+    start (container exited at boot with the URN line present; a
+    minimal properties file with no credentials brought it up clean).
+
+    EXPERIMENT (this commit): drop the URN indirection AND the
+    auth-type=STATIC line. Use the literal short-form keys
+    `access-key-id` / `secret-access-key` -- some Nessie builds accept
+    these directly and auto-detect static auth from key presence.
+
+    FALLBACK if this still fails (try in next session):
+      1. Add `nessie.catalog.service.s3.default-options.credentials-provider=STATIC`
+         alongside the literal keys.
+      2. Drop the keys from the properties file entirely and pass
+         AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY on the nessie
+         service's env block -- Nessie's S3 client (AWS SDK v2) reads
+         its own process env via the default credentials provider chain.
 
     Credentials are interpolated from the env dict here (Python
     f-string) -- NOT compose ${VAR:-default} interpolation -- because
@@ -429,18 +443,18 @@ def _render_nessie_properties(env: dict) -> str:
     minio_user = env.get("MINIO_ROOT_USER", "admin")
     minio_pass = env.get("MINIO_ROOT_PASSWORD", "udp_admin_12345")
     return (
-        "# Nessie catalog S3 + warehouse config -- canonical Quarkus property form\n"
-        "# (env-var SmallRye reverse-mapping is unreliable for dotted-hyphenated\n"
-        "# secret-config names; using properties file directly avoids that).\n"
+        "# Nessie catalog S3 + warehouse config -- literal access-key-id /\n"
+        "# secret-access-key form. URN indirection was rejected by Nessie\n"
+        "# 0.99 at boot; this experiment uses the short-form keys directly\n"
+        "# and relies on Nessie to auto-detect static auth from their\n"
+        "# presence (no explicit auth-type line).\n"
         "nessie.catalog.default-warehouse=warehouse\n"
         "nessie.catalog.warehouses.warehouse.location=s3://datalake/warehouse\n"
         "nessie.catalog.service.s3.default-options.endpoint=http://minio:9000\n"
         "nessie.catalog.service.s3.default-options.region=us-east-1\n"
         "nessie.catalog.service.s3.default-options.path-style-access=true\n"
-        "nessie.catalog.service.s3.default-options.auth-type=STATIC\n"
-        "nessie.catalog.service.s3.default-options.access-key=urn:nessie-secret:quarkus:nessie.catalog.secrets.access-key\n"
-        f"nessie.catalog.secrets.access-key.name={minio_user}\n"
-        f"nessie.catalog.secrets.access-key.secret={minio_pass}\n"
+        f"nessie.catalog.service.s3.default-options.access-key-id={minio_user}\n"
+        f"nessie.catalog.service.s3.default-options.secret-access-key={minio_pass}\n"
     )
 
 
