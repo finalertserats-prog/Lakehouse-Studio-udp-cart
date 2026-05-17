@@ -229,21 +229,17 @@ def _render_nessie_fragment(env: dict) -> str:
         "      # add a postgres-nessie service when promoting past v0.1.\n"
         "      NESSIE_VERSION_STORE_TYPE: IN_MEMORY\n"
         "      QUARKUS_OIDC_TENANT_ENABLED: \"false\"\n"
-        "      # Codex pre-install audit 2026-05-17: Nessie's Iceberg REST\n"
-        "      # endpoint requires SERVER-side warehouse + object-store config\n"
-        "      # — clients (Trino / StarRocks / Spark) only pass `warehouse=...`\n"
-        "      # by name and Nessie resolves it via these Quarkus env vars.\n"
-        "      # Without these the catalog returns 4xx on namespace/table ops.\n"
-        "      # Ref: https://projectnessie.org/guides/iceberg-rest/\n"
-        "      NESSIE_CATALOG_DEFAULT_WAREHOUSE: warehouse\n"
-        "      NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION: s3://datalake/warehouse\n"
-        "      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT: http://minio:9000\n"
-        "      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION: us-east-1\n"
-        "      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS: \"true\"\n"
-        "      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY: urn:nessie-secret:quarkus:MINIO_CREDS\n"
-        "      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_AUTH_TYPE: STATIC\n"
-        "      MINIO_CREDS_NAME: ${MINIO_ROOT_USER:-admin}\n"
-        "      MINIO_CREDS_SECRET: ${MINIO_ROOT_PASSWORD:-udp_admin_12345}\n"
+        "      # S3 + warehouse config moved OUT of env vars and into a\n"
+        "      # bind-mounted application.properties (see volumes: below).\n"
+        "      # 2026-05-17: 3 prior attempts to wire S3 STATIC credentials\n"
+        "      # via NESSIE_CATALOG_SERVICE_S3_* env vars + URN reverse-\n"
+        "      # mapping all failed on Nessie 0.99 — SmallRye's env-var\n"
+        "      # reverse-mapping is unreliable for dotted-hyphenated\n"
+        "      # secret-config names. The official projectnessie demo at\n"
+        "      # docker/catalog-auth-s3/docker-compose.yml uses dotted\n"
+        "      # Quarkus properties (via -D or properties file), not env.\n"
+        "    volumes:\n"
+        "      - ./nessie.properties:/deployments/config/application.properties:ro\n"
         "    ports:\n"
         "      - \"19120:19120\"\n"
         "    healthcheck:\n"
@@ -408,6 +404,43 @@ def _render_delta_fragment(env: dict) -> str:
         f"  {_MYSQL_HMS_VOLUME}:\n"
         "networks:\n"
         "  default: {}\n"
+    )
+
+
+def _render_nessie_properties(env: dict) -> str:
+    """Quarkus application.properties for Nessie 0.99 S3 + warehouse config.
+
+    Bind-mounted into the Nessie container at
+    /deployments/config/application.properties (Quarkus's standard
+    config location, auto-loaded on boot).
+
+    2026-05-17: three prior attempts to wire S3 STATIC credentials
+    through NESSIE_CATALOG_SERVICE_S3_* env vars + the
+    `urn:nessie-secret:quarkus:<name>` reverse-mapping all failed on
+    Nessie 0.99 -- SmallRye env-var reverse-mapping is unreliable for
+    dotted-hyphenated secret-config names. The canonical projectnessie
+    reference compose at docker/catalog-auth-s3/docker-compose.yml uses
+    dotted-lowercase Quarkus properties directly, so we do the same.
+
+    Credentials are interpolated from the env dict here (Python
+    f-string) -- NOT compose ${VAR:-default} interpolation -- because
+    this file is read by Nessie/Quarkus directly, not by docker compose.
+    """
+    minio_user = env.get("MINIO_ROOT_USER", "admin")
+    minio_pass = env.get("MINIO_ROOT_PASSWORD", "udp_admin_12345")
+    return (
+        "# Nessie catalog S3 + warehouse config -- canonical Quarkus property form\n"
+        "# (env-var SmallRye reverse-mapping is unreliable for dotted-hyphenated\n"
+        "# secret-config names; using properties file directly avoids that).\n"
+        "nessie.catalog.default-warehouse=warehouse\n"
+        "nessie.catalog.warehouses.warehouse.location=s3://datalake/warehouse\n"
+        "nessie.catalog.service.s3.default-options.endpoint=http://minio:9000\n"
+        "nessie.catalog.service.s3.default-options.region=us-east-1\n"
+        "nessie.catalog.service.s3.default-options.path-style-access=true\n"
+        "nessie.catalog.service.s3.default-options.auth-type=STATIC\n"
+        "nessie.catalog.service.s3.default-options.access-key=urn:nessie-secret:quarkus:nessie.catalog.secrets.access-key\n"
+        f"nessie.catalog.secrets.access-key.name={minio_user}\n"
+        f"nessie.catalog.secrets.access-key.secret={minio_pass}\n"
     )
 
 
@@ -630,6 +663,14 @@ def write_fragment(stack_id: str, install_dir: Path,
         site_path = install_dir / "hive-metastore-site.xml"
         _atomic_write(site_path, _render_hms_site_xml(enriched))
         log.info("wrote hive-metastore-site.xml for stack=%s", stack_id)
+    # 2026-05-17: Nessie 0.99 SmallRye env-var reverse-mapping doesn't
+    # resolve dotted-hyphenated secret-config names reliably. Drop a
+    # canonical Quarkus application.properties next to the fragment so
+    # the compose bind-mount picks up the real S3 + warehouse config.
+    if stack_id == "iceberg-nessie-trino-local-v0.1":
+        props_path = install_dir / "nessie.properties"
+        _atomic_write(props_path, _render_nessie_properties(enriched))
+        log.info("wrote nessie.properties for stack=%s", stack_id)
     log.info(
         "stack compose fragment written stack_id=%s install_dir=%s",
         stack_id, install_dir,
