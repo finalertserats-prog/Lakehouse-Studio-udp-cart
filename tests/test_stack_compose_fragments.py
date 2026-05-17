@@ -1,0 +1,315 @@
+"""v0.6.1 — tests for backend/stack_compose_fragments.py.
+
+Covers:
+  - write_fragment returns None for stacks without a registered renderer
+    (the stable udp-local-v0.2 stack is the canonical case)
+  - write_fragment writes a docker-compose.fragment.yml for each of the
+    four candidate stacks
+  - The written YAML parses cleanly via yaml.safe_load
+  - Every service declared in FRAGMENT_SERVICES for a given stack
+    actually appears at the top-level services: map in the rendered YAML
+  - Each rendered service carries the contract keys: image, container_name,
+    healthcheck
+  - FRAGMENT_SERVICES is consistent with the renderers (the runner relies
+    on this mapping to extend the `docker compose up -d <services>` argv)
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+from backend import stack_compose_fragments as scf
+
+
+CANDIDATE_STACK_IDS = [
+    "iceberg-nessie-trino-local-v0.1",
+    "hudi-hms-spark-local-v0.1",
+    "delta-hms-spark-trino-local-v0.1",
+    "iceberg-polaris-spark-local-v0.1",
+]
+
+
+# ---------------------------------------------------------------------------
+# write_fragment dispatch — None for stacks with no renderer
+# ---------------------------------------------------------------------------
+
+def test_write_fragment_returns_none_for_stable_udp_stack(tmp_path: Path):
+    """udp-local-v0.2 is the stable stack — UDP's upstream compose ships
+    every service it needs, so no fragment is required. The runner
+    relies on the None return to skip overlay injection for stable
+    installs."""
+    result = scf.write_fragment("udp-local-v0.2", tmp_path, {})
+    assert result is None
+    # And critically: NO file should have been written.
+    assert not (tmp_path / scf.FRAGMENT_FILENAME).exists()
+
+
+def test_write_fragment_returns_none_for_unknown_stack(tmp_path: Path):
+    result = scf.write_fragment("does-not-exist-stack", tmp_path, {})
+    assert result is None
+    assert not (tmp_path / scf.FRAGMENT_FILENAME).exists()
+
+
+# ---------------------------------------------------------------------------
+# write_fragment writes a valid YAML file for each candidate
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
+def test_write_fragment_writes_file_for_candidate(stack_id: str, tmp_path: Path):
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    assert path.exists()
+    assert path.name == scf.FRAGMENT_FILENAME
+    assert path.parent == tmp_path
+    # File must be non-empty (we wrote actual content, not an empty placeholder).
+    assert path.stat().st_size > 0
+
+
+@pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
+def test_written_yaml_parses_cleanly(stack_id: str, tmp_path: Path):
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    body = path.read_text(encoding="utf-8")
+    # yaml.safe_load must not raise — broken YAML would break compose.
+    doc = yaml.safe_load(body)
+    assert isinstance(doc, dict)
+    assert "services" in doc, "fragment must declare a services: map"
+    assert isinstance(doc["services"], dict)
+    # Modern compose v2 — no top-level `version:` key.
+    assert "version" not in doc, (
+        "compose v2 fragments must omit the legacy `version:` key"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Services in the rendered YAML match FRAGMENT_SERVICES
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
+def test_fragment_services_match_rendered_services(stack_id: str, tmp_path: Path):
+    """The runner extends the `docker compose up -d <services>` argv with
+    FRAGMENT_SERVICES[stack_id]. If those names don't actually exist as
+    top-level keys in the rendered YAML, compose will reject the
+    command with `no such service`. This test is the contract guard."""
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    services = doc["services"]
+    expected_services = scf.FRAGMENT_SERVICES[stack_id]
+    for svc_name in expected_services:
+        assert svc_name in services, (
+            f"FRAGMENT_SERVICES says '{svc_name}' is part of '{stack_id}' "
+            f"but it's missing from the rendered YAML "
+            f"(services present: {sorted(services.keys())})"
+        )
+    # Conversely: every service in the YAML should be in FRAGMENT_SERVICES
+    # (otherwise the runner won't bring it up explicitly).
+    for svc_name in services:
+        assert svc_name in expected_services, (
+            f"Rendered YAML has service '{svc_name}' but FRAGMENT_SERVICES "
+            f"for '{stack_id}' doesn't list it — runner won't include it "
+            f"in `docker compose up -d`."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Each service has the required keys: image, container_name, healthcheck
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
+def test_each_service_has_required_keys(stack_id: str, tmp_path: Path):
+    """Every fragment service MUST declare:
+      - image: (otherwise compose can't pull it)
+      - container_name: (so the runner's logs and `docker exec` work)
+      - healthcheck: (so downstream services can `depends_on:
+        condition: service_healthy` against it)
+    """
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for svc_name, svc_def in doc["services"].items():
+        assert isinstance(svc_def, dict), (
+            f"service '{svc_name}' in '{stack_id}' is not a dict"
+        )
+        for key in ("image", "container_name", "healthcheck"):
+            assert key in svc_def, (
+                f"service '{svc_name}' in fragment for '{stack_id}' "
+                f"is missing required key '{key}'"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Stack-specific service-name expectations (regression guard)
+# ---------------------------------------------------------------------------
+
+EXPECTED_SERVICES_PER_STACK = {
+    "iceberg-nessie-trino-local-v0.1":  {"nessie"},
+    "hudi-hms-spark-local-v0.1":        {"postgres-hms", "hive-metastore"},
+    "delta-hms-spark-trino-local-v0.1": {"postgres-hms", "hive-metastore"},
+    "iceberg-polaris-spark-local-v0.1": {"postgres-polaris", "polaris"},
+}
+
+
+@pytest.mark.parametrize("stack_id,expected", list(EXPECTED_SERVICES_PER_STACK.items()))
+def test_specific_services_present_per_stack(stack_id: str, expected: set, tmp_path: Path):
+    """Pin the exact service names the spec called for so a future
+    rename of an internal helper can't silently change the contract."""
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert set(doc["services"].keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# Idempotency: writing twice overwrites cleanly
+# ---------------------------------------------------------------------------
+
+def test_write_fragment_is_idempotent(tmp_path: Path):
+    """Re-running with the same install_dir overwrites the fragment
+    atomically without leaving .tmp files behind."""
+    p1 = scf.write_fragment("hudi-hms-spark-local-v0.1", tmp_path, {})
+    p2 = scf.write_fragment("hudi-hms-spark-local-v0.1", tmp_path, {})
+    assert p1 == p2
+    assert p1.exists()
+    # No leftover .tmp file from the atomic-write dance.
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ---------------------------------------------------------------------------
+# Network attachment: external default network is declared on every fragment
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
+def test_fragment_attaches_to_external_default_network(stack_id: str, tmp_path: Path):
+    """Every fragment service joins `default`, and that network is
+    declared `external: true` so docker compose merges it with the
+    base stack's network rather than creating a sibling."""
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert "networks" in doc, "fragment must declare networks: top-level"
+    assert "default" in doc["networks"]
+    assert doc["networks"]["default"].get("external") is True
+    # Each service must be on the default network.
+    for svc_name, svc_def in doc["services"].items():
+        nets = svc_def.get("networks") or []
+        assert "default" in nets, (
+            f"service '{svc_name}' in '{stack_id}' is not attached to the "
+            f"shared default network"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Postgres services use named volumes (not bind mounts) — idempotency
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stack_id", [
+    "hudi-hms-spark-local-v0.1",
+    "delta-hms-spark-trino-local-v0.1",
+    "iceberg-polaris-spark-local-v0.1",
+])
+def test_postgres_services_use_named_volumes(stack_id: str, tmp_path: Path):
+    """Postgres data must live on a named volume, not a bind mount —
+    bind mounts to install_dir/data/ would leak across re-installs and
+    cause permission grief on Windows + macOS."""
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    # Find the postgres-* service.
+    pg_services = [s for s in doc["services"] if s.startswith("postgres-")]
+    assert pg_services, f"expected a postgres-* service in '{stack_id}'"
+    for pg_svc in pg_services:
+        volumes = doc["services"][pg_svc].get("volumes") or []
+        assert volumes, f"postgres service '{pg_svc}' must declare a volume"
+        # Named-volume form is `volname:/container/path` — no leading
+        # `./` (bind mount) or `/` (absolute bind mount).
+        for vol in volumes:
+            assert not vol.startswith("./"), (
+                f"'{pg_svc}' in '{stack_id}' uses a bind mount: {vol}"
+            )
+            assert not vol.startswith("/"), (
+                f"'{pg_svc}' in '{stack_id}' uses an absolute bind mount: {vol}"
+            )
+    # Named volumes must be declared at top-level volumes:.
+    assert "volumes" in doc, (
+        f"fragment for '{stack_id}' must declare top-level volumes: for "
+        f"its named postgres volume"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants the runner imports
+# ---------------------------------------------------------------------------
+
+def test_fragment_filename_constant():
+    assert scf.FRAGMENT_FILENAME == "docker-compose.fragment.yml"
+
+
+def test_fragment_services_covers_all_renderers():
+    """Every stack_id with a renderer MUST have a FRAGMENT_SERVICES
+    entry so the runner knows which services to include in `up -d`."""
+    for stack_id in scf._FRAGMENT_RENDERERS:
+        assert stack_id in scf.FRAGMENT_SERVICES, (
+            f"renderer for '{stack_id}' has no FRAGMENT_SERVICES entry"
+        )
+    # And vice versa — every FRAGMENT_SERVICES entry needs a renderer.
+    for stack_id in scf.FRAGMENT_SERVICES:
+        assert stack_id in scf._FRAGMENT_RENDERERS, (
+            f"FRAGMENT_SERVICES entry '{stack_id}' has no renderer"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Env interpolation: password defaults can be overridden via env
+# ---------------------------------------------------------------------------
+
+def test_hms_fragment_uses_compose_interpolation_for_password(tmp_path: Path):
+    """The HMS_DB_PASSWORD should be wired via compose's
+    `${VAR:-default}` syntax so the operator can override it via the
+    install's .env without re-rendering the fragment."""
+    path = scf.write_fragment("hudi-hms-spark-local-v0.1", tmp_path, {})
+    assert path is not None
+    body = path.read_text(encoding="utf-8")
+    assert "${HMS_DB_PASSWORD:-hive_password_pilot}" in body
+
+
+def test_polaris_fragment_uses_compose_interpolation_for_password(tmp_path: Path):
+    path = scf.write_fragment("iceberg-polaris-spark-local-v0.1", tmp_path, {})
+    assert path is not None
+    body = path.read_text(encoding="utf-8")
+    assert "${POLARIS_DB_PASSWORD:-polaris_password_pilot}" in body
+
+
+# ---------------------------------------------------------------------------
+# Network name override via env
+# ---------------------------------------------------------------------------
+
+def test_explicit_network_name_honored(tmp_path: Path):
+    """When the env supplies LHS_DOCKER_NETWORK, the fragment must
+    attach to that network instead of the install_dir-derived default."""
+    path = scf.write_fragment(
+        "iceberg-nessie-trino-local-v0.1",
+        tmp_path,
+        {"LHS_DOCKER_NETWORK": "my-custom-net"},
+    )
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert doc["networks"]["default"]["name"] == "my-custom-net"
+
+
+def test_install_dir_derived_network_name_default(tmp_path: Path):
+    """Without an explicit LHS_DOCKER_NETWORK, the fragment defaults to
+    `<install_dir.name>_default` so it joins the base stack's
+    auto-named network."""
+    install_dir = tmp_path / "my-install"
+    install_dir.mkdir()
+    path = scf.write_fragment(
+        "iceberg-nessie-trino-local-v0.1",
+        install_dir,
+        {},
+    )
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert doc["networks"]["default"]["name"] == "my-install_default"

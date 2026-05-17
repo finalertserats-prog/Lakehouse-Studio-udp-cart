@@ -762,6 +762,56 @@ class UDPRunner:
             cfg.write_text(text, encoding="utf-8")
             self._log("env", "stdout", "spark-defaults.conf: repointed 'udp' catalog from HMS to REST")
 
+    def _write_stack_fragment(self, env: dict[str, str]) -> None:
+        """v0.6.1 — write the per-stack docker-compose fragment, if any.
+
+        UDP's upstream docker-compose.yml doesn't define `nessie`,
+        `polaris`, `hive-metastore`, or `postgres-hms`. The four candidate
+        stacks that rely on those services need a fragment dropped next
+        to the base compose file so `docker compose up -d` actually has
+        a definition to work from.
+
+        Unlike `_write_optional_overlays`, this runs UNGATED on every
+        install — but no-ops for stack ids without a registered renderer
+        (e.g. the stable `udp-local-v0.2` cart). The fragment is INSERTED
+        at the FRONT of self._overlays so its services are visible to any
+        downstream opt-in overlay that might `depends_on` them.
+        """
+        try:
+            from .stack_compose_fragments import (
+                write_fragment,
+                FRAGMENT_SERVICES,
+            )
+        except ImportError as e:
+            self._log("env", "stderr",
+                      f"stack fragment module unavailable: {e}")
+            return
+        try:
+            path = write_fragment(self.stack.id, self.install_dir, env)
+        except Exception as e:
+            self._log("env", "stderr",
+                      f"stack fragment write failed for '{self.stack.id}': "
+                      f"{type(e).__name__}: {e} (continuing without it — "
+                      f"the stack's `start` step will likely fail downstream)")
+            return
+        if path is None:
+            # No fragment needed for this stack — stable path or unknown id.
+            return
+        services = list(FRAGMENT_SERVICES.get(self.stack.id, []) or [])
+        # FRONT-insert so the fragment's services come up before any
+        # opt-in overlay (Airflow/Dagster/Superset) that might depend on
+        # them. The runner's docker_compose_up branch processes overlays
+        # in order, appending `-f <file>` for each.
+        self._overlays.insert(0, {
+            "name": f"{self.stack.id}-fragment",
+            "file": path,
+            "services": services,
+        })
+        self._log("env", "stdout",
+                  f"stack fragment for '{self.stack.id}' written: "
+                  f"{path.name} ({len(services)} service"
+                  f"{'s' if len(services) != 1 else ''})")
+
     def _write_optional_overlays(self, env: dict[str, str]) -> None:
         """v0.6.1 — write opt-in compose overlays (Airflow / Dagster / Superset)
         next to the base compose file.
@@ -909,6 +959,15 @@ class UDPRunner:
             self._write_optional_overlays(merged)
         except Exception as e:
             self._log("env", "stderr", f"overlay write warning: {e}")
+
+        # v0.6.1 — write the per-stack compose fragment (required for the
+        # four candidate stacks whose catalog/HMS/Polaris services aren't
+        # in UDP's upstream compose). No-ops for the stable udp-local-v0.2
+        # stack and any other id without a registered renderer.
+        try:
+            self._write_stack_fragment(merged)
+        except Exception as e:
+            self._log("env", "stderr", f"stack fragment write warning: {e}")
 
         # Make UDP scripts executable. On Windows chmod is a near-noop, but on
         # Linux/macOS it matters. Don't swallow surprising errors silently.
