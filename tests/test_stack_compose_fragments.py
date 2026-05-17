@@ -24,6 +24,10 @@ from backend import stack_compose_fragments as scf
 
 
 CANDIDATE_STACK_IDS = [
+    # 2026-05-17 bug fix: udp-trino-local-v0.1 now needs a fragment too —
+    # UDP's upstream docker-compose.yml has no `trino` service definition,
+    # so `docker compose up -d ... trino ...` failed with `no such service`.
+    "udp-trino-local-v0.1",
     "iceberg-nessie-trino-local-v0.1",
     "hudi-hms-spark-local-v0.1",
     "delta-hms-spark-trino-local-v0.1",
@@ -145,11 +149,19 @@ def test_each_service_has_required_keys(stack_id: str, tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 EXPECTED_SERVICES_PER_STACK = {
-    "iceberg-nessie-trino-local-v0.1":  {"nessie"},
+    # 2026-05-17 bug fix: udp-trino-local-v0.1 needs a Trino service
+    # (UDP's upstream compose doesn't ship one).
+    "udp-trino-local-v0.1":              {"trino"},
+    # iceberg-nessie-trino: Nessie catalog + Trino query engine, both
+    # missing from the upstream compose file.
+    "iceberg-nessie-trino-local-v0.1":  {"nessie", "trino"},
     # v0.6.2 refactor 2026-05-17: HMS backing is MySQL (not Postgres) —
     # bitsondatadev/hive-metastore image is MySQL-only by design.
     "hudi-hms-spark-local-v0.1":        {"mysql-hms", "hive-metastore"},
-    "delta-hms-spark-trino-local-v0.1": {"mysql-hms", "hive-metastore"},
+    # delta-hms-spark-trino: HMS pair + Trino, but Hudi uses ONLY the
+    # HMS pair (no Trino), so this stack gets its own renderer to avoid
+    # bleeding Trino into the Hudi install.
+    "delta-hms-spark-trino-local-v0.1": {"mysql-hms", "hive-metastore", "trino"},
     "iceberg-polaris-spark-local-v0.1": {"postgres-polaris", "polaris"},
 }
 
@@ -331,3 +343,94 @@ def test_default_network_has_no_external_or_name_override(tmp_path: Path):
     doc2 = yaml.safe_load(path2.read_text(encoding="utf-8"))
     net2 = doc2["networks"]["default"] or {}
     assert net2.get("external") is not True
+
+
+# ---------------------------------------------------------------------------
+# Trino service: present in all 3 Trino-using stacks; absent from the others
+# ---------------------------------------------------------------------------
+
+TRINO_STACK_IDS = [
+    "udp-trino-local-v0.1",
+    "iceberg-nessie-trino-local-v0.1",
+    "delta-hms-spark-trino-local-v0.1",
+]
+
+NON_TRINO_STACK_IDS = [
+    "hudi-hms-spark-local-v0.1",
+    "iceberg-polaris-spark-local-v0.1",
+]
+
+
+@pytest.mark.parametrize("stack_id", TRINO_STACK_IDS)
+def test_trino_service_present_in_trino_stacks(stack_id: str, tmp_path: Path):
+    """Bug fix 2026-05-17: UDP's upstream docker-compose.yml does NOT
+    ship a `trino` service definition. Every stack whose `start` step
+    references trino must get a Trino service via the fragment."""
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert "trino" in doc["services"], (
+        f"'{stack_id}' must include a trino service "
+        f"(present: {sorted(doc['services'].keys())})"
+    )
+    trino_svc = doc["services"]["trino"]
+    assert trino_svc["image"].startswith("trinodb/trino:"), (
+        f"trino service in '{stack_id}' has unexpected image: {trino_svc['image']}"
+    )
+    # The Trino UI / API port must be exposed so the bootstrap script
+    # can reach /v1/info and the operator can hit the web console.
+    assert any(
+        "8080:8080" in str(p) for p in trino_svc.get("ports") or []
+    ), f"trino in '{stack_id}' must publish port 8080"
+
+
+@pytest.mark.parametrize("stack_id", NON_TRINO_STACK_IDS)
+def test_trino_service_absent_from_non_trino_stacks(stack_id: str, tmp_path: Path):
+    """Hudi (Spark-only) and Polaris (Spark-only) stacks must NOT get a
+    Trino service — that would burn ~3 GB of RAM for no reason and
+    publish port 8080 they don't use."""
+    path = scf.write_fragment(stack_id, tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert "trino" not in doc["services"], (
+        f"'{stack_id}' must NOT include a trino service "
+        f"(present: {sorted(doc['services'].keys())})"
+    )
+
+
+def test_udp_trino_fragment_is_trino_only(tmp_path: Path):
+    """udp-trino-local-v0.1 uses the upstream iceberg-rest catalog — its
+    fragment supplies ONLY the missing Trino service (no Nessie, no HMS)."""
+    path = scf.write_fragment("udp-trino-local-v0.1", tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert set(doc["services"].keys()) == {"trino"}
+
+
+def test_nessie_fragment_includes_nessie_and_trino(tmp_path: Path):
+    """iceberg-nessie-trino-local-v0.1 needs BOTH services from its
+    fragment because UDP ships neither."""
+    path = scf.write_fragment("iceberg-nessie-trino-local-v0.1", tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert set(doc["services"].keys()) == {"nessie", "trino"}
+
+
+def test_delta_fragment_includes_hms_pair_and_trino(tmp_path: Path):
+    """delta-hms-spark-trino-local-v0.1 needs HMS + MySQL backing + Trino
+    — three services, all missing from UDP's upstream compose."""
+    path = scf.write_fragment("delta-hms-spark-trino-local-v0.1", tmp_path, {})
+    assert path is not None
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert set(doc["services"].keys()) == {"mysql-hms", "hive-metastore", "trino"}
+
+
+def test_trino_service_env_uses_compose_interpolation(tmp_path: Path):
+    """JVM/memory caps must be wired via `${VAR:-default}` so the operator
+    can tune via the install's .env without re-rendering the fragment."""
+    path = scf.write_fragment("udp-trino-local-v0.1", tmp_path, {})
+    assert path is not None
+    body = path.read_text(encoding="utf-8")
+    assert "${TRINO_JAVA_OPTS:-" in body
+    assert "${TRINO_QUERY_MAX_MEMORY_PER_NODE:-1.5GB}" in body
+    assert "${TRINO_QUERY_MAX_MEMORY:-1.5GB}" in body
