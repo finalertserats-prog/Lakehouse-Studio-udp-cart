@@ -82,10 +82,11 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-nessie-bootstrap] writing Trino iceberg catalog properties (Nessie REST)..."
-# Trino reads /etc/trino/catalog/*.properties at startup; we write the file
-# then restart trino to register the iceberg catalog. Idempotent â€” writing
-# the same file twice is fine. Path-style + explicit MinIO creds required.
-docker exec udp-trino bash -c 'cat > /etc/trino/catalog/iceberg.properties' <<'TRINOCAT'
+# Trino 475 reads /data/trino/etc/catalog/*.properties at startup; we write
+# the file then restart trino to register the iceberg catalog. Idempotent â€”
+# writing the same file twice is fine. Path-style + explicit MinIO creds required.
+docker exec udp-trino mkdir -p /data/trino/etc/catalog/
+docker exec udp-trino bash -c 'cat > /data/trino/etc/catalog/iceberg.properties' <<'TRINOCAT'
 connector.name=iceberg
 iceberg.catalog.type=rest
 iceberg.rest-catalog.uri=http://nessie:19120/iceberg/main
@@ -481,7 +482,7 @@ echo "[studio-hudi-smoke] passed"
 # Strategy: Init HMS schema in Postgres, create Delta raw/curated tables
 # via spark-sql USING DELTA + LOCATION on s3a://, register them in HMS
 # (delta-spark auto-registers when spark_catalog is the HiveCatalog),
-# then write /etc/trino/catalog/delta.properties (metastore=thrift,
+# then write /data/trino/etc/catalog/delta.properties (metastore=thrift,
 # pointing at HMS + MinIO), restart Trino, verify Trino sees the tables.
 # Smoke runs spark-sql SELECT then Trino SELECT against the same Delta
 # table and asserts identical row counts (5 raw, 4 curated).
@@ -609,7 +610,9 @@ done
 
 echo "[studio-delta-bootstrap] writing Trino delta-lake catalog properties..."
 # Trino's delta-lake connector reads tables registered in HMS; no REST.
-docker exec udp-trino bash -c 'cat > /etc/trino/catalog/delta.properties' <<'TRINOCAT'
+# Trino 475 reads from /data/trino/etc/catalog/ at startup.
+docker exec udp-trino mkdir -p /data/trino/etc/catalog/
+docker exec udp-trino bash -c 'cat > /data/trino/etc/catalog/delta.properties' <<'TRINOCAT'
 connector.name=delta-lake
 hive.metastore=thrift
 hive.metastore.uri=thrift://hive-metastore:9083

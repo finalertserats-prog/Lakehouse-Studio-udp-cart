@@ -144,8 +144,8 @@ echo "[studio-smoke] passed"
 # Mirror shape of the Spark scripts above so the runner harness can reuse its
 # result-parsing logic. Key differences from Spark:
 #   - Trino's iceberg catalog is configured via a properties file inside the
-#     trino container (Trino reads /etc/trino/catalog/*.properties only at
-#     startup, so the bootstrap writes the file then restarts trino).
+#     trino container (Trino 475 reads /data/trino/etc/catalog/*.properties
+#     only at startup, so the bootstrap writes the file then restarts trino).
 #   - Demo seed runs as Trino SQL (CREATE SCHEMA / CREATE TABLE / INSERT)
 #     instead of a PySpark job; round-trip raw -> curated stays inside Trino.
 #   - StarRocks side of the bootstrap is identical to v0.2 (same Iceberg-REST
@@ -183,11 +183,12 @@ for i in $(seq 1 60); do
 done
 
 echo "[studio-trino-bootstrap] writing Trino iceberg catalog properties..."
-# Trino reads /etc/trino/catalog/*.properties at startup. We write the file
-# then restart trino so the iceberg catalog is registered. Idempotent —
-# writing the same file twice is fine; restart is cheap on a warm host.
+# Trino 475 reads /data/trino/etc/catalog/*.properties at startup. We write
+# the file then restart trino so the iceberg catalog is registered. Idempotent
+# — writing the same file twice is fine; restart is cheap on a warm host.
 # Path-style + explicit S3 credentials required by MinIO (HTTP, no IAM).
-docker exec udp-trino bash -c 'cat > /etc/trino/catalog/iceberg.properties' <<'TRINOCAT'
+docker exec udp-trino mkdir -p /data/trino/etc/catalog/
+docker exec udp-trino bash -c 'cat > /data/trino/etc/catalog/iceberg.properties' <<'TRINOCAT'
 connector.name=iceberg
 iceberg.catalog.type=rest
 iceberg.rest-catalog.uri=http://iceberg-rest:8181
