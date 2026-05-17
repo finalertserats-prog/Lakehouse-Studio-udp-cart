@@ -65,7 +65,7 @@ echo "[studio-nessie-bootstrap] ensuring Nessie 'main' branch exists..."
 # Nessie auto-creates 'main' on first start; this is a no-op safety check
 # that surfaces a clear error if Nessie's default-branch config is broken.
 if ! curl -fsS http://localhost:19120/api/v2/trees/main >/dev/null 2>&1; then
-  echo "  'main' branch missing — creating..."
+  echo "  'main' branch missing â€” creating..."
   curl -fsS -X POST -H "Content-Type: application/json" \
     "http://localhost:19120/api/v2/trees?name=main&type=BRANCH" \
     -d '{}' >/dev/null || true
@@ -83,7 +83,7 @@ done
 
 echo "[studio-nessie-bootstrap] writing Trino iceberg catalog properties (Nessie REST)..."
 # Trino reads /etc/trino/catalog/*.properties at startup; we write the file
-# then restart trino to register the iceberg catalog. Idempotent — writing
+# then restart trino to register the iceberg catalog. Idempotent â€” writing
 # the same file twice is fine. Path-style + explicit MinIO creds required.
 docker exec udp-trino bash -c 'cat > /etc/trino/catalog/iceberg.properties' <<'TRINOCAT'
 connector.name=iceberg
@@ -177,7 +177,16 @@ PROPERTIES (
     "aws.s3.enable_path_style_access" = "true",
     "aws.s3.region" = "us-east-1",
     "aws.s3.access_key" = "admin",
-    "aws.s3.secret_key" = "udp_admin_12345"
+    "aws.s3.secret_key" = "udp_admin_12345",
+    -- Iceberg REST FileIO unprefixed s3.* keys (parallel to aws.s3.*).
+    -- Required for the FileIO layer inside Iceberg REST clients;
+    -- without these, StarRocks BE hits UnknownHostException at query
+    -- time on virtual-hosted-style addresses. Same fix as udp-local-v0.2.
+    "s3.endpoint" = "http://minio:9000",
+    "s3.path-style-access" = "true",
+    "s3.access-key-id" = "admin",
+    "s3.secret-access-key" = "udp_admin_12345",
+    "client.region" = "us-east-1"
 );
 SQL
 
@@ -282,7 +291,7 @@ echo "[studio-hudi-bootstrap] downloading postgres JDBC driver into HMS containe
 # The bitsondatadev/hive-metastore image ships with NO postgres JDBC driver,
 # so schematool falls back to Derby and fails with "No suitable driver found".
 # Fetch postgresql-42.7.4 (current stable) into the HMS lib dir before any
-# schematool call. Idempotent — re-run is a no-op (-z check).
+# schematool call. Idempotent â€” re-run is a no-op (-z check).
 docker exec udp-hive-metastore bash -lc '
   set -e
   JAR=/opt/apache-hive-metastore-3.0.0-bin/lib/postgresql-42.7.4.jar
@@ -292,10 +301,10 @@ docker exec udp-hive-metastore bash -lc '
   else
     echo "  postgres-jdbc already present"
   fi
-' || { echo "postgres-jdbc download failed — schematool will hit Derby fallback"; exit 1; }
+' || { echo "postgres-jdbc download failed â€” schematool will hit Derby fallback"; exit 1; }
 
 echo "[studio-hudi-bootstrap] initializing HMS schema (idempotent)..."
-# schematool needs explicit JDBC URL + creds — without them it defaults
+# schematool needs explicit JDBC URL + creds â€” without them it defaults
 # to Derby (in-process embedded DB) and tries to create `metastore_db`
 # locally, which is exactly what the VPS install attempt 3 hit.
 # Bug fix 2026-05-17: pass -url / -userName / -passWord explicitly.
@@ -309,7 +318,7 @@ if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schem
     >/dev/null 2>&1; then
   echo "  HMS schema already initialized"
 else
-  echo "  HMS schema missing — running initSchema"
+  echo "  HMS schema missing â€” running initSchema"
   docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
     -dbType postgres -initSchema \
     -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER" -passWord "$HMS_DB_PASSWORD" || {
@@ -318,7 +327,7 @@ else
           -dbType postgres -info \
           -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER" -passWord "$HMS_DB_PASSWORD" \
           >/dev/null 2>&1; then
-        echo "  HMS schema initialized by entrypoint race — OK"
+        echo "  HMS schema initialized by entrypoint race â€” OK"
       else
         echo "HMS initSchema failed"; exit 1
       fi
@@ -547,7 +556,7 @@ echo "[studio-delta-bootstrap] downloading postgres JDBC driver into HMS contain
 # The bitsondatadev/hive-metastore image ships with NO postgres JDBC driver,
 # so schematool falls back to Derby and fails with "No suitable driver found".
 # Fetch postgresql-42.7.4 (current stable) into the HMS lib dir before any
-# schematool call. Idempotent — re-run is a no-op (-z check).
+# schematool call. Idempotent â€” re-run is a no-op (-z check).
 docker exec udp-hive-metastore bash -lc '
   set -e
   JAR=/opt/apache-hive-metastore-3.0.0-bin/lib/postgresql-42.7.4.jar
@@ -557,7 +566,7 @@ docker exec udp-hive-metastore bash -lc '
   else
     echo "  postgres-jdbc already present"
   fi
-' || { echo "postgres-jdbc download failed — schematool will hit Derby fallback"; exit 1; }
+' || { echo "postgres-jdbc download failed â€” schematool will hit Derby fallback"; exit 1; }
 
 echo "[studio-delta-bootstrap] initializing HMS schema (idempotent)..."
 # Same JDBC-explicit fix as hudi bootstrap (2026-05-17 VPS attempt 3).
@@ -569,12 +578,12 @@ if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schem
     -dbType postgres -info -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" >/dev/null 2>&1; then
   echo "  HMS schema already initialized"
 else
-  echo "  HMS schema missing — running initSchema"
+  echo "  HMS schema missing â€” running initSchema"
   docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
     -dbType postgres -initSchema -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" || {
       if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
           -dbType postgres -info -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" >/dev/null 2>&1; then
-        echo "  HMS schema initialized by entrypoint race — OK"
+        echo "  HMS schema initialized by entrypoint race â€” OK"
       else
         echo "HMS initSchema failed"; exit 1
       fi
@@ -854,12 +863,12 @@ ROOT_TOKEN=$(curl -fsS -X POST "${POLARIS_CATALOG_URI}/v1/oauth/tokens" \
   -d "grant_type=client_credentials&client_id=${POLARIS_ROOT_CLIENT_ID:-root}&client_secret=${POLARIS_ROOT_CLIENT_SECRET:-s3cr3t}&scope=PRINCIPAL_ROLE:ALL" \
   | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
 if [ -z "${ROOT_TOKEN}" ]; then
-  echo "failed to obtain Polaris root token — check POLARIS_BOOTSTRAP_CREDENTIALS"; exit 1
+  echo "failed to obtain Polaris root token â€” check POLARIS_BOOTSTRAP_CREDENTIALS"; exit 1
 fi
 echo "  root token acquired"
 
 echo "[studio-polaris-bootstrap] creating Polaris catalog '${CATALOG_NAME}' (idempotent)..."
-# 409 on a re-run means already exists — treat as success.
+# 409 on a re-run means already exists â€” treat as success.
 HTTP_CODE=$(curl -s -o /tmp/polaris_cat.out -w "%{http_code}" -X POST \
   "${POLARIS_MGMT}/catalogs" \
   -H "Authorization: Bearer ${ROOT_TOKEN}" \
@@ -881,7 +890,7 @@ HTTP_CODE=$(curl -s -o /tmp/polaris_cat.out -w "%{http_code}" -X POST \
   }")
 case "${HTTP_CODE}" in
   201|200) echo "  catalog created" ;;
-  409)     echo "  catalog already exists — OK" ;;
+  409)     echo "  catalog already exists â€” OK" ;;
   *)       echo "catalog create failed: HTTP ${HTTP_CODE}"; cat /tmp/polaris_cat.out; exit 1 ;;
 esac
 
@@ -894,7 +903,7 @@ HTTP_CODE=$(curl -s -o /tmp/polaris_princ.out -w "%{http_code}" -X POST \
   -H "Content-Type: application/json" \
   -d "{ \"principal\": { \"name\": \"${PRINCIPAL_NAME}\" } }")
 if [ "${HTTP_CODE}" = "409" ]; then
-  echo "  principal exists — rotating credentials"
+  echo "  principal exists â€” rotating credentials"
   curl -fsS -X POST \
     "${POLARIS_MGMT}/principals/${PRINCIPAL_NAME}/rotate" \
     -H "Authorization: Bearer ${ROOT_TOKEN}" -o /tmp/polaris_princ.out
@@ -909,7 +918,7 @@ fi
 echo "  principal credentials captured (client_id=${CLIENT_ID:0:8}...)"
 
 echo "[studio-polaris-bootstrap] granting catalog_admin to principal..."
-# Create catalog role if missing, grant to principal — both idempotent.
+# Create catalog role if missing, grant to principal â€” both idempotent.
 curl -s -o /dev/null -X PUT \
   "${POLARIS_MGMT}/catalogs/${CATALOG_NAME}/catalog-roles/catalog_admin/grants" \
   -H "Authorization: Bearer ${ROOT_TOKEN}" \
@@ -957,9 +966,9 @@ with open("/tmp/lhs/polaris_creds.env") as fh:
 catalog = os.environ["POLARIS_CATALOG_NAME"]
 # Codex P0 fix 2026-05-17: Polaris 1.4.x requires the Iceberg REST client
 # to opt into the OAuth2 client_credentials flow explicitly. The two
-# additional properties below — `rest.auth.type=oauth2` and
+# additional properties below â€” `rest.auth.type=oauth2` and
 # `rest.oauth2-server-uri` (pointing at the FULL token endpoint, NOT the
-# base catalog URI) — make Spark's Iceberg client mint a bearer token via
+# base catalog URI) â€” make Spark's Iceberg client mint a bearer token via
 # Polaris's /api/catalog/v1/oauth/tokens endpoint and refresh on 401.
 # Without them the client skips auth and Polaris returns 401 on every call.
 # Ref: https://polaris.apache.org/docs/oauth +
@@ -1055,7 +1064,7 @@ PROPERTIES (
     "iceberg.catalog.warehouse" = "${CATALOG_NAME}",
     -- Codex P0 fix 2026-05-17: Polaris 1.4.x requires StarRocks to opt
     -- into the OAuth2 client_credentials flow explicitly. The two
-    -- `iceberg.rest.*` properties below mirror what Spark sends — without
+    -- `iceberg.rest.*` properties below mirror what Spark sends â€” without
     -- them StarRocks skips auth and Polaris returns 401 on every catalog
     -- list. The server-uri points at the FULL token endpoint, not the
     -- base catalog URL.
@@ -1071,7 +1080,16 @@ PROPERTIES (
     "aws.s3.enable_path_style_access" = "true",
     "aws.s3.region" = "us-east-1",
     "aws.s3.access_key" = "admin",
-    "aws.s3.secret_key" = "udp_admin_12345"
+    "aws.s3.secret_key" = "udp_admin_12345",
+    -- Iceberg REST FileIO unprefixed s3.* keys (parallel to aws.s3.*).
+    -- Required for the FileIO layer inside Iceberg REST clients;
+    -- without these, StarRocks BE hits UnknownHostException at query
+    -- time on virtual-hosted-style addresses. Same fix as udp-local-v0.2.
+    "s3.endpoint" = "http://minio:9000",
+    "s3.path-style-access" = "true",
+    "s3.access-key-id" = "admin",
+    "s3.secret-access-key" = "udp_admin_12345",
+    "client.region" = "us-east-1"
 );
 SQL
 
@@ -1124,7 +1142,7 @@ with open("/tmp/lhs/polaris_creds.env") as fh:
 
 catalog = os.environ["POLARIS_CATALOG_NAME"]
 # Codex P0 fix 2026-05-17: mirror the OAuth2 properties from the bootstrap
-# Spark config — Polaris 1.4.x requires explicit `rest.auth.type=oauth2`
+# Spark config â€” Polaris 1.4.x requires explicit `rest.auth.type=oauth2`
 # and the FULL token endpoint at `rest.oauth2-server-uri`. Without these
 # the smoke script's Spark session skips auth and Polaris returns 401.
 spark = (
@@ -1186,7 +1204,7 @@ echo "[studio-polaris-smoke] passed"
 
 
 # =============================================================================
-# Exported dispatch — runner.py merges this into _STUDIO_SCRIPT_SETS.
+# Exported dispatch â€” runner.py merges this into _STUDIO_SCRIPT_SETS.
 # Filenames MUST match commands.bootstrap / commands.smoke argv in each
 # stack manifest under stacks/.
 # =============================================================================
