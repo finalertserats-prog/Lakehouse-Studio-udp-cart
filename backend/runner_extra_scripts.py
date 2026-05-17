@@ -282,7 +282,7 @@ echo "[studio-hudi-bootstrap] downloading postgres JDBC driver into HMS containe
 # The bitsondatadev/hive-metastore image ships with NO postgres JDBC driver,
 # so schematool falls back to Derby and fails with "No suitable driver found".
 # Fetch postgresql-42.7.4 (current stable) into the HMS lib dir before any
-# schematool call. Idempotent — re-run is a no-op (-z check).
+# schematool call. Idempotent â€” re-run is a no-op (-z check).
 docker exec udp-hive-metastore bash -lc '
   set -e
   JAR=/opt/apache-hive-metastore-3.0.0-bin/lib/postgresql-42.7.4.jar
@@ -292,7 +292,7 @@ docker exec udp-hive-metastore bash -lc '
   else
     echo "  postgres-jdbc already present"
   fi
-' || { echo "postgres-jdbc download failed — schematool will hit Derby fallback"; exit 1; }
+' || { echo "postgres-jdbc download failed â€” schematool will hit Derby fallback"; exit 1; }
 
 echo "[studio-hudi-bootstrap] initializing HMS schema (idempotent)..."
 # schematool needs explicit JDBC URL + creds â€” without them it defaults
@@ -547,7 +547,7 @@ echo "[studio-delta-bootstrap] downloading postgres JDBC driver into HMS contain
 # The bitsondatadev/hive-metastore image ships with NO postgres JDBC driver,
 # so schematool falls back to Derby and fails with "No suitable driver found".
 # Fetch postgresql-42.7.4 (current stable) into the HMS lib dir before any
-# schematool call. Idempotent — re-run is a no-op (-z check).
+# schematool call. Idempotent â€” re-run is a no-op (-z check).
 docker exec udp-hive-metastore bash -lc '
   set -e
   JAR=/opt/apache-hive-metastore-3.0.0-bin/lib/postgresql-42.7.4.jar
@@ -557,7 +557,7 @@ docker exec udp-hive-metastore bash -lc '
   else
     echo "  postgres-jdbc already present"
   fi
-' || { echo "postgres-jdbc download failed — schematool will hit Derby fallback"; exit 1; }
+' || { echo "postgres-jdbc download failed â€” schematool will hit Derby fallback"; exit 1; }
 
 echo "[studio-delta-bootstrap] initializing HMS schema (idempotent)..."
 # Same JDBC-explicit fix as hudi bootstrap (2026-05-17 VPS attempt 3).
