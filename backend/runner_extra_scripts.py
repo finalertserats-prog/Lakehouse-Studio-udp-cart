@@ -280,15 +280,15 @@ done
 
 echo "[studio-hudi-bootstrap] initializing HMS schema (idempotent)..."
 # schematool exits non-zero if schema already exists; we treat that as success.
-if docker exec udp-hive-metastore /opt/hive-metastore/bin/schematool \
+if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
     -dbType postgres -info >/dev/null 2>&1; then
   echo "  HMS schema already initialized"
 else
   echo "  HMS schema missing — running initSchema"
-  docker exec udp-hive-metastore /opt/hive-metastore/bin/schematool \
+  docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
     -dbType postgres -initSchema || {
       # Race with the HMS image's own entrypoint that may have just init'd it.
-      if docker exec udp-hive-metastore /opt/hive-metastore/bin/schematool \
+      if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
           -dbType postgres -info >/dev/null 2>&1; then
         echo "  HMS schema initialized by entrypoint race — OK"
       else
@@ -516,14 +516,14 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-delta-bootstrap] initializing HMS schema (idempotent)..."
-if docker exec udp-hive-metastore /opt/hive-metastore/bin/schematool \
+if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
     -dbType postgres -info >/dev/null 2>&1; then
   echo "  HMS schema already initialized"
 else
   echo "  HMS schema missing — running initSchema"
-  docker exec udp-hive-metastore /opt/hive-metastore/bin/schematool \
+  docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
     -dbType postgres -initSchema || {
-      if docker exec udp-hive-metastore /opt/hive-metastore/bin/schematool \
+      if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
           -dbType postgres -info >/dev/null 2>&1; then
         echo "  HMS schema initialized by entrypoint race — OK"
       else
