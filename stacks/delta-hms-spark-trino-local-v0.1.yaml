@@ -1,3 +1,15 @@
+# ============================================================================
+# CANDIDATE — KNOWN INSTALL BLOCKER (Codex review 2026-05-17 P0)
+# ============================================================================
+# This manifest will FAIL at the `start` step until two prerequisites land:
+#   1. The lakehousestudio/spark-delta:3.5.0_3.2.1 image must be built and
+#      published. Bake recipe lives at scripts/images/Dockerfile.spark-delta.
+#   2. UDP's upstream docker-compose.yml does NOT ship hive-metastore +
+#      postgres-hms. Until Studio's runner appends a Delta-specific compose
+#      overlay (planned v0.6.1), this stack needs manual compose drop-in.
+# Promotion to pilot-stable requires fixing both, then capturing an
+# evidence[] entry in stacks/compatibility/delta-hms-spark-trino-local-v0.1.lock.yaml.
+# ============================================================================
 id: delta-hms-spark-trino-local-v0.1
 name: Delta Lake + Hive Metastore + Spark + Trino (Candidate)
 version: "0.1"

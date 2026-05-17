@@ -88,7 +88,7 @@ echo "[studio-nessie-bootstrap] writing Trino iceberg catalog properties (Nessie
 docker exec udp-trino bash -c 'cat > /etc/trino/catalog/iceberg.properties' <<'TRINOCAT'
 connector.name=iceberg
 iceberg.catalog.type=rest
-iceberg.rest-catalog.uri=http://nessie:19120/api/v2
+iceberg.rest-catalog.uri=http://nessie:19120/iceberg/main
 iceberg.rest-catalog.warehouse=s3://datalake/warehouse
 fs.native-s3.enabled=true
 s3.endpoint=http://minio:9000
@@ -169,7 +169,7 @@ CREATE EXTERNAL CATALOG iceberg_nessie_catalog
 PROPERTIES (
     "type" = "iceberg",
     "iceberg.catalog.type" = "rest",
-    "iceberg.catalog.uri" = "http://nessie:19120/api/v2",
+    "iceberg.catalog.uri" = "http://nessie:19120/iceberg/main",
     "iceberg.catalog.warehouse" = "s3://datalake/warehouse",
     "iceberg.catalog.vended-credentials-enabled" = "false",
     "aws.s3.endpoint" = "http://minio:9000",

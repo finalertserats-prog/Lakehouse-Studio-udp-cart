@@ -141,6 +141,10 @@ def _all_stack_vocabularies() -> dict[str, dict[str, Any]]:
     return out
 
 
+_MINIMAL_MARRIAGE_FRACTION = 0.6
+_MINIMAL_MARRIAGE_FLOOR = 3
+
+
 def _select_best_match(
     cart_set: set[str],
     catalog: dict[str, dict[str, Any]],
@@ -151,9 +155,14 @@ def _select_best_match(
       1. cart must be non-empty (empty cart never matches — it would
          vacuously subset every vocab, which is meaningless)
       2. cart_set must be a subset of stack's vocab
-      3. Prefer higher _STATUS_PRIORITY (pilot-stable > candidate)
-      4. Tie-break on smaller vocab (most specific marriage wins)
-      5. Tie-break on stack_id alphabetic order (deterministic)
+      3. cart must cover a meaningful fraction of the stack — a single
+         shared component (e.g. just `minio`) trivially subsets every
+         stack but is not a marriage. Floor: max(3, 60% of stack vocab).
+         (Codex review 2026-05-17 P0 — without this floor, the verdict
+         falsely returns `compatible` for `[minio]` alone.)
+      4. Prefer higher _STATUS_PRIORITY (pilot-stable > candidate)
+      5. Tie-break on smaller vocab (most specific marriage wins)
+      6. Tie-break on stack_id alphabetic order (deterministic)
     """
     if not cart_set:
         return None, None
@@ -161,10 +170,15 @@ def _select_best_match(
     for stack_id, entry in catalog.items():
         if not cart_set.issubset(entry["vocab"]):
             continue
+        # Marriage floor — cart must cover enough of the stack to count
+        # as picking that stack, not just sharing one component with it.
+        threshold = max(
+            _MINIMAL_MARRIAGE_FLOOR,
+            int(entry["size"] * _MINIMAL_MARRIAGE_FRACTION),
+        )
+        if len(cart_set) < threshold:
+            continue
         priority = _STATUS_PRIORITY.get(entry["status"] or "", 0)
-        # Higher priority first → negate for ascending sort
-        # Smaller vocab first → keep ascending
-        # Alpha asc → keep ascending
         candidates.append((-priority, entry["size"], stack_id, entry))
     if not candidates:
         return None, None
@@ -479,13 +493,24 @@ def suggest_swap(component_ids: list[str]) -> dict | None:
     cart_set = set(cart)
     catalog = _all_stack_vocabularies()
 
-    # Try each single-removal and score the result
+    # Try each single-removal and score the result. We bypass the
+    # marriage-floor here (subset-only) because the swap path is
+    # explicitly about "if you also added the missing components, this
+    # would marry" — not "you already have enough to install."
     best: tuple[int, int, str, str, list[str]] | None = None  # (priority, vocab_size, stack_id, removed, missing)
     for to_remove in cart:
         candidate_cart = cart_set - {to_remove}
         if not candidate_cart:
             continue
-        match_id, match_entry = _select_best_match(candidate_cart, catalog)
+        match_id, match_entry = None, None
+        for stack_id, entry in catalog.items():
+            if not candidate_cart.issubset(entry["vocab"]):
+                continue
+            if match_entry is None or entry["size"] < match_entry["size"]:
+                if (_STATUS_PRIORITY.get(entry["status"] or "", 0)
+                        >= _STATUS_PRIORITY.get(
+                            (match_entry["status"] if match_entry else "") or "", 0)):
+                    match_id, match_entry = stack_id, entry
         if not match_id or not match_entry:
             continue
         # Optional: surface what else the alt stack's recommended set wants

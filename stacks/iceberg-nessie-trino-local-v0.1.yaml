@@ -1,3 +1,13 @@
+# ============================================================================
+# CANDIDATE — KNOWN INSTALL BLOCKER (Codex review 2026-05-17 P0)
+# ============================================================================
+# UDP's upstream docker-compose.yml does NOT ship a Nessie service. Until
+# Studio's runner can append a Nessie compose overlay (planned v0.6.1),
+# the operator must manually drop a docker-compose.nessie.yml into
+# install_dir containing the ghcr.io/projectnessie/nessie:0.99.0 service.
+# Promotion to pilot-stable requires (a) the overlay wiring + (b) an
+# evidence[] entry in the matching lock file.
+# ============================================================================
 id: iceberg-nessie-trino-local-v0.1
 name: Iceberg + Nessie + Trino Lakehouse (Candidate)
 version: "0.1"

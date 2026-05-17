@@ -1,3 +1,16 @@
+# ============================================================================
+# CANDIDATE — KNOWN INSTALL BLOCKER (Codex review 2026-05-17 P0)
+# ============================================================================
+# This manifest will FAIL at the `start` step until two prerequisites land:
+#   1. The lakehousestudio/spark-hudi:3.5.0_0.15.0 image must be built and
+#      published. Bake recipe lives at scripts/images/Dockerfile.spark-hudi.
+#   2. UDP's upstream docker-compose.yml does NOT ship hive-metastore +
+#      postgres-hms services. Until Studio's runner appends a Hudi-specific
+#      compose overlay (planned v0.6.1), this stack needs manual compose drop-in.
+# Promotion to pilot-stable requires fixing both, then capturing an
+# evidence[] entry in stacks/compatibility/hudi-hms-spark-local-v0.1.lock.yaml.
+# See docs/STABILITY_MATRIX.md for the full graduation path.
+# ============================================================================
 id: hudi-hms-spark-local-v0.1
 name: Hudi + Hive Metastore + Spark Lakehouse (Candidate)
 version: "0.1"

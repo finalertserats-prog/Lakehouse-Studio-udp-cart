@@ -1,3 +1,13 @@
+# ============================================================================
+# CANDIDATE — KNOWN INSTALL BLOCKER (Codex review 2026-05-17 P0)
+# ============================================================================
+# UDP's upstream docker-compose.yml does NOT ship Polaris + postgres-polaris
+# services. Until Studio's runner appends a Polaris compose overlay
+# (planned v0.6.1), the operator must manually drop a docker-compose.polaris.yml
+# into install_dir containing the apache/polaris:1.0.1 + postgres pair.
+# Also note: Polaris and the standalone iceberg-rest both bind to port 8181
+# by default — installing both stacks side-by-side requires port remapping.
+# ============================================================================
 id: iceberg-polaris-spark-local-v0.1
 name: Iceberg + Polaris + Spark + StarRocks (Candidate)
 version: "0.1"
