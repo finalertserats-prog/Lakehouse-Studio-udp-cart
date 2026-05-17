@@ -555,6 +555,8 @@ spark = (
     .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
     .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
     .config("spark.hadoop.hive.metastore.uris", "thrift://hive-metastore:9083")
+    .config("spark.sql.warehouse.dir", "s3a://datalake/warehouse")
+    .config("spark.sql.catalogImplementation", "hive")
     .enableHiveSupport()
     .getOrCreate()
 )
@@ -604,6 +606,8 @@ docker exec udp-spark spark-submit \
   --conf spark.hadoop.fs.s3a.secret.key=udp_admin_12345 \
   --conf spark.hadoop.fs.s3a.path.style.access=true \
   --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+  --conf spark.sql.warehouse.dir=s3a://datalake/warehouse \
+  --conf spark.sql.catalogImplementation=hive \
   //tmp/lhs/delta_bootstrap.py
 
 echo "[studio-delta-bootstrap] waiting for Trino..."
@@ -704,6 +708,8 @@ spark = (
     .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
     .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
     .config("spark.hadoop.hive.metastore.uris", "thrift://hive-metastore:9083")
+    .config("spark.sql.warehouse.dir", "s3a://datalake/warehouse")
+    .config("spark.sql.catalogImplementation", "hive")
     .enableHiveSupport()
     .getOrCreate()
 )
