@@ -30,10 +30,13 @@ RUN chmod 644 /opt/spark/jars/delta-*.jar
 # STANDALONE jar on the classpath. Without these jars, attempts to write Delta
 # tables to s3a:// fail with:
 #   java.lang.ClassNotFoundException: Class org.apache.hadoop.fs.s3a.S3AFileSystem not found
-# (Delta attempt 3 stack trace, 2026-05-17 17:49). hadoop-aws 3.3.6 matches the
-# hadoop version bundled with Spark 3.5; aws-java-sdk-bundle 1.12.262 is the
-# matching SDK version per Apache Hadoop's documented compat matrix.
-ADD https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.6/hadoop-aws-3.3.6.jar /opt/spark/jars/
+# (Delta attempt 3 stack trace, 2026-05-17 17:49). hadoop-aws 3.3.4 matches the
+# hadoop version bundled with Spark 3.5.5 (verified via Codex compat research
+# 2026-05-17 — Spark 3.5.5 ships hadoop 3.3.4 jars; mixing 3.3.6 hadoop-aws
+# against the 3.3.4 base Hadoop client jars caused class skew + cryptic
+# NoSuchMethodError at runtime). aws-java-sdk-bundle 1.12.262 is the documented
+# matching SDK version per Apache Hadoop's compat matrix for hadoop-aws 3.3.4.
+ADD https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar /opt/spark/jars/
 ADD https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar /opt/spark/jars/
 RUN chmod 644 /opt/spark/jars/hadoop-aws-*.jar /opt/spark/jars/aws-java-sdk-bundle-*.jar
 # NOTE: tabulario/spark-iceberg:3.5.5_1.8.1 has no `spark` user (it runs as
