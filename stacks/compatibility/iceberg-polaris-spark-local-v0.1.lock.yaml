@@ -12,7 +12,7 @@
 
 schema_version: "1.0"
 stack_id: iceberg-polaris-spark-local-v0.1
-version_id: "0.1.1"
+version_id: "0.1.2"
 certified_at: "2026-05-17T00:00:00+05:30"
 certified_by: vishnu.wildeagle@gmail.com
 certified_on:
@@ -32,6 +32,25 @@ status: "candidate"
 status_notes: |
   CANDIDATE — NOT INSTALLABLE END-TO-END YET.
 
+  0.1.2 (2026-05-17, Gemini research fix): two config corrections found
+  by Gemini against the official Apache Polaris + StarRocks docs:
+    1. POLARIS_BOOTSTRAP_CREDENTIALS uses a TRIPLE comma-separated
+       `realm,clientId,clientSecret` form — NOT the colon-separated
+       `realm,clientId:clientSecret` that 0.1.1 shipped. With the wrong
+       format Polaris's bootstrap silently skips seeding the root
+       principal, so /api/catalog/v1/oauth/tokens then 401s.
+       Ref: https://github.com/apache/polaris/issues/348
+    2. StarRocks 3.3 reads `iceberg.catalog.*` property keys, NOT the
+       `iceberg.rest.*` keys from the Iceberg REST engine spec — those
+       are silently ignored by StarRocks. Switched
+       `iceberg.rest.security.type` -> `iceberg.catalog.security` and
+       `iceberg.rest.oauth2.server-uri` ->
+       `iceberg.catalog.oauth2.server-uri`. Spark's own
+       `spark.sql.catalog.<name>.rest.*` block is left UNCHANGED —
+       Gemini confirmed it's the correct Iceberg-REST-engine-spec
+       prefix for the Spark Iceberg client.
+       Ref: https://docs.starrocks.io/docs/external_table/iceberg_catalog/
+
   0.1.1 (2026-05-17, Codex P0 fix): bootstrap now wires the explicit
   OAuth2 properties Polaris 1.4.x requires on both engines:
     - Spark: `spark.sql.catalog.<name>.rest.auth.type=oauth2` and
@@ -40,6 +59,8 @@ status_notes: |
     - StarRocks: `iceberg.rest.security.type=oauth2` and
       `iceberg.rest.oauth2.server-uri=
       http://polaris:8181/api/catalog/v1/oauth/tokens`.
+      (Superseded by 0.1.2 — the iceberg.rest.* prefix is wrong for
+      StarRocks; see above.)
   Without these the Iceberg REST clients skipped the OAuth2 flow and
   Polaris returned 401 on every call — see the OAuth2 wire-details
   rules at lines 243-252 of this lock.
@@ -360,3 +381,8 @@ incompatible:
     reason: "Polaris's default OAuth2 token TTL is 1 hour. StarRocks BE-side scan that outlives the FE's cached token gets 401s mid-scan because the BE re-requests S3 credentials via the expired token. Long-running ETL queries are the typical trigger."
     discovered: "2026-05-17"
     workaround: "Bump `polaris.authentication.token-ttl` to 24h (or longer) in Polaris config for ETL-heavy workloads. Pilot-stable docs must call this out."
+
+  - combination: ["iceberg.rest.security in StarRocks 3.3 — silently ignored; use iceberg.catalog.security instead"]
+    reason: "StarRocks 3.3 reads OAuth2 properties under the `iceberg.catalog.*` namespace (StarRocks's own external-catalog property prefix), NOT the `iceberg.rest.*` namespace from the Iceberg REST engine spec. Any `iceberg.rest.security.type` / `iceberg.rest.oauth2.server-uri` keys passed to CREATE EXTERNAL CATALOG are silently dropped — the catalog then skips auth entirely and every list/scan call against Polaris returns 401 with no diagnostic hint about the wrong prefix."
+    discovered: "2026-05-17"
+    workaround: "Use `iceberg.catalog.security=oauth2`, `iceberg.catalog.oauth2.server-uri`, `iceberg.catalog.oauth2.credential`, and `iceberg.catalog.oauth2.scope`. Spark's Iceberg client uses the opposite convention (`spark.sql.catalog.<name>.rest.*`) — do NOT cross-apply. Ref: https://docs.starrocks.io/docs/external_table/iceberg_catalog/"

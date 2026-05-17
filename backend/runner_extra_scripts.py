@@ -977,16 +977,26 @@ PROPERTIES (
     "iceberg.catalog.type" = "rest",
     "iceberg.catalog.uri" = "http://polaris:8181/api/catalog",
     "iceberg.catalog.warehouse" = "${CATALOG_NAME}",
-    -- Codex P0 fix 2026-05-17: Polaris 1.4.x requires StarRocks to opt
-    -- into the OAuth2 client_credentials flow explicitly. The two
-    -- `iceberg.rest.*` properties below mirror what Spark sends â€” without
-    -- them StarRocks skips auth and Polaris returns 401 on every catalog
-    -- list. The server-uri points at the FULL token endpoint, not the
-    -- base catalog URL.
-    -- Ref: https://polaris.apache.org/docs/oauth +
-    --      StarRocks 3.3 Iceberg REST catalog OAuth2 properties.
-    "iceberg.rest.security.type" = "oauth2",
-    "iceberg.rest.oauth2.server-uri" = "http://polaris:8181/api/catalog/v1/oauth/tokens",
+    -- Gemini research 2026-05-17: StarRocks 3.3 uses the `iceberg.catalog.*`
+    -- prefix for its external-catalog properties, NOT the `iceberg.rest.*`
+    -- prefix used by Iceberg's REST-engine-spec / Spark Iceberg client.
+    -- Critical distinction:
+    --   * Spark's Iceberg REST client reads `spark.sql.catalog.<name>.rest.*`
+    --     (the Iceberg REST engine spec) -- e.g. `rest.auth.type`,
+    --     `rest.oauth2-server-uri`. That config block below in the Spark
+    --     bootstrap is correct as-is and was NOT changed.
+    --   * StarRocks's CREATE EXTERNAL CATALOG reads `iceberg.catalog.*`
+    --     (StarRocks's own property namespace). `iceberg.rest.*` keys are
+    --     silently IGNORED by StarRocks 3.3 -- the catalog then skips
+    --     auth and Polaris returns 401 on every catalog list call.
+    -- The fix below switches the two auth keys to the `iceberg.catalog.*`
+    -- prefix, and adds explicit credential + scope so OAuth2
+    -- client_credentials succeeds end-to-end. server-uri points at the FULL
+    -- token endpoint, not the base catalog URL.
+    -- Ref: https://docs.starrocks.io/docs/external_table/iceberg_catalog/
+    --      https://polaris.apache.org/docs/oauth
+    "iceberg.catalog.security" = "oauth2",
+    "iceberg.catalog.oauth2.server-uri" = "http://polaris:8181/api/catalog/v1/oauth/tokens",
     "iceberg.catalog.oauth2.credential" = "${CLIENT_ID}:${CLIENT_SECRET}",
     "iceberg.catalog.oauth2.scope" = "PRINCIPAL_ROLE:ALL",
     "iceberg.catalog.vended-credentials-enabled" = "false",
