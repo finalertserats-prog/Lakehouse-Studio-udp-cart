@@ -71,10 +71,23 @@ FRAGMENT_SERVICES: dict[str, list[str]] = {
 }
 
 
-# Named volumes for postgres data, kept distinct per stack so `docker
-# volume rm` is targeted and side-by-side installs don't clobber each
-# other. Idempotent — re-running docker compose up reuses the volume.
-_PG_HMS_VOLUME = "udp-postgres-hms-data"
+# Named volumes for DB-backing service data, kept distinct per stack so
+# `docker volume rm` is targeted and side-by-side installs don't clobber
+# each other. Idempotent — re-running docker compose up reuses the volume.
+#
+# RENAMED 2026-05-17 to force a fresh MySQL data dir: the v0.6.2 refactor
+# swapped postgres → mysql for the HMS backing service but kept the same
+# named volume (`udp-postgres-hms-data`). MySQL 8 on first boot saw the
+# leftover postgres files and aborted with:
+#   [ERROR] [MY-010457] --initialize specified but the data directory
+#   has files in it. Aborting.
+# Renaming the constant to `udp-mysql-hms-data` gives MySQL a virgin
+# data dir on every host that has never run the new volume name before.
+# Operators migrating from a previous postgres-hms install can reclaim
+# the ~200 MB of orphaned postgres data with:
+#   docker volume rm udp-postgres-hms-data
+# Polaris still uses Postgres, so `_PG_POLARIS_VOLUME` is unchanged.
+_MYSQL_HMS_VOLUME = "udp-mysql-hms-data"
 _PG_POLARIS_VOLUME = "udp-postgres-polaris-data"
 
 
@@ -174,7 +187,7 @@ def _render_hms_fragment(env: dict) -> str:
         "      MYSQL_PASSWORD: ${HMS_DB_PASSWORD:-hive_password_pilot}\n"
         "      MYSQL_ROOT_PASSWORD: ${HMS_DB_ROOT_PASSWORD:-root_password_pilot}\n"
         "    volumes:\n"
-        f"      - {_PG_HMS_VOLUME}:/var/lib/mysql\n"
+        f"      - {_MYSQL_HMS_VOLUME}:/var/lib/mysql\n"
         "    expose:\n"
         '      - "3306"\n'
         "    healthcheck:\n"
@@ -221,7 +234,7 @@ def _render_hms_fragment(env: dict) -> str:
         "    networks:\n"
         "      - default\n"
         "volumes:\n"
-        f"  {_PG_HMS_VOLUME}:\n"
+        f"  {_MYSQL_HMS_VOLUME}:\n"
         "networks:\n"
         "  default: {}\n"
     )

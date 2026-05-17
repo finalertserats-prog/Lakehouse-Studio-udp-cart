@@ -89,6 +89,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "is written to that file; with no argument it goes to stdout. The "
              "human-readable YAML block is always printed to stderr.",
     )
+    # Pre-install cleanup gate (added 2026-05-17 — closes the init-loop trap
+    # where stale containers/volumes from a previously-killed harness run
+    # cause port collisions or volume-corruption on the next install).
+    # Default ON so installs always start from a clean slate. Pass
+    # `--no-clean-first` to keep prior state for debugging.
+    p.add_argument(
+        "--clean-first", dest="clean_first", action="store_true", default=True,
+        help="Before starting the install, run `docker compose down --volumes` "
+             "for the project, remove the install_dir, and `docker rm -f` any "
+             "stale `udp-*` containers from killed harness runs. Default: on.",
+    )
+    p.add_argument(
+        "--no-clean-first", dest="clean_first", action="store_false",
+        help="Disable pre-install cleanup (for debugging — keeps previous "
+             "containers, volumes, and install_dir intact).",
+    )
     return p
 
 
@@ -350,6 +366,156 @@ def remove_install_dir(install_dir: Path) -> None:
     shutil.rmtree(install_dir, ignore_errors=True)
 
 
+def docker_compose_down_with_volumes(install_dir: Path, project_name: str, *,
+                                     runner=subprocess) -> int:
+    """Aggressive variant of docker_compose_down — passes `--volumes`.
+
+    Distinct helper (not a flag on docker_compose_down) so the teardown
+    path can NEVER accidentally nuke lake data. This function is ONLY
+    called from `_pre_install_cleanup` where wiping previous state is
+    the explicit intent — a fresh install must not inherit corrupt
+    volumes from a killed run (e.g. the postgres→mysql volume pollution
+    that caused MySQL's --initialize abort loop on the VPS 2026-05-17).
+    """
+    argv = ["docker", "compose", "-p", project_name, "down",
+            "--remove-orphans", "--volumes"]
+    if not install_dir.exists() or not (install_dir / "docker-compose.yml").exists():
+        try:
+            completed = runner.run(
+                argv, capture_output=True, text=True, timeout=180,
+            )
+            return completed.returncode
+        except Exception:
+            return 0
+    try:
+        completed = runner.run(
+            argv, cwd=str(install_dir),
+            capture_output=True, text=True, timeout=180,
+        )
+        return completed.returncode
+    except Exception:
+        return 1
+
+
+def list_stale_udp_containers(*, runner=subprocess) -> list[str]:
+    """Return container names starting with `udp-` that are NOT part of an
+    active compose project (i.e. no com.docker.compose.project label).
+
+    Catches orphans from killed harness runs: when the harness gets
+    SIGKILL'd mid-pipeline, the SIGINT handler never fires, so the
+    teardown finally: block never runs, so containers stay up forever
+    but disconnected from any compose project. The next install then
+    fights them for ports / container names.
+    """
+    try:
+        completed = runner.run(
+            ["docker", "ps", "-a",
+             "--filter", "name=^udp-",
+             "--format", "{{.Names}}\t{{.Label \"com.docker.compose.project\"}}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return []
+    if completed.returncode != 0:
+        return []
+    stale: list[str] = []
+    for line in (completed.stdout or "").splitlines():
+        parts = line.split("\t", 1)
+        name = parts[0].strip()
+        project_label = parts[1].strip() if len(parts) > 1 else ""
+        if not name:
+            continue
+        # No compose project label = orphan from a killed harness run.
+        if not project_label:
+            stale.append(name)
+    return stale
+
+
+def force_remove_containers(names: list[str], *, runner=subprocess) -> int:
+    """`docker rm -f <names...>` — best-effort. Returns rc (0 if no names)."""
+    if not names:
+        return 0
+    try:
+        completed = runner.run(
+            ["docker", "rm", "-f", *names],
+            capture_output=True, text=True, timeout=60,
+        )
+        return completed.returncode
+    except Exception:
+        return 1
+
+
+def _pre_install_cleanup(install_dir: Path, project_name: str, *,
+                         runner=subprocess, log_stream=None) -> dict[str, Any]:
+    """Wipe pre-existing state before an install kicks off.
+
+    Three actions, each independently best-effort (a failure in one does
+    NOT block the others, and NONE of them block the install):
+      1. `docker compose -p <project> down --remove-orphans --volumes`
+         to kill containers AND named volumes from prior install attempts.
+         Pre-install is the one moment we're allowed to nuke volumes —
+         the operator opted into a fresh install. Teardown still defaults
+         to keeping volumes (separate code path).
+      2. `remove_install_dir(install_dir)` so a partial clone from a
+         killed run doesn't poison `git clone`.
+      3. `docker rm -f` for any stale `udp-*` container without a compose
+         project label (catches orphans from SIGKILL'd harness runs).
+
+    Returns a dict with action -> outcome so the orchestrator can log it.
+    The whole function is wrapped in try/except per action — operator
+    visibility matters, but we never let cleanup failure block install.
+
+    Gated by `--clean-first` CLI flag (default on). Pass `--no-clean-first`
+    to skip — useful when iterating on a broken install and you want to
+    preserve the in-flight state for inspection.
+    """
+    stream = log_stream or sys.stderr
+    outcome: dict[str, Any] = {}
+
+    def _log(msg: str) -> None:
+        print(f"[harness] pre-install cleanup: {msg}", file=stream)
+
+    # 1. compose down with volumes
+    try:
+        _log(f"docker compose -p {project_name} down --remove-orphans --volumes")
+        rc = docker_compose_down_with_volumes(install_dir, project_name, runner=runner)
+        outcome["compose_down"] = {"rc": rc}
+        if rc != 0:
+            _log(f"  compose down exit={rc} (continuing)")
+    except Exception as e:
+        outcome["compose_down"] = {"error": str(e)}
+        _log(f"  compose down raised {e!r} (continuing)")
+
+    # 2. remove install_dir
+    try:
+        if install_dir.exists():
+            _log(f"removing install_dir {install_dir}")
+            remove_install_dir(install_dir)
+            outcome["remove_install_dir"] = {"removed": True}
+        else:
+            outcome["remove_install_dir"] = {"removed": False, "reason": "missing"}
+    except Exception as e:
+        outcome["remove_install_dir"] = {"error": str(e)}
+        _log(f"  remove_install_dir raised {e!r} (continuing)")
+
+    # 3. force-remove stale udp-* orphans
+    try:
+        stale = list_stale_udp_containers(runner=runner)
+        if stale:
+            _log(f"force-removing {len(stale)} stale udp-* container(s): {stale}")
+            rc = force_remove_containers(stale, runner=runner)
+            outcome["force_remove"] = {"containers": stale, "rc": rc}
+            if rc != 0:
+                _log(f"  docker rm -f exit={rc} (continuing)")
+        else:
+            outcome["force_remove"] = {"containers": []}
+    except Exception as e:
+        outcome["force_remove"] = {"error": str(e)}
+        _log(f"  force-remove raised {e!r} (continuing)")
+
+    return outcome
+
+
 # ---------------------------------------------------------------------------
 # Event capture — subscribes to the runner's event bus and shoves every line
 # into the matching StepResult container.
@@ -517,6 +683,8 @@ async def _run_harness(args: argparse.Namespace) -> int:
     print(f"[harness] host        = {host}", file=sys.stderr)
     print(f"[harness] keep        = {args.keep}", file=sys.stderr)
     print(f"[harness] teardown    = {not args.no_teardown}", file=sys.stderr)
+    print(f"[harness] clean_first = {getattr(args, 'clean_first', True)}",
+          file=sys.stderr)
 
     # ---- 3. Create InstallRecord ----
     steps = make_steps(stack)
@@ -584,6 +752,25 @@ async def _run_harness(args: argparse.Namespace) -> int:
         if not args.keep:
             print(f"[harness] removing install_dir {install_dir}", file=sys.stderr)
             remove_install_dir(install_dir)
+
+    # ---- 4.5 Pre-install cleanup (default on; --no-clean-first to skip) ----
+    # Fix 2026-05-17: previous killed harness runs leave stale containers +
+    # named volumes that cause port collisions OR (worse) data-dir pollution
+    # for the next install. The postgres→mysql HMS volume migration revealed
+    # this clearly — MySQL aborted because the volume still had postgres
+    # files. Now every install starts from a clean slate by default.
+    if getattr(args, "clean_first", True):
+        try:
+            _pre_install_cleanup(install_dir, project_name)
+        except Exception as e:
+            # Belt-and-braces: even if cleanup helper itself blows up, never
+            # block the install. Operator gets a single warning line and we
+            # press on with whatever state survived.
+            print(f"[harness] pre-install cleanup raised {e!r} (continuing)",
+                  file=sys.stderr)
+    else:
+        print("[harness] pre-install cleanup skipped (--no-clean-first set)",
+              file=sys.stderr)
 
     # ---- 5. Run the pipeline ----
     runner = UDPRunner(stack, install_id, host, install_dir)

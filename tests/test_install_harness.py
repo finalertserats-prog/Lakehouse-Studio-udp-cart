@@ -402,9 +402,15 @@ class TestTeardown:
         assert "down" in argv
 
     def test_no_destructive_flags_in_any_compose_argv(self, harness, tmp_path):
-        """Defense in depth: the harness must never emit -v, --volumes, or
-        --rmi to docker compose down. Those would destroy the lakehouse data
-        we want to preserve for re-attach."""
+        """Defense in depth: the TEARDOWN path's docker_compose_down must
+        never emit -v, --volumes, or --rmi. Those would destroy the
+        lakehouse data we want to preserve for re-attach.
+
+        The pre-install path uses a SEPARATE helper
+        (docker_compose_down_with_volumes) so this guard can't be bypassed
+        by accidentally toggling a flag — different function, different
+        contract.
+        """
         (tmp_path / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
         fake_subprocess = MagicMock()
         fake_subprocess.run.return_value = MagicMock(returncode=0)
@@ -413,3 +419,115 @@ class TestTeardown:
         forbidden = {"-v", "--volumes", "--rmi", "--force", "--no-verify", "-rf", "rm"}
         assert not (forbidden & set(argv)), \
             f"docker compose argv contains a forbidden destructive flag: {argv}"
+
+
+# ---------------------------------------------------------------------------
+# Pre-install cleanup (added 2026-05-17) — wipes prior state so a new
+# install never inherits a corrupt named volume / port collision / partial
+# clone from a killed previous run.
+# ---------------------------------------------------------------------------
+
+class TestCleanFirstArg:
+    def test_clean_first_defaults_on(self, harness):
+        """Default behavior must be CLEAN before install — operators get
+        a fresh slate every run without thinking about it. The opt-out
+        (`--no-clean-first`) is for debugging only."""
+        args = harness.parse_args(["--stack", "x"])
+        assert args.clean_first is True
+
+    def test_no_clean_first_opts_out(self, harness):
+        args = harness.parse_args(["--stack", "x", "--no-clean-first"])
+        assert args.clean_first is False
+
+    def test_clean_first_flag_explicit(self, harness):
+        # Explicitly passing --clean-first is a no-op (it's the default),
+        # but the flag must still parse without error.
+        args = harness.parse_args(["--stack", "x", "--clean-first"])
+        assert args.clean_first is True
+
+
+class TestPreInstallCleanup:
+    def test_pre_install_cleanup_uses_volumes_flag(self, harness, tmp_path):
+        """The CORE contract: pre-install cleanup MUST pass --volumes to
+        `docker compose down` so leftover named volumes (the postgres-hms
+        → mysql-hms migration bug) get nuked before MySQL boots and
+        aborts on a dirty data dir."""
+        (tmp_path / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+        fake_subprocess = MagicMock()
+        # docker compose down -> rc 0; docker ps -> no stale containers.
+        fake_subprocess.run.side_effect = [
+            MagicMock(returncode=0),                       # compose down
+            MagicMock(returncode=0, stdout=""),            # docker ps -a (no stale)
+        ]
+        outcome = harness._pre_install_cleanup(
+            tmp_path, "udp-pnc", runner=fake_subprocess,
+        )
+        # First call must be `docker compose -p udp-pnc down --remove-orphans --volumes`
+        first_argv = fake_subprocess.run.call_args_list[0].args[0]
+        assert first_argv == [
+            "docker", "compose", "-p", "udp-pnc", "down",
+            "--remove-orphans", "--volumes",
+        ]
+        # install_dir was deleted (we made it look like a clone via the
+        # docker-compose.yml we wrote above).
+        assert not tmp_path.exists()
+        assert outcome["compose_down"]["rc"] == 0
+        assert outcome["remove_install_dir"]["removed"] is True
+        assert outcome["force_remove"]["containers"] == []
+
+    def test_pre_install_cleanup_force_removes_stale_udp_orphans(self, harness, tmp_path):
+        """A killed harness run leaves `udp-*` containers WITHOUT a
+        compose project label. Pre-install must `docker rm -f` them so
+        they don't collide with the new install's container names."""
+        # No install_dir on disk — only stale containers to clean up.
+        fake_subprocess = MagicMock()
+        # Sequence:
+        #   1. compose down (no compose file -> still runs project-level down)
+        #   2. docker ps -a -> returns 2 stale containers (one named, one orphan)
+        #   3. docker rm -f udp-stale-mysql udp-stale-hms
+        ps_output = (
+            "udp-stale-mysql\t\n"            # no project label = orphan
+            "udp-stale-hms\t\n"              # no project label = orphan
+            "udp-active\tudp-pnc\n"          # has project label = NOT stale
+        )
+        fake_subprocess.run.side_effect = [
+            MagicMock(returncode=0),                            # compose down
+            MagicMock(returncode=0, stdout=ps_output),          # docker ps -a
+            MagicMock(returncode=0),                            # docker rm -f
+        ]
+        outcome = harness._pre_install_cleanup(
+            tmp_path / "nonexistent", "udp-pnc", runner=fake_subprocess,
+        )
+        # Third call must be `docker rm -f udp-stale-mysql udp-stale-hms`
+        third_argv = fake_subprocess.run.call_args_list[2].args[0]
+        assert third_argv[:3] == ["docker", "rm", "-f"]
+        assert set(third_argv[3:]) == {"udp-stale-mysql", "udp-stale-hms"}
+        # udp-active had a project label, MUST NOT be force-removed.
+        assert "udp-active" not in third_argv
+        assert set(outcome["force_remove"]["containers"]) == {
+            "udp-stale-mysql", "udp-stale-hms",
+        }
+        assert outcome["force_remove"]["rc"] == 0
+
+    def test_pre_install_cleanup_is_best_effort(self, harness, tmp_path):
+        """If `docker compose down` fails, the cleanup must still try the
+        remaining actions AND must not raise. A failing pre-install
+        cleanup cannot block the install (the operator's intent is
+        'install this stack' — they don't care if cleanup half-fails)."""
+        (tmp_path / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+        fake_subprocess = MagicMock()
+        fake_subprocess.run.side_effect = [
+            RuntimeError("docker daemon down"),  # compose down explodes
+            MagicMock(returncode=0, stdout=""),  # docker ps -a still succeeds
+        ]
+        # Must NOT raise even though the first action blew up.
+        outcome = harness._pre_install_cleanup(
+            tmp_path, "udp-pnc", runner=fake_subprocess,
+        )
+        # The compose_down rc surfaces as 1 (caught + returned, not raised).
+        assert "compose_down" in outcome
+        assert outcome["compose_down"].get("rc") == 1 \
+            or "error" in outcome["compose_down"]
+        # Remaining actions still ran.
+        assert "remove_install_dir" in outcome
+        assert "force_remove" in outcome
