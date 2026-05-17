@@ -223,6 +223,59 @@ constraints:
     rule: "Trino's delta-lake catalog must carry s3.aws-access-key + s3.aws-secret-key matching the MinIO root credentials, otherwise SELECT through the connector fails at Parquet read with a 403 from MinIO"
     verified: "Same constraint as udp-trino-local-v0.1's trino↔minio credentials rule. The bootstrap (TBD) must inject the values from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY into the delta-lake catalog properties."
 
+  - between: [spark-delta, trino]
+    rule: "TABLE FORMAT ⇄ ENGINE protocol-version marriage: Delta Lake tables carry a (minReaderVersion, minWriterVersion) protocol pair in the `_delta_log/` metadata. Delta 3.2.x defaults writes to (1,2) but optional features (deletion vectors, column mapping, identity columns) bump the reader/writer floor. Trino 475's delta-lake connector reads protocol versions up through (3,7) but does NOT support all writer features — specifically deletion vectors require Trino 442+ and column-mapping=name requires Trino 380+. Bumping Delta beyond 3.2 may bring in protocol features Trino 475 can't read."
+    verified: "source review 2026-05-17 — docs.delta.io/3.2.0/versioning.html for the protocol matrix; trino.io/docs/current/connector/delta-lake.html for Trino's supported protocol versions."
+    evidence: "TBD — needs install run"
+    known_issue: "If a Spark writer ever enables `delta.enableDeletionVectors=true` on a table, Trino versions before 442 silently return wrong results (rows that should be deleted appear in SELECT). Trino 475 handles this correctly, but any future Trino downgrade in this lock breaks the marriage."
+
+  - between: [spark-delta]
+    rule: "JAR BUNDLE PARITY: the Delta jar baked into `lakehousestudio/spark-delta:3.5.0_3.2.1` MUST be the `delta-spark_2.12-3.2.1.jar` + `delta-storage-3.2.1.jar` pair compiled against Spark 3.5's API. Mixing Delta 3.2 jars with Spark 3.4 or 3.6 produces NoSuchMethodError at first write. The Studio image-build (TBD Dockerfile) must pin both jars by exact version + Scala-binary suffix (2.12)."
+    verified: "source review 2026-05-17 — docs.delta.io/3.2.0/releases.html lists supported Spark versions; tabulario-style image build patterns pin jars by full name. Same parity discipline as the hudi candidate."
+    evidence: "TBD — needs install run"
+
+  - between: [spark-delta, hive-metastore]
+    rule: "CATALOG ⇄ PROCESSING ENGINE configuration: Spark+Delta must set `spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension` AND `spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog` so that `CREATE TABLE … USING DELTA` registers in HMS as a Delta external table with the right table-type marker. Without these, CREATE TABLE produces a vanilla Parquet entry in HMS and Trino's delta-lake connector won't recognize the table as Delta — it'll be visible but unreadable through the delta-lake catalog."
+    verified: "source review 2026-05-17 — docs.delta.io/3.2.0/delta-spark.html#configure-sparksession + #set-up-apache-spark-with-delta-lake. The Studio image's `spark-defaults.conf` MUST ship both properties."
+    evidence: "TBD — needs install run"
+
+  - between: [trino, hive-metastore]
+    rule: "CATALOG ⇄ SERVING ENGINE wire compatibility: Trino's delta-lake connector requires HMS Thrift schema in the 3.x range (same as the iceberg connector when used with hive.metastore=thrift). HMS 4.x has Thrift schema changes Trino's connector does not yet handle — pinning bitsondatadev/hive-metastore (3.x line) is therefore a marriage requirement, not a preference."
+    verified: "source review 2026-05-17 — trino.io/docs/current/connector/delta-lake.html documents HMS Thrift as the catalog source; Trino's metastore client is the same code path as the iceberg connector, which is known to break on HMS 4.x (see hudi-hms candidate's incompatible[] for the parallel observation)."
+    evidence: "TBD — needs install run"
+
+  - between: [trino, hive-metastore, spark-delta]
+    rule: "TLS/AUTH boundary: HMS Thrift on port 9083 carries NO encryption and NO authentication in this stack — both Spark (writer) and Trino (reader) plain-TCP connect inside the Docker network. This is localhost-only trust posture. Either engine published to a non-loopback host without adding SASL+TLS to HMS breaks the security claim of this lock — but the lock does not cover the authenticated HMS variant."
+    verified: "source review 2026-05-17 — bitsondatadev/docker-hive-metastore default config has no SASL. Compose bind (TBD) MUST keep 9083 internal-only."
+    evidence: "TBD — needs install run"
+
+  - between: [hive-metastore, postgres]
+    rule: "BACKING DB ⇄ CATALOG driver/schema match: identical constraint to the hudi-hms-spark candidate — bitsondatadev/hive-metastore bundles a Postgres JDBC driver in the 42.x line, verified against Postgres 12-15. Pinning postgres:15-alpine is the safe marriage; postgres:16 is not yet verified."
+    verified: "source review 2026-05-17 — same as the hudi-hms candidate's hive-metastore↔postgres constraint. Cross-referenced for traceability."
+    evidence: "TBD — needs install run"
+
+  - between: [spark-delta, trino, minio]
+    rule: "ENGINE ⇄ ENGINE PARITY (warehouse path agreement): both Spark+Delta and Trino's delta-lake connector must agree on the warehouse-prefix convention. If Spark writes `CREATE TABLE … LOCATION 's3a://datalake/warehouse/foo'` but Trino's delta-lake catalog is configured with a different `delta.warehouse` default, CREATE-via-Spark works but CREATE-via-Trino lands in a different prefix and the two engines see disjoint catalogs. Bootstrap (TBD) must inject a single shared warehouse path via env var consumed by both engines."
+    verified: "source review 2026-05-17 — Trino's delta-lake connector docs note `delta.warehouse` is optional but should match the Spark side when both engines write. Same shape as the iceberg-nessie-trino warehouse-parity constraint."
+    evidence: "TBD — needs install run"
+    known_issue: "Silent divergence — no error, just disjoint catalogs. Bootstrap pre-flight should assert the single shared warehouse env var is in scope for both engines."
+
+  - between: [spark-delta, trino, hive-metastore, postgres, minio]
+    rule: "PORT BINDING uniqueness for the recommended overlay set: minio:9000+9001, hive-metastore-thrift:9083, postgres:5432, trino:8080, jupyter:8888. This stack's port set overlaps with hudi-hms-spark-local-v0.1 (both use 9083 + 5432 + 9000/9001) — running both stacks simultaneously requires different compose project names AND a port-collision pre-flight, or the second `docker compose up` will fail with `port already allocated`. No collision with udp-local-v0.2 (which uses 8181, 8030, 9030) outside of MinIO."
+    verified: "source review 2026-05-17 — ports_required list in this lock + hudi-hms candidate's list. Host bootstrap (TBD) must pre-flight."
+    evidence: "TBD — needs install run"
+
+  - between: [hive-metastore, postgres]
+    rule: "VOLUME MOUNT contract: Postgres MUST mount a named volume for `/var/lib/postgresql/data` (same as the hudi-hms candidate). HMS schema-init runs exactly once per fresh data volume; losing the volume between restarts means HMS re-initializes, which IS idempotent in 3.x but invalidates every Delta-table pointer the previous schema held. Trino then sees no tables; Spark writes succeed against new HMS but the OLD tables on MinIO are unreferenced."
+    verified: "source review 2026-05-17 — postgres:15-alpine documents `/var/lib/postgresql/data` as PGDATA. Same constraint as the hudi-hms candidate, restated for traceability."
+    evidence: "TBD — needs install run"
+
+  - between: [spark-delta, trino]
+    rule: "ENGINE ⇄ ENGINE PARITY (concurrent-writer safety): Delta Lake's optimistic concurrency control is enforced at the `_delta_log/` level — both Spark and Trino write delta-lake commits as `00000000000000000001.json` style files. Trino's delta-lake connector supports INSERT but NOT MERGE INTO at Trino 475's release time; mixed Spark-MERGE + Trino-INSERT on the same table is allowed but Spark must remain the schema-evolution authority (Trino INSERT does not bump schema versions)."
+    verified: "source review 2026-05-17 — docs.delta.io/3.2.0/concurrency-control.html + trino.io/docs/current/connector/delta-lake.html#sql-support. The supported-statements section explicitly lists what Trino can and cannot do."
+    evidence: "TBD — needs install run"
+    known_issue: "If a future Trino bump enables MERGE INTO for delta-lake, this constraint changes — re-verify the concurrent-writer story with the new release before bumping."
+
 # ---------------------------------------------------------------------------
 # Host requirements — Spark on the JVM plus HMS on its own JVM plus
 # Postgres plus Trino's 3-4 GB heap budget pushes this floor in line
@@ -267,3 +320,23 @@ incompatible:
     reason: "Postgres major-version bumps occasionally change pg_dump/pg_restore output formats and minor SQL behaviors the HMS schema-init expects. The lock-file contract requires a stable tag."
     discovered: "2026-05-17"
     workaround: "Pin to `postgres:15-alpine` (the locked tag) or bump explicitly with re-verification against HMS schema-init."
+
+  - combination: ["hive-metastore:4.x", "trino:475 delta-lake connector"]
+    reason: "Trino's delta-lake connector uses the same metastore client code path as the iceberg connector — both break on HMS 4.x Thrift schema changes (mirroring the hudi-hms candidate's HMS 3.x→4.x incompatibility). The supported HMS line for Trino's delta-lake connector at Trino 475 is HMS 3.x."
+    discovered: "2026-05-17"
+    workaround: "Stay on the bitsondatadev/hive-metastore image (Hive 3.x line). Re-evaluate when Trino ships HMS 4 support in the delta-lake connector."
+
+  - combination: ["spark-delta:3.5.0_3.2.1 with delta.enableDeletionVectors=true", "trino:<442"]
+    reason: "Delta deletion vectors require a reader implementation Trino did not have until 442. Trino versions before 442 silently return rows that should be soft-deleted — wrong answers, no error. This lock pins Trino 475 so the marriage holds, but downgrading Trino without re-verifying breaks correctness."
+    discovered: "2026-05-17"
+    workaround: "Keep Trino at 475 or any future numeric tag, AND/OR set `delta.enableDeletionVectors=false` on tables that any pre-442 reader must consume."
+
+  - combination: ["spark-delta:3.5.0_3.2.1 + hudi 0.15 + iceberg in same warehouse"]
+    reason: "Three table formats in one warehouse prefix produce a catalog of mixed-format tables. Each engine reads only its own format; the others appear as broken tables (file-listing succeeds, type-validation fails). The catalog is technically the same HMS, but the data is not interoperable."
+    discovered: "2026-05-17"
+    workaround: "One table format per stack. This lock is Delta-only; the hudi-* stack is Hudi-only; the iceberg-* stacks are Iceberg-only. Cross-stack interop requires a translation layer (e.g., XTable/Delta UniForm) not covered by this lock."
+
+  - combination: ["spark-delta:3.5.0_3.2.1 without DeltaSparkSessionExtension"]
+    reason: "Without `spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension`, CREATE TABLE … USING DELTA falls back to vanilla DataSource v1 path and the table registers in HMS as a generic Parquet table without Delta's table-type marker. Trino's delta-lake connector then refuses to read the table (treats it as non-Delta) and Trino's iceberg connector won't read it either. Silent format-mismatch is the failure mode."
+    discovered: "2026-05-17"
+    workaround: "Studio image's spark-defaults.conf must bake both `spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension` and `spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog`. Bootstrap (TBD) must pre-flight that these are present."
