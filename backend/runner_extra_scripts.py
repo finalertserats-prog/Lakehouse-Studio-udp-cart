@@ -278,61 +278,14 @@ for i in $(seq 1 120); do
   if [ "$i" = "120" ]; then echo "minio never came up"; exit 1; fi
 done
 
-echo "[studio-hudi-bootstrap] waiting for Postgres (HMS backing DB)..."
+echo "[studio-hudi-bootstrap] waiting for MySQL (HMS backing DB)..."
 for i in $(seq 1 120); do
-  if docker exec udp-postgres-hms pg_isready -U hive -d metastore >/dev/null 2>&1; then
-    echo "  postgres-hms OK"; break
+  if docker exec udp-mysql-hms mysqladmin ping -h localhost -uroot -p"${HMS_DB_ROOT_PASSWORD:-root_password_pilot}" >/dev/null 2>&1; then
+    echo "  mysql-hms OK"; break
   fi
-  echo "  ($i/120) postgres-hms not ready yet"; sleep 5
-  if [ "$i" = "120" ]; then echo "postgres-hms never came up"; exit 1; fi
+  echo "  ($i/120) mysql-hms not ready yet"; sleep 5
+  if [ "$i" = "120" ]; then echo "mysql-hms never came up"; exit 1; fi
 done
-
-echo "[studio-hudi-bootstrap] downloading postgres JDBC driver into HMS container..."
-# The bitsondatadev/hive-metastore image ships with NO postgres JDBC driver,
-# so schematool falls back to Derby and fails with "No suitable driver found".
-# Fetch postgresql-42.7.4 (current stable) into the HMS lib dir before any
-# schematool call. Idempotent â€” re-run is a no-op (-z check).
-docker exec udp-hive-metastore bash -lc '
-  set -e
-  JAR=/opt/apache-hive-metastore-3.0.0-bin/lib/postgresql-42.7.4.jar
-  if [ ! -s "$JAR" ]; then
-    curl -fsSLo "$JAR" https://jdbc.postgresql.org/download/postgresql-42.7.4.jar
-    echo "  postgres-jdbc downloaded"
-  else
-    echo "  postgres-jdbc already present"
-  fi
-' || { echo "postgres-jdbc download failed â€” schematool will hit Derby fallback"; exit 1; }
-
-echo "[studio-hudi-bootstrap] initializing HMS schema (idempotent)..."
-# schematool needs explicit JDBC URL + creds â€” without them it defaults
-# to Derby (in-process embedded DB) and tries to create `metastore_db`
-# locally, which is exactly what the VPS install attempt 3 hit.
-# Bug fix 2026-05-17: pass -url / -userName / -passWord explicitly.
-HMS_JDBC_URL="jdbc:postgresql://postgres-hms:5432/metastore"
-HMS_DB_USER="${HMS_DB_USER:-hive}"
-HMS_DB_PASSWORD="${HMS_DB_PASSWORD:-hive_password_pilot}"
-# schematool exits non-zero if schema already exists; we treat that as success.
-if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-    -dbType postgres -info \
-    -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER" -passWord "$HMS_DB_PASSWORD" \
-    >/dev/null 2>&1; then
-  echo "  HMS schema already initialized"
-else
-  echo "  HMS schema missing â€” running initSchema"
-  docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-    -dbType postgres -initSchema \
-    -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER" -passWord "$HMS_DB_PASSWORD" || {
-      # Race with the HMS image's own entrypoint that may have just init'd it.
-      if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-          -dbType postgres -info \
-          -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER" -passWord "$HMS_DB_PASSWORD" \
-          >/dev/null 2>&1; then
-        echo "  HMS schema initialized by entrypoint race â€” OK"
-      else
-        echo "HMS initSchema failed"; exit 1
-      fi
-    }
-fi
 
 echo "[studio-hudi-bootstrap] waiting for HMS Thrift (port 9083)..."
 for i in $(seq 1 120); do
@@ -543,52 +496,14 @@ for i in $(seq 1 120); do
   if [ "$i" = "120" ]; then echo "minio never came up"; exit 1; fi
 done
 
-echo "[studio-delta-bootstrap] waiting for Postgres (HMS backing DB)..."
+echo "[studio-delta-bootstrap] waiting for MySQL (HMS backing DB)..."
 for i in $(seq 1 120); do
-  if docker exec udp-postgres-hms pg_isready -U hive -d metastore >/dev/null 2>&1; then
-    echo "  postgres-hms OK"; break
+  if docker exec udp-mysql-hms mysqladmin ping -h localhost -uroot -p"${HMS_DB_ROOT_PASSWORD:-root_password_pilot}" >/dev/null 2>&1; then
+    echo "  mysql-hms OK"; break
   fi
-  echo "  ($i/120) postgres-hms not ready yet"; sleep 5
-  if [ "$i" = "120" ]; then echo "postgres-hms never came up"; exit 1; fi
+  echo "  ($i/120) mysql-hms not ready yet"; sleep 5
+  if [ "$i" = "120" ]; then echo "mysql-hms never came up"; exit 1; fi
 done
-
-echo "[studio-delta-bootstrap] downloading postgres JDBC driver into HMS container..."
-# The bitsondatadev/hive-metastore image ships with NO postgres JDBC driver,
-# so schematool falls back to Derby and fails with "No suitable driver found".
-# Fetch postgresql-42.7.4 (current stable) into the HMS lib dir before any
-# schematool call. Idempotent â€” re-run is a no-op (-z check).
-docker exec udp-hive-metastore bash -lc '
-  set -e
-  JAR=/opt/apache-hive-metastore-3.0.0-bin/lib/postgresql-42.7.4.jar
-  if [ ! -s "$JAR" ]; then
-    curl -fsSLo "$JAR" https://jdbc.postgresql.org/download/postgresql-42.7.4.jar
-    echo "  postgres-jdbc downloaded"
-  else
-    echo "  postgres-jdbc already present"
-  fi
-' || { echo "postgres-jdbc download failed â€” schematool will hit Derby fallback"; exit 1; }
-
-echo "[studio-delta-bootstrap] initializing HMS schema (idempotent)..."
-# Same JDBC-explicit fix as hudi bootstrap (2026-05-17 VPS attempt 3).
-# Without -url/-userName/-passWord schematool defaults to Derby.
-HMS_JDBC_URL="jdbc:postgresql://postgres-hms:5432/metastore"
-HMS_DB_USER_HERE="${HMS_DB_USER:-hive}"
-HMS_DB_PASSWORD_HERE="${HMS_DB_PASSWORD:-hive_password_pilot}"
-if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-    -dbType postgres -info -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" >/dev/null 2>&1; then
-  echo "  HMS schema already initialized"
-else
-  echo "  HMS schema missing â€” running initSchema"
-  docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-    -dbType postgres -initSchema -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" || {
-      if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-          -dbType postgres -info -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" >/dev/null 2>&1; then
-        echo "  HMS schema initialized by entrypoint race â€” OK"
-      else
-        echo "HMS initSchema failed"; exit 1
-      fi
-    }
-fi
 
 echo "[studio-delta-bootstrap] waiting for HMS Thrift (port 9083)..."
 for i in $(seq 1 120); do

@@ -146,8 +146,10 @@ def test_each_service_has_required_keys(stack_id: str, tmp_path: Path):
 
 EXPECTED_SERVICES_PER_STACK = {
     "iceberg-nessie-trino-local-v0.1":  {"nessie"},
-    "hudi-hms-spark-local-v0.1":        {"postgres-hms", "hive-metastore"},
-    "delta-hms-spark-trino-local-v0.1": {"postgres-hms", "hive-metastore"},
+    # v0.6.2 refactor 2026-05-17: HMS backing is MySQL (not Postgres) —
+    # bitsondatadev/hive-metastore image is MySQL-only by design.
+    "hudi-hms-spark-local-v0.1":        {"mysql-hms", "hive-metastore"},
+    "delta-hms-spark-trino-local-v0.1": {"mysql-hms", "hive-metastore"},
     "iceberg-polaris-spark-local-v0.1": {"postgres-polaris", "polaris"},
 }
 
@@ -218,31 +220,33 @@ def test_fragment_attaches_to_default_network(stack_id: str, tmp_path: Path):
     "iceberg-polaris-spark-local-v0.1",
 ])
 def test_postgres_services_use_named_volumes(stack_id: str, tmp_path: Path):
-    """Postgres data must live on a named volume, not a bind mount —
+    """DB backing services (postgres-* OR mysql-*) must use named volumes —
     bind mounts to install_dir/data/ would leak across re-installs and
-    cause permission grief on Windows + macOS."""
+    cause permission grief on Windows + macOS.
+
+    Refactored 2026-05-17: HMS stacks now use mysql-hms (bitsondatadev
+    image is MySQL-only); polaris stack still uses postgres-polaris.
+    Match BOTH service-name prefixes for the same volume-contract check.
+    """
     path = scf.write_fragment(stack_id, tmp_path, {})
     assert path is not None
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    # Find the postgres-* service.
-    pg_services = [s for s in doc["services"] if s.startswith("postgres-")]
-    assert pg_services, f"expected a postgres-* service in '{stack_id}'"
-    for pg_svc in pg_services:
-        volumes = doc["services"][pg_svc].get("volumes") or []
-        assert volumes, f"postgres service '{pg_svc}' must declare a volume"
-        # Named-volume form is `volname:/container/path` — no leading
-        # `./` (bind mount) or `/` (absolute bind mount).
+    db_services = [s for s in doc["services"]
+                   if s.startswith("postgres-") or s.startswith("mysql-")]
+    assert db_services, f"expected a postgres-* or mysql-* service in '{stack_id}'"
+    for svc in db_services:
+        volumes = doc["services"][svc].get("volumes") or []
+        assert volumes, f"DB backing service '{svc}' must declare a volume"
         for vol in volumes:
             assert not vol.startswith("./"), (
-                f"'{pg_svc}' in '{stack_id}' uses a bind mount: {vol}"
+                f"'{svc}' in '{stack_id}' uses a bind mount: {vol}"
             )
             assert not vol.startswith("/"), (
-                f"'{pg_svc}' in '{stack_id}' uses an absolute bind mount: {vol}"
+                f"'{svc}' in '{stack_id}' uses an absolute bind mount: {vol}"
             )
-    # Named volumes must be declared at top-level volumes:.
     assert "volumes" in doc, (
         f"fragment for '{stack_id}' must declare top-level volumes: for "
-        f"its named postgres volume"
+        f"its named DB volume"
     )
 
 
