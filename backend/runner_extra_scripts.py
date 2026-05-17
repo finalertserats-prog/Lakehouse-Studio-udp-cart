@@ -124,14 +124,14 @@ done
 
 echo "[studio-nessie-bootstrap] verifying iceberg catalog is registered..."
 for i in $(seq 1 24); do
-  if docker exec udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q "^iceberg$"; then
+  if docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q "^iceberg$"; then
     echo "  iceberg catalog visible"; break
   fi
   echo "  ($i/24) iceberg catalog not yet visible"; sleep 5
 done
 
 echo "[studio-nessie-bootstrap] seeding demo schemas + tables via Trino..."
-docker exec -i udp-trino trino <<'SQL'
+docker exec -e JAVA_TOOL_OPTIONS= -i udp-trino trino <<'SQL'
 CREATE SCHEMA IF NOT EXISTS iceberg.raw;
 CREATE SCHEMA IF NOT EXISTS iceberg.curated;
 
@@ -238,10 +238,10 @@ docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "SELECT 1" >/
 echo "  starrocks-fe OK"
 
 echo "[studio-nessie-smoke] Trino round-trip query (curated table)..."
-TRINO_CURATED=$(docker exec udp-trino trino --execute \
+TRINO_CURATED=$(docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute \
   "SELECT CAST(COUNT(*) AS BIGINT) FROM iceberg.curated.demo_customer_summary" \
   --output-format CSV | tr -d '"' | tr -d '\r' | tail -n1)
-TRINO_RAW=$(docker exec udp-trino trino --execute \
+TRINO_RAW=$(docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute \
   "SELECT CAST(COUNT(*) AS BIGINT) FROM iceberg.raw.demo_customers" \
   --output-format CSV | tr -d '"' | tr -d '\r' | tail -n1)
 echo "  trino raw rows=${TRINO_RAW} curated rows=${TRINO_CURATED}"
@@ -656,7 +656,7 @@ done
 
 echo "[studio-delta-bootstrap] verifying delta catalog is registered..."
 for i in $(seq 1 24); do
-  if docker exec udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q "^delta$"; then
+  if docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q "^delta$"; then
     echo "  delta catalog visible"; break
   fi
   echo "  ($i/24) delta catalog not yet visible"; sleep 5
@@ -666,7 +666,7 @@ echo "[studio-delta-bootstrap] registering Delta tables in Trino delta catalog..
 # Trino delta-lake requires explicit registration when the schema/table
 # exist in HMS but not yet known to the Trino catalog. Idempotent: failing
 # because "already registered" is fine.
-docker exec -i udp-trino trino <<'SQL'
+docker exec -e JAVA_TOOL_OPTIONS= -i udp-trino trino <<'SQL'
 CALL delta.system.register_table(schema_name => 'delta_raw',     table_name => 'demo_customers',         table_location => 's3://datalake/warehouse/delta_raw/demo_customers');
 CALL delta.system.register_table(schema_name => 'delta_curated', table_name => 'demo_customer_summary', table_location => 's3://datalake/warehouse/delta_curated/demo_customer_summary');
 SQL
@@ -729,10 +729,10 @@ docker exec udp-spark spark-submit \
   //tmp/lhs/delta_smoke.py
 
 echo "[studio-delta-smoke] Trino round-trip query (curated Delta table)..."
-TRINO_CURATED=$(docker exec udp-trino trino --execute \
+TRINO_CURATED=$(docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute \
   "SELECT CAST(COUNT(*) AS BIGINT) FROM delta.delta_curated.demo_customer_summary" \
   --output-format CSV | tr -d '"' | tr -d '\r' | tail -n1)
-TRINO_RAW=$(docker exec udp-trino trino --execute \
+TRINO_RAW=$(docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute \
   "SELECT CAST(COUNT(*) AS BIGINT) FROM delta.delta_raw.demo_customers" \
   --output-format CSV | tr -d '"' | tr -d '\r' | tail -n1)
 echo "  trino raw=${TRINO_RAW} curated=${TRINO_CURATED}"

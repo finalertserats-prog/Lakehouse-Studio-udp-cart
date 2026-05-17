@@ -225,14 +225,14 @@ done
 
 echo "[studio-trino-bootstrap] verifying iceberg catalog is registered..."
 for i in $(seq 1 12); do
-  if docker exec udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q "^iceberg$"; then
+  if docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q "^iceberg$"; then
     echo "  iceberg catalog visible"; break
   fi
   echo "  ($i/12) iceberg catalog not yet visible"; sleep 5
 done
 
 echo "[studio-trino-bootstrap] seeding demo schemas + tables via Trino..."
-docker exec -i udp-trino trino <<'SQL'
+docker exec -e JAVA_TOOL_OPTIONS= -i udp-trino trino <<'SQL'
 CREATE SCHEMA IF NOT EXISTS iceberg.raw;
 CREATE SCHEMA IF NOT EXISTS iceberg.curated;
 
@@ -340,7 +340,7 @@ docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "SELECT 1" >/
 echo "  starrocks-fe OK"
 
 echo "[studio-trino-smoke] Trino round-trip query (curated table)..."
-docker exec udp-trino trino --execute \
+docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute \
   "SELECT region, customer_count, total_order_amount FROM iceberg.curated.demo_customer_summary ORDER BY region"
 
 echo "[studio-trino-smoke] StarRocks queries (same Iceberg catalog)..."
