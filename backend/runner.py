@@ -328,6 +328,18 @@ _STUDIO_SCRIPT_SETS: dict[str, tuple[tuple[str, str], tuple[str, str]]] = {
     ),
 }
 
+# v0.6 candidate stacks ship their bootstrap/smoke bodies from a separate
+# module to keep this file lean. The merge below is the single integration
+# point — anything keyed by a v0.6 stack id is resolved by _write_studio_bootstrap
+# via the same dispatch path as the existing two.
+try:
+    from .runner_extra_scripts import EXTRA_SCRIPT_SETS as _EXTRA_SCRIPT_SETS
+    _STUDIO_SCRIPT_SETS.update(_EXTRA_SCRIPT_SETS)
+except ImportError:
+    # Module is optional; if absent, the v0.6 candidate stacks fall back
+    # to whatever the manifest's commands.bootstrap/smoke argv points at.
+    pass
+
 
 def _build_steps(stack: StackManifest) -> list[StepStatus]:
     return [
