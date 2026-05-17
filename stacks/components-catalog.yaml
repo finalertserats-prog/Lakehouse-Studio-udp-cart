@@ -55,6 +55,26 @@ recommended_sets:
     name: UDP Trino Reference Stack (Candidate)
     components: [iceberg, iceberg-rest, minio, trino, starrocks]
     stack_id: udp-trino-local-v0.1
+  # ===== v0.6 additions — all candidate =====
+  # Each set lists the components that, when in the cart together,
+  # marry into the matching certified stack. The compatibility checker
+  # uses this mapping to surface a green/yellow/red pill in the UI.
+  iceberg-nessie-recommended:
+    name: Iceberg + Nessie + Trino (Candidate — git-for-data catalog)
+    components: [iceberg, nessie, minio, trino, starrocks]
+    stack_id: iceberg-nessie-trino-local-v0.1
+  hudi-hms-recommended:
+    name: Hudi + Hive Metastore + Spark (Candidate — streaming-first format)
+    components: [hudi, hive-metastore, minio, spark-hudi]
+    stack_id: hudi-hms-spark-local-v0.1
+  delta-hms-recommended:
+    name: Delta Lake + Hive Metastore + Spark + Trino (Candidate)
+    components: [delta, hive-metastore, minio, spark-delta, trino]
+    stack_id: delta-hms-spark-trino-local-v0.1
+  iceberg-polaris-recommended:
+    name: Iceberg + Polaris + Spark + StarRocks (Candidate — RBAC catalog)
+    components: [iceberg, polaris, minio, spark-iceberg, starrocks]
+    stack_id: iceberg-polaris-spark-local-v0.1
 
 # ============================================================
 # Templates — use-case-shaped views over recommended_sets.
@@ -216,9 +236,94 @@ categories:
           the highest Iceberg-REST tag available on tabulario/iceberg-rest at
           certification time.
         resource_profile_summary: "Format spec — no runtime of its own. Storage cost comes from the underlying Parquet files in MinIO."
-    coming_soon:
-      - { name: "Apache Hudi",  id: "hudi",  logo: "/assets/logos/hudi.svg",  summary: "Streaming-first table format with built-in upsert + incremental pulls.", reason: "Different transactional model; tested combinations TBD" }
-      - { name: "Delta Lake",   id: "delta", logo: "/assets/logos/delta.svg", summary: "Databricks-led table format with strong Spark integration and OPTIMIZE.", reason: "Databricks-led; tested combinations TBD" }
+      - id: hudi
+        name: Apache Hudi
+        version: "0.15.0"
+        maturity: ga
+        recommended: false
+        # Candidate pattern (mirrors Trino) — UI surfaces a non-green pill;
+        # stack-level status flows from the lock file. Promotion to
+        # `pilot-stable` requires a passing end-to-end install captured in
+        # the matching .lock.yaml file's `evidence[]` block.
+        status_badge: "Candidate"
+        badges: [Candidate]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation
+        url: https://hudi.apache.org
+        summary: Streaming-first table format with built-in upsert, incremental pulls, and record-level indexing. Pairs with Spark + Hive Metastore for CDC-into-lakehouse pipelines.
+        # Trino read support exists via the hudi-connector but is READ-ONLY
+        # and version-matched (Hudi 0.15 ⇄ Trino 460+). Writes happen only
+        # via Spark — that's why spark-hudi is the primary processing pair.
+        compatible_with: [hive-metastore, spark-hudi]
+        logo: "/assets/logos/hudi.svg"
+        tagline: "Streaming-first table format with upserts and incremental pulls."
+        what_it_is: >
+          Hudi (Hadoop Upserts Deletes and Incrementals) is a table format
+          designed around mutable records. It supports MERGE INTO with
+          record-level indexing, Copy-On-Write and Merge-On-Read storage
+          modes, and incremental query pulls that fetch only rows changed
+          since a previous query. Built for CDC pipelines feeding a
+          lakehouse from operational databases.
+        best_for:
+          - "CDC pipelines from Postgres/MySQL into the lakehouse"
+          - "Tables that get frequent upserts (customer profiles, inventory)"
+          - "Incremental ETL — pull-only-what-changed semantics"
+          - "Streaming-first architectures with bounded-latency ingest"
+        capabilities:
+          - "ACID merges with record-level indexing"
+          - "Copy-On-Write (read-optimized) and Merge-On-Read (write-optimized) storage"
+          - "Incremental pulls — query only changed rows since a timestamp"
+          - "Time travel via commit history"
+          - "Hive-Metastore-native — works with existing HMS-aware engines"
+          - "Z-order and Hilbert curve clustering for query pruning"
+        why_this_version: >
+          Pinned to 0.15.0 because it's the latest stable release that
+          ships pre-built Spark bundles for Spark 3.5.x, which is the
+          Spark version line we already certify. Earlier 0.14.x lacks
+          the Spark 3.5 bundle; 1.0.x is too new for cross-engine read
+          parity (Trino's hudi-connector is still tracking 0.15).
+        resource_profile_summary: "Format spec — no runtime of its own. Sizing tracks the Spark + HMS sidecars that materialize it."
+      - id: delta
+        name: Delta Lake
+        version: "3.2.1"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Linux Foundation (originally Databricks)
+        url: https://delta.io
+        summary: Databricks-led open table format with strong Spark integration, ACID transactions, and OPTIMIZE/VACUUM operations. Multi-engine reads via Delta-Sharing and the delta-rs Rust core.
+        compatible_with: [hive-metastore, spark-delta, trino]
+        logo: "/assets/logos/delta.svg"
+        tagline: "ACID table format with first-class Spark integration and OPTIMIZE."
+        what_it_is: >
+          Delta Lake is a table format that adds ACID transactions to
+          Parquet files on object storage. Originally built by Databricks
+          and now Linux-Foundation-governed. Strong Spark integration via
+          the io.delta:delta-spark package; cross-engine reads via Trino's
+          delta-lake connector, StarRocks' delta external catalog, and
+          the delta-rs Rust core (used by DuckDB, Polars, Daft).
+        best_for:
+          - "Batch ETL pipelines that need ACID guarantees on object storage"
+          - "Teams already invested in Spark — Delta is its native format"
+          - "BI workloads via Trino on Delta tables"
+          - "Z-order optimization for query pruning"
+        capabilities:
+          - "ACID transactions over Parquet on object storage"
+          - "Schema evolution with constraint enforcement"
+          - "Time travel by version or timestamp"
+          - "OPTIMIZE (compaction) and VACUUM (cleanup) operations"
+          - "Z-order multi-dimensional clustering"
+          - "Change Data Feed for downstream incremental reads"
+        why_this_version: >
+          Pinned to delta-spark 3.2.1 because it's the latest stable
+          release that targets Spark 3.5.x — matching our certified
+          Spark line. Delta 3.3.x targets Spark 4.x which our base image
+          doesn't ship yet.
+        resource_profile_summary: "Format spec — no runtime of its own. Sizing tracks the Spark + HMS sidecars that materialize it."
 
   - id: catalog
     label: Table catalog
@@ -263,11 +368,128 @@ categories:
           client-side, and Spark 3.5.5_1.8.1 ships Iceberg 1.8.1 — making 1.6.0
           on the REST server the floor that still satisfies the constraint.
         resource_profile_summary: "Recommended tier: 1 CPU, 2 GB RAM, 5 GB disk. Stateless — metadata lives in object storage, not in the container."
-    coming_soon:
-      - { name: "Lakekeeper",     id: "lakekeeper",     logo: "/assets/logos/lakekeeper.svg",     summary: "Multi-tenant Iceberg REST with built-in RBAC and per-table policies.", reason: "Multi-tenant Iceberg REST; smoke tests pending" }
-      - { name: "Project Nessie", id: "nessie",         logo: "/assets/logos/nessie.svg",         summary: "Git-for-data catalog — branches, merges, and point-in-time rollback over Iceberg tables.", reason: "Branching semantics, git-for-data" }
-      - { name: "Apache Polaris", id: "polaris",        logo: "/assets/logos/polaris.svg",        summary: "Snowflake-incubated open catalog with cross-engine credential vending.", reason: "Snowflake-incubated open catalog" }
-      - { name: "Hive Metastore", id: "hive-metastore", logo: "/assets/logos/hive-metastore.svg", summary: "Legacy table catalog from the Hadoop era — still required by some BI tools.", reason: "Legacy support — slated for v0.5" }
+      - id: nessie
+        name: Project Nessie
+        version: "0.99.0"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Dremio + Apache Iceberg community
+        url: https://projectnessie.org
+        summary: Git-for-data catalog with branches, merges, and point-in-time rollback over Iceberg tables. Atomic multi-table commits enable cross-table CDC and zero-copy environment branching.
+        compatible_with: [iceberg, spark-iceberg, trino, starrocks]
+        logo: "/assets/logos/nessie.svg"
+        tagline: "Git-for-data catalog with branches, merges, and atomic multi-table commits."
+        what_it_is: >
+          Nessie is an Iceberg-compatible catalog that adds Git-like
+          semantics to table metadata. Operations happen on branches;
+          merges are atomic across multiple tables; point-in-time
+          rollback restores the entire warehouse to any prior commit.
+          Pairs especially well with audit-heavy workloads and
+          dev/staging/prod environment branching without data copies.
+        best_for:
+          - "Audit-trail-first deployments — every change is a commit"
+          - "Dev/staging/prod environments as zero-copy branches"
+          - "Multi-table atomic refactors (rename across joined tables in one commit)"
+          - "Point-in-time rollback for regulated industries (BFSI, healthcare)"
+        capabilities:
+          - "Branching, merging, and conflict resolution at the catalog layer"
+          - "Atomic multi-table commits"
+          - "Time travel by commit hash, branch name, or timestamp"
+          - "REST API + native Iceberg REST catalog adapter"
+          - "Supports Spark, Trino, StarRocks, and Flink as engines"
+          - "Pluggable backends (JDBC, RocksDB, MongoDB, in-memory)"
+        why_this_version: >
+          Pinned to 0.99.0 because it's the last 0.x release before the
+          v1.0 GA — feature-complete on Iceberg-REST adapter, JDBC
+          backend stabilization, and the OAuth2 token flow that Spark
+          3.5 clients need. v1.x is targeted for Q3-2026.
+        resource_profile_summary: "Recommended tier: 1 CPU, 2 GB RAM, 5 GB disk. Catalog metadata grows linearly with branch count and table count; tune the JDBC backend separately."
+      - id: hive-metastore
+        name: Hive Metastore
+        version: "3.1.3"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Hive community
+        url: https://hive.apache.org/development/gettingstarted
+        summary: Battle-tested Hadoop-era table catalog. Required by Hudi and the standard catalog for Delta on the open lakehouse path. Backed by Postgres.
+        compatible_with: [hudi, delta, spark-hudi, spark-delta, trino, starrocks]
+        logo: "/assets/logos/hive-metastore.svg"
+        tagline: "Battle-tested Hadoop-era catalog. The Hudi/Delta lingua franca."
+        what_it_is: >
+          The Hive Metastore (HMS) is the original lakehouse catalog —
+          a Thrift-based service that holds schema metadata, partition
+          locations, and statistics. It is the de-facto catalog for
+          Hudi (which has no first-class REST catalog) and is the most
+          widely-used catalog for Delta outside Databricks. Backed by
+          a relational DB (Postgres in our stack).
+        best_for:
+          - "Hudi and Delta lakehouses (no Iceberg-REST equivalent for these formats)"
+          - "Migrating legacy Hive workloads onto an open lakehouse"
+          - "Engines that don't yet support Iceberg REST (older Trino, older Spark)"
+          - "BI tools that talk Hive-JDBC natively"
+        capabilities:
+          - "Thrift API on port 9083 — Hive-compatible engines connect natively"
+          - "Schema + partition metadata for managed and external tables"
+          - "Postgres or MySQL backing DB for HA + scale"
+          - "Pluggable authentication (Kerberos, LDAP) — disabled in pilot"
+          - "Cross-engine support — Spark, Trino, StarRocks, Presto all speak HMS"
+          - "Compatible with Hudi sync mode + Delta uniform catalog mode"
+        why_this_version: >
+          Pinned to 3.1.3 because it's the last 3.x release with broad
+          engine support — Hudi-Spark, Delta-Spark, Trino, and StarRocks
+          all certify against 3.1.x. Hive 4.x changes the Thrift schema
+          and breaks Hudi 0.15. Image: `bitsondatadev/hive-metastore:latest`
+          (frozen to a digest in the lock file once verified).
+        resource_profile_summary: "Recommended tier: 1 CPU, 2 GB RAM (+1 GB for Postgres backing), 10 GB disk. Postgres disk grows with table count."
+      - id: polaris
+        name: Apache Polaris
+        version: "1.0.1"
+        maturity: beta
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Beta]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation (Snowflake-incubated)
+        url: https://polaris.apache.org
+        summary: Snowflake-incubated open Iceberg catalog with cross-engine credential vending, role-based access control, and Iceberg REST spec compliance.
+        compatible_with: [iceberg, spark-iceberg, trino, starrocks]
+        logo: "/assets/logos/polaris.svg"
+        tagline: "Snowflake-incubated Iceberg catalog with cross-engine credential vending and RBAC."
+        what_it_is: >
+          Polaris is an open-source Iceberg REST catalog donated by
+          Snowflake to the Apache Software Foundation in 2024. Its
+          differentiator is credential vending — engines query the
+          catalog for short-lived storage credentials scoped to the
+          specific table they want to read, removing the need to share
+          long-lived S3 keys across the cluster. Includes a built-in
+          RBAC model for principal/role/grant administration.
+        best_for:
+          - "Multi-tenant lakehouses with hard isolation between consumers"
+          - "Production deployments that need short-lived storage creds"
+          - "Snowflake-bridging workloads (read Iceberg via Snowflake)"
+          - "Audit-heavy environments — every grant is a logged operation"
+        capabilities:
+          - "Iceberg REST spec compliance (works with any modern Iceberg client)"
+          - "Storage credential vending (STS-issued scoped credentials)"
+          - "Built-in RBAC: principals, roles, grants, policies"
+          - "Cross-engine: Spark, Trino, StarRocks, Snowflake all supported"
+          - "External-catalog federation (mount remote catalogs as namespaces)"
+          - "Pluggable persistence (Postgres backing supported)"
+        why_this_version: >
+          Pinned to 1.0.1 — the first stable release after Apache GA in
+          early 2026. Earlier 0.x releases (under Snowflake's pre-donation
+          branding) have incompatible REST schemas. Image:
+          `apache/polaris:1.0.1`.
+        resource_profile_summary: "Recommended tier: 2 CPU, 4 GB RAM, 10 GB disk. Postgres backing recommended at scale; H2 file backend works for dev."
 
   - id: object_storage
     label: Object storage
@@ -408,6 +630,85 @@ categories:
           the lock-file contract. Verified present on Docker Hub via
           `docker manifest inspect trinodb/trino:475` on 2026-05-16.
         resource_profile_summary: "Recommended tier: 4 CPU, 10 GB RAM, 20 GB disk. RAM dominates — Trino's JVM holds working sets in heap; below 10 GB total it rejects Iceberg scans during planning."
+      - id: spark-hudi
+        name: Apache Spark + Hudi
+        version: "3.5.0_0.15.0"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation
+        url: https://hudi.apache.org/docs/quick-start-guide
+        summary: Spark 3.5 image with the Hudi 0.15 runtime bundle pre-installed. Pairs with Hive Metastore for the Hudi-on-HMS pattern.
+        compatible_with: [hudi, hive-metastore, minio]
+        logo: "/assets/logos/spark-iceberg.svg"
+        tagline: "Spark 3.5 with the Hudi 0.15 runtime jar pre-bundled."
+        what_it_is: >
+          A Spark 3.5 image that bundles the Hudi 0.15 Spark runtime jar
+          + Hive Metastore client jars + MinIO-compatible S3A config.
+          Lets the install pipeline run Hudi MERGE INTO and bulk-insert
+          DDL against a Hudi-format warehouse on object storage,
+          synchronizing partitions back to HMS for cross-engine reads.
+        best_for:
+          - "Hudi MERGE INTO pipelines (CDC ingestion)"
+          - "Incremental ETL with Hudi's commit-history pulls"
+          - "Hudi-Spark notebook exploration"
+          - "Bootstrapping a Hudi warehouse with HMS-synced partitions"
+        capabilities:
+          - "Pre-bundled Hudi 0.15 Spark runtime"
+          - "Hive Metastore client jars + Thrift connectivity"
+          - "PySpark, Scala, SQL interfaces"
+          - "S3A path-style addressing pre-configured for MinIO"
+          - "Bundled HoodieDeltaStreamer for CDC pipelines"
+        why_this_version: >
+          Spark 3.5.0 + Hudi 0.15.0 is the certified pair per Hudi's
+          release notes — Hudi 0.15 ships pre-built Spark bundles for
+          3.5.x specifically. Custom-built image
+          (`lakehousestudio/spark-hudi:3.5.0_0.15.0`) — bake script
+          checked into the repo so the build is reproducible.
+        resource_profile_summary: "Recommended tier: 4 CPU, 8 GB RAM, 20 GB disk. RAM dominates — Spark spills to disk under pressure but slows sharply."
+      - id: spark-delta
+        name: Apache Spark + Delta
+        version: "3.5.0_3.2.1"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache + Linux Foundation
+        url: https://docs.delta.io/latest/quick-start.html
+        summary: Spark 3.5 image with delta-spark 3.2.1 pre-installed. Pairs with Hive Metastore for cross-engine reads via Trino's delta-lake connector.
+        compatible_with: [delta, hive-metastore, minio]
+        logo: "/assets/logos/spark-iceberg.svg"
+        tagline: "Spark 3.5 with delta-spark 3.2.1 pre-installed."
+        what_it_is: >
+          A Spark 3.5 image that bundles the io.delta:delta-spark_2.12
+          3.2.1 package + Hive Metastore client jars + MinIO-compatible
+          S3A config. Lets the install pipeline run CREATE TABLE …
+          USING DELTA and the OPTIMIZE/VACUUM ops against a Delta-format
+          warehouse on object storage, with table metadata synced to
+          HMS for Trino/StarRocks reads.
+        best_for:
+          - "Batch ETL pipelines with ACID guarantees on object storage"
+          - "Teams already on Spark — Delta is its native format"
+          - "OPTIMIZE and Z-ORDER for query pruning on hot tables"
+          - "Delta-Spark notebook exploration"
+        capabilities:
+          - "Pre-bundled delta-spark 3.2.1"
+          - "Hive Metastore client jars for Delta-on-HMS sync"
+          - "PySpark, Scala, SQL interfaces"
+          - "OPTIMIZE, VACUUM, Z-ORDER operations"
+          - "S3A path-style addressing pre-configured for MinIO"
+        why_this_version: >
+          Spark 3.5.0 + delta-spark 3.2.1 is the latest stable pair
+          targeting Spark 3.x. Delta 3.3+ targets Spark 4.x which our
+          base image doesn't ship yet. Custom-built image
+          (`lakehousestudio/spark-delta:3.5.0_3.2.1`) — bake script
+          checked into the repo.
+        resource_profile_summary: "Recommended tier: 4 CPU, 8 GB RAM, 20 GB disk. Same Spark-driven sizing as spark-iceberg."
     coming_soon:
       - { name: "Apache Flink", id: "flink",  logo: "/assets/logos/flink.svg",  summary: "Streaming compute with an Iceberg sink for low-latency CDC pipelines.",          reason: "Streaming-first; planned for v0.5" }
       - { name: "Dremio",       id: "dremio", logo: "/assets/logos/dremio.svg", summary: "BI-focused lakehouse engine with semantic layer and reflections.",                reason: "BI-focused lakehouse engine" }
@@ -467,15 +768,148 @@ categories:
     description: Schedules data pipelines. Defer for analytics-only stacks; add for production ETL.
     order: 6
     optional: true
-    components: []
+    components:
+      - id: airflow
+        name: Apache Airflow
+        version: "2.10.4"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation
+        url: https://airflow.apache.org
+        summary: Industry-standard DAG scheduler with the largest operator ecosystem. Auto-includes a Postgres backing DB. Ships with a demo DAG that runs against the lakehouse.
+        compatible_with: [spark-iceberg, spark-hudi, spark-delta, trino]
+        logo: "/assets/logos/airflow.svg"
+        tagline: "DAG scheduler with the largest operator ecosystem."
+        what_it_is: >
+          Airflow is the most widely-deployed open-source data pipeline
+          scheduler. Pipelines are expressed as Python DAGs; tasks run
+          as bash, Python, SparkSubmit, Kubernetes pods, Trino SQL, or
+          any of 1500+ community operators. Includes a web UI for DAG
+          inspection, task retries, and run history. Ships with a
+          demo DAG that runs a daily aggregation against the lakehouse.
+        best_for:
+          - "Production ETL pipelines on a fixed cron"
+          - "Heterogeneous workflows (SparkSubmit → SQL → Slack notify)"
+          - "Teams with existing Airflow expertise"
+          - "Integration-heavy pipelines that need the operator ecosystem"
+        capabilities:
+          - "DAG-based scheduling with rich dependency expressions"
+          - "Web UI for run inspection, retries, and backfills"
+          - "1500+ community operators (Spark, Trino, Snowflake, dbt, k8s, slack, ...)"
+          - "Postgres backing DB for metadata (auto-included)"
+          - "Pluggable executors: LocalExecutor (default), CeleryExecutor (HA)"
+          - "REST API for programmatic DAG triggering"
+        why_this_version: >
+          Pinned to 2.10.4 — the latest 2.x release. 3.x is a major
+          rewrite (Airflow 3.0 dropped support for old DAG syntax);
+          2.x is the broadly-deployed line and all our integration
+          tests target it. Image: `apache/airflow:2.10.4-python3.11`.
+        resource_profile_summary: "Recommended tier: 2 CPU, 4 GB RAM (+1 CPU, 2 GB RAM for Postgres), 20 GB disk."
+      - id: dagster
+        name: Dagster
+        version: "1.9.4"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Dagster Labs
+        url: https://dagster.io
+        summary: Asset-first orchestrator — pipelines defined by the data they produce, not the tasks that run. The architecture doc's recommended choice for new lakehouse deployments.
+        compatible_with: [spark-iceberg, spark-hudi, spark-delta, trino]
+        logo: "/assets/logos/dagster.svg"
+        tagline: "Asset-first orchestrator — pipelines defined by the data they produce."
+        what_it_is: >
+          Dagster is an orchestrator built around the concept of
+          software-defined assets — each table/file/model is an asset
+          with its own definition, and Dagster computes the upstream
+          dependency graph automatically. Includes Dagit (the web UI),
+          the daemon (scheduler + sensors), and dagster-webserver
+          (GraphQL API). Ships with a demo asset graph that materializes
+          the lakehouse's raw → curated → analytics layers.
+        best_for:
+          - "New lakehouse deployments (asset-first matches lakehouse mental model)"
+          - "Teams that want lineage built into the orchestrator"
+          - "Data-quality-first pipelines (assets have built-in checks)"
+          - "Modern data stack — dbt-aware out of the box"
+        capabilities:
+          - "Software-defined assets — pipelines are the data they produce"
+          - "Built-in asset lineage and data quality checks"
+          - "Native dbt integration (assets auto-derived from dbt models)"
+          - "Dagit web UI for asset inspection and materialization"
+          - "Postgres backing DB for metadata (auto-included)"
+          - "Sensors for event-driven runs (file-arrival, Kafka, S3 events)"
+        why_this_version: >
+          Pinned to 1.9.4 — current stable. Image:
+          `dagster/dagster-celery-docker:1.9.4` (ships dagster +
+          dagster-webserver + dagster-daemon). 1.x is the long-term
+          stable line; the project explicitly avoids breaking API
+          changes within 1.x.
+        resource_profile_summary: "Recommended tier: 2 CPU, 4 GB RAM (+1 CPU, 2 GB RAM for Postgres), 20 GB disk."
     coming_soon:
-      - { name: "Dagster",        id: "dagster", logo: "/assets/logos/dagster.svg", summary: "Asset-first orchestrator — pipelines defined as the data they produce.", reason: "Asset-first; the doc's recommended choice — v0.4" }
-      - { name: "Apache Airflow", id: "airflow", logo: "/assets/logos/airflow.svg", summary: "Industry-standard DAG scheduler with the largest operator ecosystem.",    reason: "Industry standard; v0.4 with Postgres auto-add" }
+      - { name: "Apache Airflow on Kubernetes", id: "airflow-k8s", logo: "/assets/logos/airflow.svg", summary: "Airflow with KubernetesExecutor for elastic scaling.", reason: "k8s deployment target — planned post-VM-stable" }
+      - { name: "Prefect", id: "prefect", logo: "/assets/logos/prefect.svg", summary: "Modern Python-native orchestrator with dynamic DAGs.", reason: "Alternative orchestrator; not in the founding doc's matrix" }
+
+  - id: bi_optional
+    label: BI / Visualization (optional)
+    description: Self-service BI on top of the lakehouse's serving engine. Optional — every stack also exposes a SQL endpoint that any BI tool can connect to externally.
+    order: 7
+    optional: true
+    components:
+      - id: superset
+        name: Apache Superset
+        version: "4.1.1"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation
+        url: https://superset.apache.org
+        summary: Open-source BI with rich chart library, SQL Lab, and Jinja-templated dashboards. Pre-configured to connect to StarRocks (via MySQL dialect) or Trino (native dialect).
+        compatible_with: [starrocks, trino]
+        logo: "/assets/logos/superset.svg"
+        tagline: "Open-source BI with rich charts, SQL Lab, and Jinja-templated dashboards."
+        what_it_is: >
+          Superset is the most widely-deployed open-source BI tool. It
+          renders dashboards from any SQL warehouse, supports 40+
+          visualization types, includes SQL Lab for ad-hoc exploration,
+          and ships with Jinja templating for parameterized reports.
+          In this stack it's pre-wired with a StarRocks connection (via
+          the MySQL dialect on port 9030) and/or a Trino connection
+          (native dialect on port 8080), depending on which serving
+          engines are present.
+        best_for:
+          - "Self-service BI for internal teams"
+          - "Embedding dashboards in customer-facing apps"
+          - "Replacing Looker / Tableau without per-seat pricing"
+          - "Quick visualization layer on top of an existing lakehouse"
+        capabilities:
+          - "40+ chart types (line, bar, area, heatmap, sankey, sunburst, ...)"
+          - "SQL Lab — write-and-share SQL with query history"
+          - "Jinja-templated dashboards (date filters, user-scoped data)"
+          - "Connects to StarRocks via MySQL dialect (no native dialect needed)"
+          - "Native Trino connector"
+          - "Postgres backing DB for metadata (auto-included)"
+          - "RBAC roles: Admin, Alpha, Gamma, Public, Sql Lab"
+        why_this_version: >
+          Pinned to 4.1.1 — the latest 4.x stable release. 4.0 was the
+          major API/UI rewrite; 4.1.x is the broadly-deployed line.
+          Image: `apache/superset:4.1.1`.
+        resource_profile_summary: "Recommended tier: 2 CPU, 4 GB RAM (+1 CPU, 2 GB RAM for Postgres), 10 GB disk. Dashboard query latency depends on the underlying warehouse, not Superset itself."
+    coming_soon:
+      - { name: "Metabase", id: "metabase", logo: "/assets/logos/metabase.svg", summary: "Question-driven BI with auto-discovered schemas.", reason: "Alternative BI choice; planned alongside Superset" }
 
   - id: observability
     label: Observability (optional)
     description: Metrics + dashboards for the lakehouse itself. Defer for pilot.
-    order: 7
+    order: 8
     optional: true
     components: []
     coming_soon:
