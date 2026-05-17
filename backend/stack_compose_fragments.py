@@ -178,8 +178,13 @@ def _render_hms_fragment(env: dict) -> str:
         "      POSTGRES_DB: metastore\n"
         "    volumes:\n"
         f"      - {_PG_HMS_VOLUME}:/var/lib/postgresql/data\n"
-        "    ports:\n"
-        "      - \"5432:5432\"\n"
+        # Bug fix 2026-05-17 VPS install: don't bind host port 5432 —
+        # production hosts (like the Finalert VPS) often already run
+        # their own postgres on 5432. The HMS service only needs to
+        # reach postgres-hms over the docker network by service name;
+        # no host port mapping required.
+        "    expose:\n"
+        "      - \"5432\"\n"
         "    healthcheck:\n"
         "      test: [\"CMD\", \"pg_isready\", \"-U\", \"hive\", \"-d\", \"metastore\"]\n"
         "      interval: 10s\n"
@@ -260,8 +265,11 @@ def _render_polaris_fragment(env: dict) -> str:
         "      POSTGRES_DB: polaris\n"
         "    volumes:\n"
         f"      - {_PG_POLARIS_VOLUME}:/var/lib/postgresql/data\n"
-        "    ports:\n"
-        "      - \"5433:5432\"\n"
+        # Bug fix 2026-05-17 VPS install: don't bind host port (same
+        # rationale as postgres-hms — Polaris only reaches its backing
+        # DB over the docker network; no host port needed).
+        "    expose:\n"
+        "      - \"5432\"\n"
         "    healthcheck:\n"
         "      test: [\"CMD\", \"pg_isready\", \"-U\", \"polaris\", \"-d\", \"polaris\"]\n"
         "      interval: 10s\n"

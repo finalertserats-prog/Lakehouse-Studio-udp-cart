@@ -12,7 +12,7 @@
 
 schema_version: "1.0"
 stack_id: iceberg-polaris-spark-local-v0.1
-version_id: "0.1.0"
+version_id: "0.1.1"
 certified_at: "2026-05-17T00:00:00+05:30"
 certified_by: vishnu.wildeagle@gmail.com
 certified_on:
@@ -31,6 +31,18 @@ status: "candidate"
 #   production      — additional hardening (TLS, backups, RBAC) certified
 status_notes: |
   CANDIDATE — NOT INSTALLABLE END-TO-END YET.
+
+  0.1.1 (2026-05-17, Codex P0 fix): bootstrap now wires the explicit
+  OAuth2 properties Polaris 1.4.x requires on both engines:
+    - Spark: `spark.sql.catalog.<name>.rest.auth.type=oauth2` and
+      `spark.sql.catalog.<name>.rest.oauth2-server-uri=
+      http://polaris:8181/api/catalog/v1/oauth/tokens`.
+    - StarRocks: `iceberg.rest.security.type=oauth2` and
+      `iceberg.rest.oauth2.server-uri=
+      http://polaris:8181/api/catalog/v1/oauth/tokens`.
+  Without these the Iceberg REST clients skipped the OAuth2 flow and
+  Polaris returned 401 on every call — see the OAuth2 wire-details
+  rules at lines 243-252 of this lock.
 
   Evidence classification (honest accounting per the "evidence-backed
   compatibility" principle):

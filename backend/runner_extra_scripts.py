@@ -906,6 +906,15 @@ with open("/tmp/lhs/polaris_creds.env") as fh:
             os.environ[k] = v
 
 catalog = os.environ["POLARIS_CATALOG_NAME"]
+# Codex P0 fix 2026-05-17: Polaris 1.4.x requires the Iceberg REST client
+# to opt into the OAuth2 client_credentials flow explicitly. The two
+# additional properties below — `rest.auth.type=oauth2` and
+# `rest.oauth2-server-uri` (pointing at the FULL token endpoint, NOT the
+# base catalog URI) — make Spark's Iceberg client mint a bearer token via
+# Polaris's /api/catalog/v1/oauth/tokens endpoint and refresh on 401.
+# Without them the client skips auth and Polaris returns 401 on every call.
+# Ref: https://polaris.apache.org/docs/oauth +
+#      https://iceberg.apache.org/docs/latest/configuration/#catalog-properties
 spark = (
     SparkSession.builder.appName("lhs-polaris-bootstrap")
     .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
@@ -913,6 +922,14 @@ spark = (
     .config(f"spark.sql.catalog.{catalog}.type", "rest")
     .config(f"spark.sql.catalog.{catalog}.uri", os.environ["POLARIS_CATALOG_URI"])
     .config(f"spark.sql.catalog.{catalog}.warehouse", catalog)
+    .config(f"spark.sql.catalog.{catalog}.rest.auth.type", "oauth2")
+    .config(
+        f"spark.sql.catalog.{catalog}.rest.oauth2-server-uri",
+        os.environ.get(
+            "POLARIS_OAUTH_URI",
+            "http://polaris:8181/api/catalog/v1/oauth/tokens",
+        ),
+    )
     .config(
         f"spark.sql.catalog.{catalog}.credential",
         f"{os.environ['POLARIS_CLIENT_ID']}:{os.environ['POLARIS_CLIENT_SECRET']}",
@@ -987,6 +1004,16 @@ PROPERTIES (
     "iceberg.catalog.type" = "rest",
     "iceberg.catalog.uri" = "http://polaris:8181/api/catalog",
     "iceberg.catalog.warehouse" = "${CATALOG_NAME}",
+    -- Codex P0 fix 2026-05-17: Polaris 1.4.x requires StarRocks to opt
+    -- into the OAuth2 client_credentials flow explicitly. The two
+    -- `iceberg.rest.*` properties below mirror what Spark sends — without
+    -- them StarRocks skips auth and Polaris returns 401 on every catalog
+    -- list. The server-uri points at the FULL token endpoint, not the
+    -- base catalog URL.
+    -- Ref: https://polaris.apache.org/docs/oauth +
+    --      StarRocks 3.3 Iceberg REST catalog OAuth2 properties.
+    "iceberg.rest.security.type" = "oauth2",
+    "iceberg.rest.oauth2.server-uri" = "http://polaris:8181/api/catalog/v1/oauth/tokens",
     "iceberg.catalog.oauth2.credential" = "${CLIENT_ID}:${CLIENT_SECRET}",
     "iceberg.catalog.oauth2.scope" = "PRINCIPAL_ROLE:ALL",
     "iceberg.catalog.vended-credentials-enabled" = "false",
@@ -1047,6 +1074,10 @@ with open("/tmp/lhs/polaris_creds.env") as fh:
             os.environ[k] = v
 
 catalog = os.environ["POLARIS_CATALOG_NAME"]
+# Codex P0 fix 2026-05-17: mirror the OAuth2 properties from the bootstrap
+# Spark config — Polaris 1.4.x requires explicit `rest.auth.type=oauth2`
+# and the FULL token endpoint at `rest.oauth2-server-uri`. Without these
+# the smoke script's Spark session skips auth and Polaris returns 401.
 spark = (
     SparkSession.builder.appName("lhs-polaris-smoke")
     .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
@@ -1054,6 +1085,14 @@ spark = (
     .config(f"spark.sql.catalog.{catalog}.type", "rest")
     .config(f"spark.sql.catalog.{catalog}.uri", os.environ["POLARIS_CATALOG_URI"])
     .config(f"spark.sql.catalog.{catalog}.warehouse", catalog)
+    .config(f"spark.sql.catalog.{catalog}.rest.auth.type", "oauth2")
+    .config(
+        f"spark.sql.catalog.{catalog}.rest.oauth2-server-uri",
+        os.environ.get(
+            "POLARIS_OAUTH_URI",
+            "http://polaris:8181/api/catalog/v1/oauth/tokens",
+        ),
+    )
     .config(
         f"spark.sql.catalog.{catalog}.credential",
         f"{os.environ['POLARIS_CLIENT_ID']}:{os.environ['POLARIS_CLIENT_SECRET']}",
