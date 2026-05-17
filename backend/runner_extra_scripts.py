@@ -600,7 +600,6 @@ PYEOF
 
 echo "[studio-delta-bootstrap] running pyspark Delta seed job..."
 docker exec udp-spark spark-submit \
-  --packages io.delta:delta-spark_2.12:3.2.1 \
   --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
   --conf spark.hadoop.fs.s3a.access.key=admin \
   --conf spark.hadoop.fs.s3a.secret.key=udp_admin_12345 \
@@ -726,7 +725,6 @@ PYEOF
 
 echo "[studio-delta-smoke] running pyspark Delta smoke job..."
 docker exec udp-spark spark-submit \
-  --packages io.delta:delta-spark_2.12:3.2.1 \
   --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
   --conf spark.hadoop.fs.s3a.access.key=admin \
   --conf spark.hadoop.fs.s3a.secret.key=udp_admin_12345 \
