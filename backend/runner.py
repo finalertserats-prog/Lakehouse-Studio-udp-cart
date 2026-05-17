@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .config import WORK_DIR
 from .events import bus
@@ -400,6 +400,19 @@ _ENV_ALLOW = {
 }
 
 
+def _is_truthy(value: Any) -> bool:
+    """Permissive env-flag parser. None/empty/"0"/"false"/"no"/"off" → False;
+    everything else (including bare presence) → True."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if not s:
+        return False
+    return s not in {"0", "false", "no", "off", "disable", "disabled"}
+
+
 def _build_subprocess_env() -> dict[str, str]:
     src = os.environ
     out = {k: v for k, v in src.items() if k in _ENV_ALLOW or k.startswith("LHS_")}
@@ -418,6 +431,13 @@ class UDPRunner:
         self.install_dir = install_dir
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._cancel = False
+        # v0.6.1 optional compose overlays (Airflow / Dagster / Superset).
+        # Each entry: {"file": Path, "services": [str, ...], "name": str}.
+        # Populated by _write_optional_overlays during the env step when
+        # the matching LHS_*_ENABLED env flag is set; consumed by the
+        # docker_compose_up branch of _step_cmd to inject `-f overlay.yml`
+        # and append the overlay's services to the `up -d` argv.
+        self._overlays: list[dict[str, Any]] = []
 
     # ---------- event helpers ----------
 
@@ -742,6 +762,69 @@ class UDPRunner:
             cfg.write_text(text, encoding="utf-8")
             self._log("env", "stdout", "spark-defaults.conf: repointed 'udp' catalog from HMS to REST")
 
+    def _write_optional_overlays(self, env: dict[str, str]) -> None:
+        """v0.6.1 — write opt-in compose overlays (Airflow / Dagster / Superset)
+        next to the base compose file.
+
+        Each overlay module is gated by an env flag (LHS_*_ENABLED). When
+        the flag is on, the writer drops a docker-compose.<name>.yml into
+        install_dir + populates self._overlays so _step_cmd injects
+        `-f <overlay>.yml` and appends the overlay's services to the
+        `docker compose up -d <services>` argv.
+
+        Default behavior is unchanged: no flag → no overlay written → no
+        change to the existing stable install path.
+
+        Failures here are NON-FATAL — overlays are operational extras,
+        not part of the certified-stack contract. A broken overlay should
+        never block the base stack from coming up.
+        """
+        try:
+            from . import airflow_overlay, dagster_overlay, superset_overlay
+        except ImportError as e:
+            self._log("env", "stderr", f"overlay modules unavailable: {e}")
+            return
+
+        for mod in (airflow_overlay, dagster_overlay, superset_overlay):
+            flag = getattr(mod, "ENV_FLAG", None)
+            if not flag:
+                continue
+            # Honor both the merged env dict (manifest defaults + user
+            # overrides) and the parent process env, so operators can
+            # opt in via `LHS_AIRFLOW_ENABLED=true` before invoking Studio.
+            enabled = (
+                _is_truthy(env.get(flag))
+                or _is_truthy(os.environ.get(flag))
+            )
+            if not enabled:
+                continue
+            name = mod.__name__.rsplit(".", 1)[-1].replace("_overlay", "")
+            try:
+                path = mod.write_airflow_overlay(self.install_dir, env) \
+                    if mod is airflow_overlay else (
+                        mod.write_dagster_overlay(self.install_dir, env)
+                        if mod is dagster_overlay else
+                        mod.write_superset_overlay(self.install_dir, env)
+                    )
+            except Exception as e:
+                self._log("env", "stderr",
+                          f"overlay '{name}' write failed: {type(e).__name__}: {e} "
+                          f"(continuing without it)")
+                continue
+            if path is None:
+                # Writer chose to no-op (e.g. validation failed inside).
+                self._log("env", "stdout",
+                          f"overlay '{name}' enabled but writer returned no path; skipping")
+                continue
+            services = list(getattr(mod, "SERVICES", []) or [])
+            self._overlays.append({
+                "name": name,
+                "file": path,
+                "services": services,
+            })
+            self._log("env", "stdout",
+                      f"overlay '{name}' enabled: {path.name} (services: {', '.join(services) or '(none declared)'})")
+
     def _write_studio_bootstrap(self) -> None:
         """Drop Studio-owned bootstrap + smoke scripts into the install dir's
         scripts/ directory. Replace UDP's equivalents which hard-require
@@ -820,6 +903,13 @@ class UDPRunner:
         except Exception as e:
             self._log("env", "stderr", f"studio bootstrap write warning: {e}")
 
+        # v0.6.1 — write opt-in compose overlays (Airflow / Dagster / Superset)
+        # if their env flags are set. Default: no flag → no overlay → no change.
+        try:
+            self._write_optional_overlays(merged)
+        except Exception as e:
+            self._log("env", "stderr", f"overlay write warning: {e}")
+
         # Make UDP scripts executable. On Windows chmod is a near-noop, but on
         # Linux/macOS it matters. Don't swallow surprising errors silently.
         try:
@@ -878,7 +968,28 @@ class UDPRunner:
             if not services:
                 self._step_end(step_id, False, message="no services to start (cart empty?)")
                 return False
-            argv = ["docker", "compose", "up", "-d"] + services
+            # v0.6.1 — inject opt-in overlay compose files via `-f` and
+            # extend the explicit service list with the overlay's services.
+            # When _overlays is empty (default — no LHS_*_ENABLED flags),
+            # this is a no-op and the argv matches the pre-v0.6.1 shape
+            # exactly. Order: `docker compose -f base -f overlay up -d ...`
+            argv = ["docker", "compose"]
+            if self._overlays:
+                # The base compose file is the default discovery target;
+                # we have to name it explicitly so `-f overlay.yml` doesn't
+                # REPLACE it.
+                base_compose = self.install_dir / "docker-compose.yml"
+                if base_compose.exists():
+                    argv += ["-f", base_compose.name]
+                for ov in self._overlays:
+                    argv += ["-f", ov["file"].name]
+                    for svc in ov.get("services", []) or []:
+                        if svc and svc not in services:
+                            services.append(svc)
+                self._log(step_id, "stdout",
+                          f"compose: using {len(self._overlays)} overlay(s): "
+                          + ", ".join(ov["name"] for ov in self._overlays))
+            argv += ["up", "-d"] + services
         else:
             argv = list(spec["argv"])
 

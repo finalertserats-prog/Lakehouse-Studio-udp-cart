@@ -66,6 +66,11 @@ OVERLAY_FILENAME = "docker-compose.dagster.yml"
 # Env flag the runner checks before calling write_dagster_overlay().
 ENV_FLAG = "LHS_DAGSTER_ENABLED"
 
+# Service names this overlay adds. Runner appends these to the
+# explicit `docker compose up -d <services>` argv so they spin up
+# alongside the base stack's services.
+SERVICES = ["dagster-postgres", "dagster-webserver", "dagster-daemon"]
+
 # Named volume holding the Dagster metadata Postgres data.
 _PG_VOLUME = "dagster-pgdata"
 

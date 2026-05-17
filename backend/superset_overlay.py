@@ -76,6 +76,11 @@ OVERLAY_FILENAME = "docker-compose.superset.yml"
 # Env flag the runner checks before calling write_superset_overlay().
 ENV_FLAG = "LHS_SUPERSET_ENABLED"
 
+# Service names this overlay adds. Runner appends these to the
+# explicit `docker compose up -d <services>` argv so they spin up
+# alongside the base stack's services.
+SERVICES = ["superset-postgres", "superset-redis", "superset-init", "superset-app"]
+
 # Named volumes — distinct from the base stack's volumes so `docker
 # volume rm` is targeted.
 _PG_VOLUME = "superset-pgdata"

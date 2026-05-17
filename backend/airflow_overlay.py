@@ -68,6 +68,12 @@ _POSTGRES_IMAGE = "postgres:15-alpine"
 # Exported at module level so runner.py can import + use without parsing.
 OVERLAY_FILENAME = "docker-compose.airflow.yml"
 
+# Service names this overlay adds. Runner appends these to the
+# explicit `docker compose up -d <services>` argv so they spin up
+# alongside the base stack's services (rather than being filtered out
+# by the runner's per-cart service list).
+SERVICES = ["airflow-postgres", "airflow-init", "airflow-webserver", "airflow-scheduler"]
+
 # Env flag the runner checks before calling write_airflow_overlay().
 # Mirrors LHS_TLS_ENABLED / LHS_MONITORING_ENABLED style.
 ENV_FLAG = "LHS_AIRFLOW_ENABLED"
