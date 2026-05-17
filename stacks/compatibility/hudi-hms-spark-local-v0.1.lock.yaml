@@ -1,0 +1,299 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK — CANDIDATE STACK
+# =====================================================
+# This is a CANDIDATE compatibility lock. The image tags below have been
+# verified to EXIST on their registries on the certified_at date (except
+# for the Studio-built spark-hudi image which is NOT YET BUILT — see
+# status_notes), but the COMBINATION has NOT been end-to-end installed
+# yet. No evidence record exists. Do not promote this stack to
+# `pilot-stable` until at least one passing install + smoke + finalize
+# run has been captured in the evidence block AND the Studio image is
+# baked and pushed.
+#
+# For the certified path that DOES have evidence, see
+# `udp-local-v0.2.lock.yaml` (Spark + Iceberg + iceberg-rest, pilot-stable).
+
+schema_version: "1.0"
+stack_id: hudi-hms-spark-local-v0.1
+version_id: "0.1.0"
+certified_at: "2026-05-17T00:00:00+05:30"
+certified_by: vishnu.wildeagle@gmail.com
+certified_on:
+  os: "TBD — no install evidence yet"
+  docker: "TBD — no install evidence yet"
+  docker_compose: "TBD — no install evidence yet"
+# IMPORTANT: status is `candidate`, NOT `pilot-stable`. Studio's compatibility
+# loader exposes this verbatim through /api/stacks/{id}/lock-summary so the UI
+# can warn before showing the option.
+status: "candidate"
+
+# Maturity grades:
+#   candidate       — tags verified present on registry; combination NOT installed end-to-end
+#   pilot-stable    — install completes, lakehouse readable, smoke may need Skip on some OS
+#   linux-stable    — verified end-to-end on a Linux VPS, smoke passes clean
+#   production      — additional hardening (TLS, backups, RBAC) certified
+status_notes: |
+  CANDIDATE — NOT INSTALLABLE END-TO-END YET.
+
+  Evidence classification (honest accounting per the "evidence-backed
+  compatibility" principle):
+
+  SOURCE-VERIFIED marriages (read from upstream docs / image manifests
+  on 2026-05-17 — no runtime evidence yet):
+    - hudi 0.15.x documents Hive Metastore 3.x as the supported sync
+      target (hudi.apache.org/docs/syncing_metastore).
+    - bitsondatadev/hive-metastore image tracks the Hive 3.x line per
+      its Dockerfile README.
+    - postgres 15-alpine is documented as a stable HMS backing-store
+      choice (same as the udp-local-v0.2 family's verified pattern).
+    - MinIO path-style + http-endpoint axioms are identical to v0.2.
+
+  AXIOMATICALLY-CLAIMED marriages (need install evidence to prove):
+    - That Spark 3.5.0 + Hudi 0.15.0 bundled in the (NOT YET BUILT)
+      `lakehousestudio/spark-hudi:3.5.0_0.15.0` image will sync
+      cleanly to bitsondatadev/hive-metastore:latest on first write.
+    - The exact set of `hoodie.*` properties required to make MERGE
+      INTO + HMS-sync work as a pair has not been runtime-validated
+      against this image combination.
+    - HMS-on-Postgres schema-init bug surface (deadlock on first start,
+      missing JDBC driver, etc.) has not been observed for this combo.
+
+  GATE-LEVEL blockers to promotion:
+
+  GATE 1 — Studio-built image not yet baked.
+    The `lakehousestudio/spark-hudi:3.5.0_0.15.0` image listed in
+    components[] does not exist on any registry yet. The Dockerfile
+    that produces it lives at `scripts/images/Dockerfile.spark-hudi`
+    (followup work — file not yet committed). Promotion requires:
+      (a) the Dockerfile is committed and reviewed,
+      (b) the image is baked by Studio's release pipeline,
+      (c) the image is pushed to a registry the install hosts can
+          pull from (Docker Hub under the `lakehousestudio` org is
+          the planned target),
+      (d) the resulting tag's digest SHA is recorded in this lock
+          file alongside the tag.
+
+  GATE 2 — End-to-end install evidence missing.
+    Even after the image is available, the combination of Spark+Hudi
+    writing to MinIO and syncing to Hive Metastore (HMS) backed by
+    Postgres has not been runtime-validated under Studio's installer.
+    Promotion requires at least one passing evidence[] entry from a
+    real `lhs install hudi-hms-spark-local-v0.1` run.
+
+  Other open items:
+    - `bitsondatadev/hive-metastore:latest` is a floating tag. Before
+      promotion, pin to a specific digest SHA and lift the tag string
+      to that digest. The `latest` pin is acceptable in the candidate
+      window only because there is no installable combination yet —
+      the moment GATE 1 closes, this also has to close.
+
+  Use udp-local-v0.2 for any real install today.
+
+# ---------------------------------------------------------------------------
+# Component lock — every container image and tag in the candidate stack.
+# All tags below verified present on their registries on 2026-05-17,
+# EXCEPT lakehousestudio/spark-hudi which is not yet built (see GATE 1).
+# ---------------------------------------------------------------------------
+components:
+  - id: minio
+    name: MinIO
+    role: object_storage
+    image: minio/minio
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+    registry_url: https://hub.docker.com/r/minio/minio/tags
+    upstream_url: https://github.com/minio/minio
+    notes: |
+      Same MinIO release as udp-local-v0.2. Healthcheck uses `mc ready local`
+      bundled in the image. Spark+Hudi writes Parquet + Hudi metadata
+      (`.hoodie/`) over the same S3 surface MinIO implements.
+
+  - id: minio-client
+    name: MinIO Client (mc)
+    role: object_storage_bootstrap
+    image: minio/mc
+    tag: "RELEASE.2025-04-16T18-13-26Z"
+    registry_url: https://hub.docker.com/r/minio/mc/tags
+    upstream_url: https://github.com/minio/mc
+    notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
+
+  - id: postgres
+    name: PostgreSQL (Hive Metastore backing DB)
+    role: db_backing
+    image: postgres
+    tag: "15-alpine"
+    registry_url: https://hub.docker.com/_/postgres/tags
+    upstream_url: https://www.postgresql.org/
+    notes: |
+      Backing store for the Hive Metastore's relational schema (DBS,
+      TBLS, SDS, PARTITIONS, etc.). 15-alpine chosen for small footprint;
+      HMS's schema initialization runs against it at first start. Do not
+      use the floating `postgres:latest` tag — the schema-init step is
+      sensitive to major-version bumps and must be re-verified on bump.
+
+  - id: hive-metastore
+    name: Hive Metastore (standalone)
+    role: metastore
+    image: bitsondatadev/hive-metastore
+    tag: "latest"
+    registry_url: https://hub.docker.com/r/bitsondatadev/hive-metastore/tags
+    upstream_url: https://github.com/bitsondatadev/docker-hive-metastore
+    notes: |
+      NEEDS SHA PINNING before pilot-stable promotion. `latest` is
+      acceptable in the candidate window only because there is no
+      installable combination yet. The moment GATE 1 (Studio-built
+      spark-hudi image) closes, this tag MUST be replaced with the
+      digest SHA `latest` resolves to on the verifying host.
+      Hive Metastore 3.x is the supported line for Hudi 0.15 sync;
+      DO NOT bump to Hive Metastore 4.x (see incompatible[] below).
+
+  - id: spark-hudi
+    name: Apache Spark + Apache Hudi (Studio-built)
+    role: processing
+    image: lakehousestudio/spark-hudi
+    tag: "3.5.0_0.15.0"
+    registry_url: https://hub.docker.com/r/lakehousestudio/spark-hudi/tags
+    upstream_url: https://hudi.apache.org/
+    notes: |
+      NOT YET BUILT — see status_notes GATE 1. The image must be baked
+      by Studio's release pipeline from `scripts/images/Dockerfile.spark-hudi`
+      (followup work — Dockerfile not yet committed). Pinned tag scheme
+      mirrors the upstream tabulario convention: `{spark}_{hudi}` so
+      `3.5.0_0.15.0` means Spark 3.5.0 + Hudi 0.15.0. Hudi 0.15 is the
+      last 0.x line before the planned 1.0 cut and is the only Hudi
+      version known to sync cleanly against Hive Metastore 3.x via
+      `hms-sync` (see constraints[]).
+
+# ---------------------------------------------------------------------------
+# Compatibility constraints — pairs that MUST hold for this stack to work.
+# CANDIDATE: rules below are grounded in upstream docs (hudi.apache.org,
+# hive.apache.org, Spark docs) but `verified` strings are documentation
+# citations, NOT runtime evidence. Bumping any tag in this lock requires
+# re-checking every constraint against the new combination.
+# ---------------------------------------------------------------------------
+constraints:
+  - between: [hive-metastore, postgres]
+    rule: "Hive Metastore must connect to a running Postgres BEFORE its schema-init step; HMS dies on startup if the JDBC connection refuses on first try (no schema-init retry loop in the bitsondatadev image)"
+    verified: "Per bitsondatadev/docker-hive-metastore README (fetched 2026-05-17): `depends_on: { postgres: { condition: service_healthy } }` is the documented pattern. The compose file (TBD) must encode this dependency."
+
+  - between: [spark-hudi, hive-metastore]
+    rule: "Spark+Hudi connects to HMS via Thrift on port 9083; the Hudi `hoodie.datasource.hive_sync.metastore.uris=thrift://hive-metastore:9083` option must be set on every write that should appear in the HMS-backed catalog"
+    verified: "Per hudi.apache.org/docs/syncing_metastore (fetched 2026-05-17): the Hudi → HMS sync requires the metastore Thrift URI and a Hudi-supported HMS Thrift schema. Hudi 0.15 documents Hive Metastore 3.x as the supported target."
+
+  - between: [spark-hudi, hive-metastore, postgres]
+    rule: "Triangle dependency: postgres up → hive-metastore up (and schema-init complete) → spark-hudi can issue `pyspark CREATE TABLE … USING HUDI` writes that sync to HMS. Breaking any link in that chain produces a write that succeeds on MinIO but is invisible in the catalog."
+    verified: "Composition of the two constraints above. Bootstrap (TBD) must enforce strict dependency ordering via compose `depends_on: { condition: service_healthy }` on all three legs."
+
+  - between: [spark-hudi, minio]
+    rule: "Spark+Hudi must use path-style S3 addressing (spark.hadoop.fs.s3a.path.style.access=true) and the s3a endpoint must point at MinIO (spark.hadoop.fs.s3a.endpoint=http://minio:9000)"
+    verified: "Same constraint as udp-local-v0.2 — MinIO on plain HTTP does not implement virtual-hosted-style bucket addressing. The Studio-built spark-hudi image's `spark-defaults.conf` must ship these settings."
+
+  - between: [hive-metastore, minio]
+    rule: "HMS itself does not talk to MinIO — it only stores table-level pointers in Postgres. The s3:// URIs HMS records must be the same Spark+Hudi uses on the write side, otherwise readers (Trino, StarRocks, etc.) attempting to use the HMS-recorded URI will hit the wrong endpoint."
+    verified: "Documented behavior of HMS — it is a catalog, not a storage gateway. The bootstrap (TBD) must inject identical s3a:// warehouse paths into both Spark+Hudi's `spark.sql.warehouse.dir` and HMS's `hive.metastore.warehouse.dir` if HMS-default location semantics are used."
+
+  - between: [spark-hudi, hive-metastore]
+    rule: "TABLE FORMAT ⇄ CATALOG version range marriage: Hudi 0.15.0's `hms-sync` requires HMS Thrift schema in the 3.x range (specifically the `IMetaStoreClient` shape Hive 3.1.x exposes). The Hudi 0.15 docs explicitly list HMS 3.x as supported and HMS 4.x as not yet supported. Bumping Spark's Hudi jar above 0.15 may shift this floor — re-verify both ends together."
+    verified: "source review 2026-05-17 — hudi.apache.org/docs/syncing_metastore release notes for 0.15 series. The bitsondatadev/hive-metastore image tracks the 3.x line."
+    evidence: "TBD — needs install run"
+
+  - between: [spark-hudi]
+    rule: "JAR BUNDLE PARITY: the Hudi client jar baked into `lakehousestudio/spark-hudi:3.5.0_0.15.0` MUST match the Hudi spec version of any HMS-synced tables in the warehouse. Mismatched client→table spec versions can corrupt MERGE INTO operations because Hudi 0.x and the planned 1.0 cut use different timeline-instant formats. Pinning the image tag pins the jar pins the spec — break one link and data is at risk."
+    verified: "source review 2026-05-17 — hudi.apache.org/docs/migration_guide for 0.x → 1.0. The image-build Dockerfile (TBD) must pin `hudi-spark3.5-bundle_2.12-0.15.0.jar` explicitly, not pull `latest`."
+    evidence: "TBD — needs install run"
+    known_issue: "If a different operator ever writes to the same warehouse with a Hudi 1.0+ client, MERGE INTO via this 0.15 image may silently produce corrupt commits. Cross-writer guard rails are a v0.2 followup."
+
+  - between: [spark-hudi, hive-metastore]
+    rule: "CATALOG ⇄ PROCESSING ENGINE wire compatibility: Spark+Hudi reaches HMS over Thrift on port 9083 with NO authentication (Kerberos disabled — local-dev posture). The `hoodie.datasource.hive_sync.use_jdbc=false` setting MUST be set so Hudi uses the Thrift client path rather than the JDBC fallback; the bitsondatadev image only exposes Thrift, no HiveServer2 JDBC."
+    verified: "source review 2026-05-17 — bitsondatadev/docker-hive-metastore Dockerfile exposes 9083 only. Hudi docs document `hive_sync.use_jdbc=false` as the Thrift-only sync path."
+    evidence: "TBD — needs install run"
+    known_issue: "Production HMS deployments often gate Thrift behind SASL/Kerberos. This lock's compatibility claims do NOT extend to authenticated HMS — that's a different marriage."
+
+  - between: [hive-metastore, postgres]
+    rule: "BACKING DB ⇄ CATALOG driver/schema match: bitsondatadev/hive-metastore bundles the Postgres JDBC driver for Postgres 12-15. Postgres 16+ has not been verified with this image — the driver may load but schema-init queries may fail on Postgres 16 syntax changes (e.g., default `password_encryption=scram-sha-256` requires the driver version that supports SCRAM). Pinning postgres:15-alpine sidesteps this entirely."
+    verified: "source review 2026-05-17 — bitsondatadev image bundles postgresql-jdbc 42.x line; postgres:15-alpine uses scram-sha-256 by default but is in the supported range."
+    evidence: "TBD — needs install run"
+
+  - between: [hive-metastore, spark-hudi]
+    rule: "TLS/AUTH boundary: HMS Thrift on port 9083 in this stack carries NO encryption and NO authentication — it is a localhost-only trust zone. Spark+Hudi's `hoodie.datasource.hive_sync.metastore.uris=thrift://hive-metastore:9083` is a plain TCP connect inside the Docker network. ANY exposure of HMS:9083 to a non-loopback host MUST add SASL+TLS — but this lock does not cover that variant."
+    verified: "source review 2026-05-17 — bitsondatadev/docker-hive-metastore default config has no SASL. Docker compose bind (TBD) MUST keep 9083 internal-only (no host port-publish for HMS) for the security claim to hold."
+    evidence: "TBD — needs install run"
+
+  - between: [spark-hudi, minio]
+    rule: "PROCESSING ⇄ STORAGE credential propagation: Spark+Hudi must set `spark.hadoop.fs.s3a.access.key`, `spark.hadoop.fs.s3a.secret.key`, AND `spark.hadoop.fs.s3a.endpoint=http://minio:9000` so the s3a filesystem can complete the Hudi `.hoodie/` write-path (timeline files + commit metadata). MinIO's root credentials must be matched at the s3a layer — Hudi does not have a separate credential path."
+    verified: "source review 2026-05-17 — Hudi configures S3 via Hadoop's standard s3a properties. Same shape as v0.2's Spark→MinIO marriage."
+    evidence: "TBD — needs install run"
+
+  - between: [spark-hudi, hive-metastore, postgres, minio]
+    rule: "PORT BINDING uniqueness for the recommended overlay set: minio:9000+9001, hive-metastore-thrift:9083, postgres:5432, jupyter:8888. None of these collide with udp-local-v0.2's published-port set (8181, 8030, 9030) so the two stacks can coexist on the same host if launched on different compose project names. The recommended bootstrap MUST pre-flight that 9083 and 5432 are free, since the bitsondatadev HMS image will silently bind even if Postgres is already on 5432 elsewhere."
+    verified: "source review 2026-05-17 — ports_required list in this lock vs v0.2. Host bootstrap (TBD) must pre-flight check."
+    evidence: "TBD — needs install run"
+
+  - between: [hive-metastore, postgres]
+    rule: "VOLUME MOUNT contract: Postgres MUST mount a named volume (or bind-mount) for `/var/lib/postgresql/data` — without it, every container restart wipes the HMS schema and Hudi tables become unreferenced (data on MinIO survives but the catalog forgets them). The compose file (TBD) must declare a named volume like `hms_pgdata` to satisfy this."
+    verified: "source review 2026-05-17 — postgres:15-alpine image documents `/var/lib/postgresql/data` as the PGDATA path. HMS schema persistence is entirely dependent on this volume surviving restarts."
+    evidence: "TBD — needs install run"
+    known_issue: "On Windows Docker Desktop, bind-mounting Postgres data to a host path triggers permission warnings; named volumes are the recommended cross-OS pattern."
+
+# ---------------------------------------------------------------------------
+# Host requirements — Spark on the JVM plus HMS on its own JVM plus
+# Postgres pushes the RAM floor above MinIO-only stacks but stays below
+# the Trino-bearing candidates.
+# ---------------------------------------------------------------------------
+host_requirements:
+  docker_min: "28.0"
+  docker_compose_min: "v2.30"
+  bash_min: "5.0"
+  os_verified: []  # CANDIDATE: nothing verified yet
+  os_unverified_but_likely_works:
+    - "Ubuntu 22.04+ (Linux)"
+    - "Windows 11 + Docker Desktop"
+    - "macOS + Docker Desktop"
+  ram_min_gb: 10
+  ram_recommended_gb: 16
+  disk_min_gb: 50
+  ports_required: [9000, 9001, 9083, 5432, 8888]
+
+# ---------------------------------------------------------------------------
+# Evidence — per-attempt verification records. EMPTY for candidate stacks.
+# Append a record after every install attempt (including failed ones) so
+# the failure mode is documented for the next contributor to pick up.
+# ---------------------------------------------------------------------------
+evidence: []  # no evidence yet — candidate status
+
+# ---------------------------------------------------------------------------
+# Known-incompatible — combinations we know DO NOT work.
+# ---------------------------------------------------------------------------
+incompatible:
+  - combination: ["hive-metastore:4.x", "spark-hudi:3.5.0_0.15.0"]
+    reason: "Hive Metastore 4.x changed the Thrift schema in ways Hudi 0.15's `hms-sync` does not handle — sync writes fail with a Thrift-decode error and the table never registers in the catalog even though the data lands on MinIO. The supported Hive Metastore line for Hudi 0.15 is 3.x."
+    discovered: "2026-05-17"
+    workaround: "Stay on the Hive Metastore 3.x line (the bitsondatadev image tracks 3.x). Re-evaluate when Hudi ships a 0.16+ release with HMS 4 support."
+
+  - combination: ["spark-hudi:3.5.0_0.15.0"]
+    reason: "Image does not exist on any registry yet — `lakehousestudio/spark-hudi` is a Studio-built image (GATE 1 in status_notes). Any install attempt will fail at `docker compose up` with a pull error until the bake pipeline ships."
+    discovered: "2026-05-17"
+    workaround: "Bake the image from `scripts/images/Dockerfile.spark-hudi` (followup work) before attempting an install."
+
+  - combination: ["postgres:latest"]
+    reason: "Postgres major-version bumps occasionally change pg_dump/pg_restore output formats and minor SQL behaviors the HMS schema-init expects. The lock-file contract requires a stable tag."
+    discovered: "2026-05-17"
+    workaround: "Pin to `postgres:15-alpine` (the locked tag) or bump explicitly with re-verification against HMS schema-init."
+
+  - combination: ["postgres:16-alpine", "bitsondatadev/hive-metastore:latest (Hive 3.x line)"]
+    reason: "Postgres 16 changed default `password_encryption` and tightened some SCRAM behaviors. The Postgres JDBC driver baked into bitsondatadev/hive-metastore is in the 42.x line and works against Postgres 16 in most paths, but schema-init has not been runtime-verified. Until verified, pin to Postgres 15."
+    discovered: "2026-05-17"
+    workaround: "Stay on postgres:15-alpine (the locked pin). If bumping is required, run schema-init end-to-end and capture evidence before promoting."
+
+  - combination: ["spark-hudi:3.5.0_0.15.0", "hudi-1.0+ writer on the same warehouse"]
+    reason: "If another process writes to the same MinIO warehouse with a Hudi 1.0+ client while this stack's 0.15.0 image also writes, the resulting commit timeline will be a mix of two timeline-instant formats. MERGE INTO from this 0.15 image can then produce corrupt data or read-skew. Cross-writer guard rails are NOT part of this lock."
+    discovered: "2026-05-17"
+    workaround: "Use a single Hudi-version writer per warehouse OR migrate the whole warehouse to Hudi 1.0 in a coordinated cutover. Track as a v0.2 followup."
+
+  - combination: ["spark-hudi:3.5.0_0.15.0", "iceberg-rest:1.6.0 in the same stack"]
+    reason: "Hudi tables and Iceberg tables are distinct table formats. Trying to surface both through a single HMS-style catalog produces tables that are visible by name but unreadable by the wrong-format engine (Spark+Iceberg won't read a Hudi table at all; Spark+Hudi won't read an Iceberg table). The two formats are NOT interoperable through HMS — they coexist only by warehouse-prefix discipline (e.g. s3://datalake/hudi/, s3://datalake/iceberg/), which this lock does not enforce."
+    discovered: "2026-05-17"
+    workaround: "Pick one table format per stack. This lock is Hudi-only; the iceberg-* stacks are Iceberg-only."
+
+  - combination: ["spark-hudi:3.5.0_0.15.0 with hive_sync.use_jdbc=true"]
+    reason: "The bitsondatadev/hive-metastore image exposes Thrift on 9083 only — there is no HiveServer2 JDBC endpoint. Hudi's JDBC sync path will fail to connect. Hudi must use `hoodie.datasource.hive_sync.use_jdbc=false` (Thrift sync) for this image."
+    discovered: "2026-05-17"
+    workaround: "Set `hoodie.datasource.hive_sync.use_jdbc=false` in the spark-defaults.conf baked into the Studio image."

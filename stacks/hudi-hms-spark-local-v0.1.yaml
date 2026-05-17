@@ -1,0 +1,169 @@
+id: hudi-hms-spark-local-v0.1
+name: Hudi + Hive Metastore + Spark Lakehouse (Candidate)
+version: "0.1"
+mode: docker-compose
+maturity: candidate
+description: >
+  CANDIDATE stack — Apache Hudi tables registered in a Postgres-backed
+  Hive Metastore, written and read via Spark. Tuned for write-heavy
+  / streaming-ingest workloads where Hudi's upsert + incremental
+  pull model is the differentiator. Intentionally ships WITHOUT a
+  serving engine (no Trino / StarRocks) — this stack's purpose is
+  the write-side format demo; a federated read engine can be layered
+  via a separate stack manifest later. MinIO provides S3-compatible
+  object storage.
+  Promotion to `pilot-stable` requires at least one passing
+  end-to-end install with evidence captured in the matching lock
+  file under evidence/hudi-hms-spark-local-v0.1/.
+
+repository:
+  url: https://github.com/finalertserats-prog/Unified-Data-Plug.git
+  # NOTE: Same UDP repository as the other Studio stacks. UDP's
+  # compose does ship a hive-metastore service in some branches but
+  # does NOT ship a Hudi-tuned Spark image. Studio's runner.py writes
+  # the Hudi-specific Spark service + bootstrap/smoke scripts into
+  # install_dir via the _STUDIO_SCRIPT_SETS dispatch. That wiring is
+  # separate work tracked outside this manifest.
+  ref: claude/review-repo-udp-H7jt4
+  install_dir: hudi-hms-spark
+
+components:
+  - id: minio
+    name: MinIO
+    category: object_storage
+    # Same MinIO release as udp-local-v0.2 — keeps S3 compatibility
+    # behavior consistent and avoids a second image pull.
+    version: RELEASE.2025-04-22T22-12-26Z
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    service_name: minio
+    ports: [9000, 9001]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2, disk_gb: 20 }
+      recommended: { cpu: 2, ram_gb: 4, disk_gb: 50 }
+      comfortable: { cpu: 4, ram_gb: 8, disk_gb: 200 }
+  - id: postgres-hms
+    name: Postgres (Hive Metastore backing DB)
+    category: metastore_db
+    # postgres:15-alpine — smallest stable Postgres 15 image, ample
+    # for the metastore's tiny schema. Bumping to 16 would require
+    # re-validating bitsondatadev/hive-metastore JDBC driver compat.
+    version: "15-alpine"
+    image: postgres:15-alpine
+    service_name: postgres-hms
+    ports: [5432]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1, disk_gb: 5 }
+      recommended: { cpu: 1, ram_gb: 2, disk_gb: 10 }
+      comfortable: { cpu: 2, ram_gb: 4, disk_gb: 20 }
+  - id: hive-metastore
+    name: Hive Metastore (Thrift)
+    category: catalog
+    # bitsondatadev/hive-metastore:latest is the community-standard
+    # standalone HMS image used by every Trino + Spark + Hudi tutorial.
+    # `latest` is pinned-by-convention rather than tag here because
+    # the image owner does not publish stable semver tags; capture
+    # the resolved digest in the lock file at evidence-collection time.
+    version: latest
+    image: bitsondatadev/hive-metastore:latest
+    service_name: hive-metastore
+    ports: [9083]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1, disk_gb: 2 }
+      recommended: { cpu: 1, ram_gb: 2, disk_gb: 5 }
+      comfortable: { cpu: 2, ram_gb: 4, disk_gb: 10 }
+  - id: spark-hudi
+    name: Spark + Hudi
+    category: processing
+    # Spark 3.5.0 + Hudi 0.15.0 — the last Hudi release officially
+    # validated against Spark 3.5.x line. lakehousestudio/spark-hudi
+    # is Studio's own image (vs tabulario/spark-iceberg) because no
+    # community image bundles Hudi 0.15.0 against Spark 3.5.0.
+    version: 3.5.0_0.15.0
+    image: lakehousestudio/spark-hudi:3.5.0_0.15.0
+    service_name: spark
+    ports: [8888, 4040]
+    resource_profiles:
+      # Mirrors udp-local-v0.2's Spark sizing — Hudi's write workload
+      # has similar memory shape to Iceberg writes at small/medium
+      # scale; revisit if streaming ingest gets added.
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 20 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 40 }
+
+requirements:
+  os: [linux, windows-docker-desktop, darwin]
+  docker: required
+  docker_compose: required
+  bash: required
+  # No Trino/StarRocks here, so the floor is Spark 4 GB + HMS 1 GB +
+  # Postgres 1 GB + MinIO + OS headroom. 10 GB gives a comfortable
+  # buffer for the JVM-on-Docker steady state.
+  minimum_ram_gb: 10
+  recommended_ram_gb: 16
+  minimum_cpu_cores: 4
+  recommended_cpu_cores: 8
+  minimum_disk_gb: 50
+  recommended_disk_gb: 100
+
+ports:
+  # MinIO console + API, HMS Thrift, Spark notebook.
+  required: [9000, 9001, 9083, 8888]
+  optional: [4040, 5432]
+
+env_defaults:
+  UDP_PROJECT_NAME: lakehouse-studio-hudi
+  UDP_ENV: local
+  MINIO_ROOT_USER: admin
+  MINIO_ROOT_PASSWORD: udp_admin_12345
+  MINIO_BUCKET: datalake
+  AWS_ACCESS_KEY_ID: admin
+  AWS_SECRET_ACCESS_KEY: udp_admin_12345
+  AWS_REGION: us-east-1
+  S3_ENDPOINT: http://minio:9000
+  # Hive Metastore backing DB (Postgres). Consumed by the HMS image's
+  # entrypoint to render metastore-site.xml at boot.
+  HMS_DB_HOST: postgres-hms
+  HMS_DB_PORT: "5432"
+  HMS_DB_NAME: metastore
+  HMS_DB_USER: hive
+  HMS_DB_PASSWORD: hive_password_pilot
+  HMS_URI: thrift://hive-metastore:9083
+  # Hudi-specific config. COPY_ON_WRITE is the simpler default for
+  # the demo (no compaction service required); MERGE_ON_READ is
+  # available by overriding this env at start time.
+  HUDI_WAREHOUSE: s3://datalake/warehouse
+  HUDI_TABLE_FORMAT: COPY_ON_WRITE
+  HUDI_DATABASE: default
+
+# CANDIDATE STATUS NOTE: bootstrap + smoke scripts ship via
+# backend/runner.py's `_STUDIO_SCRIPT_SETS` dispatch — the env step
+# writes them into install_dir/scripts/. Promotion to pilot-stable
+# requires at least one passing evidence record captured in the
+# matching lock file under evidence/hudi-hms-spark-local-v0.1/.
+commands:
+  doctor:    { argv: ["./udp", "doctor"],     timeout: 60 }
+  start:
+    type: docker_compose_up
+    extra_services: [create-bucket]
+    timeout: 600
+  bootstrap: { argv: ["bash", "scripts/lhs-hudi-bootstrap.sh"], timeout: 900 }
+  smoke:     { argv: ["bash", "scripts/lhs-hudi-smoke.sh"],     timeout: 600 }
+  status:    { argv: ["./udp", "status"],     timeout: 30 }
+  stop:      { argv: ["./udp", "stop"],       timeout: 120 }
+  clean:     { argv: ["./udp", "clean"],      timeout: 180 }
+
+outputs:
+  urls:
+    minio_console:  { url: "http://{host}:9001", label: "MinIO Console" }
+    spark_notebook: { url: "http://{host}:8888", label: "Spark Notebook" }
+    spark_ui:       { url: "http://{host}:4040", label: "Spark UI" }
+  connections:
+    hms_thrift:      "thrift://{host}:9083"
+    postgres_hms:    "psql -h {host} -p 5432 -U hive -d metastore"
+
+certification:
+  # Both flags true — promotion REQUIRES a passing smoke + a real
+  # bootstrap run with evidence captured in evidence/<stack-id>/.
+  smoke_test_required: true
+  demo_bootstrap_required: true
+  evidence_dir: evidence/hudi-hms-spark-local-v0.1/

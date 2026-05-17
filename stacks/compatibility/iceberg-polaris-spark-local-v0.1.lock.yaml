@@ -1,0 +1,250 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK — CANDIDATE STACK
+# =====================================================
+# This is a CANDIDATE compatibility lock. The image tags below have all
+# been verified to EXIST on their registries on the certified_at date,
+# but the COMBINATION has NOT been end-to-end installed yet. No evidence
+# record exists. Do not promote this stack to `pilot-stable` until at
+# least one passing install + smoke + finalize run has been captured in
+# the evidence block.
+#
+# For the certified path that DOES have evidence, see
+# `udp-local-v0.2.lock.yaml` (Spark + Iceberg + iceberg-rest, pilot-stable).
+
+schema_version: "1.0"
+stack_id: iceberg-polaris-spark-local-v0.1
+version_id: "0.1.0"
+certified_at: "2026-05-17T00:00:00+05:30"
+certified_by: vishnu.wildeagle@gmail.com
+certified_on:
+  os: "TBD — no install evidence yet"
+  docker: "TBD — no install evidence yet"
+  docker_compose: "TBD — no install evidence yet"
+# IMPORTANT: status is `candidate`, NOT `pilot-stable`. Studio's compatibility
+# loader exposes this verbatim through /api/stacks/{id}/lock-summary so the UI
+# can warn before showing the option.
+status: "candidate"
+
+# Maturity grades:
+#   candidate       — tags verified present on registry; combination NOT installed end-to-end
+#   pilot-stable    — install completes, lakehouse readable, smoke may need Skip on some OS
+#   linux-stable    — verified end-to-end on a Linux VPS, smoke passes clean
+#   production      — additional hardening (TLS, backups, RBAC) certified
+status_notes: |
+  CANDIDATE — NOT INSTALLABLE END-TO-END YET.
+
+  What's here:
+    - Every image tag below has been verified present on its registry on
+      2026-05-17. No combination-level evidence exists.
+    - Pairwise compatibility constraints are grounded in upstream Polaris,
+      Iceberg, Spark, and StarRocks docs (see `constraints[]`) but have
+      NOT been runtime-validated against this exact image-tag combination.
+
+  Why this stack matters:
+    - Apache Polaris 1.0.1 is the first stable release post-Apache-donation
+      (the project was contributed by Snowflake and graduated through the
+      Apache Incubator). 1.0.1 is the version Polaris itself promotes as
+      the recommended starting point for new deployments. This stack
+      proves Studio can install a Polaris-based Iceberg lakehouse on the
+      same MinIO substrate as every other Studio stack.
+    - Polaris's OAuth2 client-credentials flow is the headline contract
+      to validate: every Spark and StarRocks session must obtain a token
+      from Polaris's `/api/catalog/v1/oauth/tokens` endpoint before any
+      Iceberg-REST call succeeds.
+
+  Promotion requirements to pilot-stable:
+    1. Append at least one passing evidence[] entry that exercises the
+       OAuth2 token flow end-to-end: Spark obtains a token, creates an
+       Iceberg table via Polaris, writes data to MinIO; StarRocks
+       obtains its own token, reads the same table via its Polaris
+       external catalog.
+    2. Capture certified_on os/docker/docker_compose from the verified
+       host — current `TBD` placeholders block promotion on their own.
+
+  Use udp-local-v0.2 for any real install today.
+
+# ---------------------------------------------------------------------------
+# Component lock — every container image and tag in the candidate stack.
+# All tags below verified present on their registries on 2026-05-17.
+# ---------------------------------------------------------------------------
+components:
+  - id: minio
+    name: MinIO
+    role: object_storage
+    image: minio/minio
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+    registry_url: https://hub.docker.com/r/minio/minio/tags
+    upstream_url: https://github.com/minio/minio
+    notes: |
+      Same MinIO release as udp-local-v0.2. Healthcheck uses `mc ready local`
+      bundled in the image. Polaris itself does not talk to MinIO directly;
+      it hands back FileIO properties to clients (Spark, StarRocks) which
+      then read/write through the S3 surface MinIO implements.
+
+  - id: minio-client
+    name: MinIO Client (mc)
+    role: object_storage_bootstrap
+    image: minio/mc
+    tag: "RELEASE.2025-04-16T18-13-26Z"
+    registry_url: https://hub.docker.com/r/minio/mc/tags
+    upstream_url: https://github.com/minio/mc
+    notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
+
+  - id: postgres
+    name: PostgreSQL (Polaris backing DB)
+    role: db_backing
+    image: postgres
+    tag: "15-alpine"
+    registry_url: https://hub.docker.com/_/postgres/tags
+    upstream_url: https://www.postgresql.org/
+    notes: |
+      Backing store for Polaris's persistence layer (catalogs, principals,
+      grants, table metadata pointers). 15-alpine chosen for small footprint.
+      Polaris's bootstrap step initializes the schema on first start; do
+      not use the floating `postgres:latest` tag because major-version
+      bumps must be re-verified against Polaris's migration logic.
+
+  - id: polaris
+    name: Apache Polaris (Iceberg REST catalog)
+    role: catalog
+    image: apache/polaris
+    tag: "1.0.1"
+    registry_url: https://hub.docker.com/r/apache/polaris/tags
+    upstream_url: https://polaris.apache.org/
+    notes: |
+      Apache Polaris 1.0.1 — the first stable release post-Apache-donation
+      from Snowflake. Exposes the Iceberg REST spec at
+      `http://polaris:8181/api/catalog`. All clients (Spark, StarRocks)
+      must run the OAuth2 client-credentials flow against
+      `http://polaris:8181/api/catalog/v1/oauth/tokens` before any
+      Iceberg-REST call will succeed. DO NOT use `apache/polaris:latest`
+      — the lock-file contract requires a stable numeric tag.
+
+  - id: spark-iceberg
+    name: Apache Spark + Iceberg
+    role: processing
+    image: tabulario/spark-iceberg
+    tag: "3.5.5_1.8.1"
+    registry_url: https://hub.docker.com/r/tabulario/spark-iceberg/tags
+    upstream_url: https://iceberg.apache.org/spark-quickstart
+    notes: |
+      Same Spark+Iceberg image as udp-local-v0.2 (`3.5.5_1.8.1`) — Spark
+      3.5.5 with bundled Iceberg 1.8.1. The Iceberg 1.8 client implements
+      the OAuth2 client-credentials flow Polaris expects via the
+      `oauth2-server-uri` + `credential` + `scope` catalog properties.
+      DO NOT bump to `3.5.1_1.5.2` — that tag was REMOVED from Docker Hub
+      (carried over caveat from udp-local-v0.2).
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    image: starrocks/fe-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/fe-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: |
+      Same StarRocks release as udp-local-v0.2 — PR #55416 (Iceberg REST
+      catalog property propagation to S3 FileIO) is required and shipped
+      in 3.3.12. StarRocks 3.3 supports OAuth2-protected Iceberg REST
+      catalogs via the external-catalog properties
+      `iceberg.rest.security.type=oauth2`,
+      `iceberg.rest.oauth2.credential=...`,
+      `iceberg.rest.oauth2.server-uri=...`. Do not use `3.3-latest`.
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    image: starrocks/be-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/be-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: Same version requirement as FE.
+
+# ---------------------------------------------------------------------------
+# Compatibility constraints — pairs that MUST hold for this stack to work.
+# CANDIDATE: rules below are grounded in upstream docs (polaris.apache.org,
+# iceberg.apache.org, StarRocks GitHub) but `verified` strings are
+# documentation citations, NOT runtime evidence. Bumping any tag in this
+# lock requires re-checking every constraint against the new combination.
+# ---------------------------------------------------------------------------
+constraints:
+  - between: [polaris, postgres]
+    rule: "Polaris must connect to a running Postgres BEFORE its bootstrap step; the bootstrap initializes the metastore schema and creates the root principal whose client_id/client_secret seed every OAuth2 flow that follows"
+    verified: "Per polaris.apache.org/docs/quickstart (fetched 2026-05-17): Polaris's first-run bootstrap requires a reachable JDBC URL and writes the initial schema + root credentials. The compose file (TBD) must encode `depends_on: { postgres: { condition: service_healthy } }`."
+
+  - between: [spark-iceberg, polaris]
+    rule: "Spark must complete an OAuth2 client-credentials token flow against `http://polaris:8181/api/catalog/v1/oauth/tokens` BEFORE any Iceberg REST call; the Iceberg 1.8 client implements this when the catalog properties `oauth2-server-uri`, `credential` (in `client_id:client_secret` form), and `scope` are set"
+    verified: "Per iceberg.apache.org/docs/latest/configuration/#catalog-properties (fetched 2026-05-17): the REST catalog client documents OAuth2 properties `oauth2-server-uri`, `credential`, `scope`. Polaris's quickstart shows the matching server-side flow."
+
+  - between: [polaris, spark-iceberg]
+    rule: "Polaris hands back vended FileIO properties (s3.access-key-id, s3.secret-access-key, s3.endpoint, s3.path-style-access=true) in its REST responses; Spark must NOT override these locally if Polaris is the authority for table-level credentials"
+    verified: "Per polaris.apache.org/docs (fetched 2026-05-17): Polaris's storage-credential vending is the recommended path for client S3 auth. Bootstrap (TBD) must register the MinIO endpoint + root credentials at the Polaris storage-config level so vending works for every table."
+
+  - between: [starrocks-fe, polaris]
+    rule: "StarRocks 3.3.12's external catalog must be configured with `iceberg.rest.security.type=oauth2`, the same `client_id:client_secret` credential pair Spark uses (or a distinct Polaris principal), the same `oauth2.server-uri`, and the same warehouse name so it sees the same namespace tree Spark wrote to"
+    verified: "Per StarRocks 3.3 docs on Iceberg REST catalogs (fetched 2026-05-17): the OAuth2 properties are first-class catalog options. The bootstrap (TBD) must mirror Spark's catalog properties on the StarRocks side."
+
+  - between: [starrocks-fe, polaris]
+    rule: "StarRocks 3.3.x still requires PR #55416 for Iceberg REST catalog FileIO propagation to non-AWS S3 endpoints; the rule applies identically whether the REST server is tabulario/iceberg-rest, Nessie's adapter, or Polaris"
+    verified: "3.3.12 includes PR #55416 — same constraint as udp-local-v0.2.lock.yaml. The StarRocks side does not distinguish Polaris from any other compliant REST catalog."
+
+  - between: [starrocks-fe, starrocks-be]
+    rule: "FE and BE must run the same minor + patch version"
+    verified: "both pinned to 3.3.12"
+
+  - between: [minio, starrocks-fe, starrocks-be]
+    rule: "StarRocks FE+BE must export AWS_REGION + AWS_ENDPOINT_URL_S3 + AWS_S3_US_EAST_1_REGIONAL_ENDPOINT=regional in startup, beyond catalog props"
+    verified: "Same constraint as udp-local-v0.2 — the StarRocks-vs-MinIO contract is independent of which catalog server is in front. The Windows AWS-SDK→MinIO UnknownHostException caveat from v0.2 likely also applies here; not yet observed."
+
+  - between: [spark-iceberg, starrocks-fe, polaris]
+    rule: "Both engines must point at the SAME Polaris warehouse name and SAME OAuth2 server URI so that tables Spark writes are visible to StarRocks (and vice-versa) without principal-isolation or warehouse-namespace drift"
+    verified: "Both consume POLARIS_BASE_URI=http://polaris:8181, POLARIS_OAUTH_URI=http://polaris:8181/api/catalog/v1/oauth/tokens, and POLARIS_WAREHOUSE=studio_catalog from env_defaults (TBD in the manifest). Runtime verification pending."
+
+# ---------------------------------------------------------------------------
+# Host requirements — Polaris's JVM is lighter than Trino's but Spark
+# (also on the JVM) plus Postgres plus StarRocks pushes the floor above
+# the iceberg-rest-only candidates.
+# ---------------------------------------------------------------------------
+host_requirements:
+  docker_min: "28.0"
+  docker_compose_min: "v2.30"
+  bash_min: "5.0"
+  os_verified: []  # CANDIDATE: nothing verified yet
+  os_unverified_but_likely_works:
+    - "Ubuntu 22.04+ (Linux)"
+    - "Windows 11 + Docker Desktop"
+    - "macOS + Docker Desktop"
+  ram_min_gb: 12
+  ram_recommended_gb: 18
+  disk_min_gb: 50
+  ports_required: [9000, 9001, 8181, 5432, 8888, 8030, 9030]
+
+# ---------------------------------------------------------------------------
+# Evidence — per-attempt verification records. EMPTY for candidate stacks.
+# Append a record after every install attempt (including failed ones) so
+# the failure mode is documented for the next contributor to pick up.
+# ---------------------------------------------------------------------------
+evidence: []  # no evidence yet — candidate status
+
+# ---------------------------------------------------------------------------
+# Known-incompatible — combinations we know DO NOT work.
+# ---------------------------------------------------------------------------
+incompatible:
+  - combination: ["apache/polaris:latest"]
+    reason: "Floating `latest` tag moves with every Polaris release; the OAuth2 token-flow contract has had property-name changes during the incubation period. The lock-file contract requires a stable tag."
+    discovered: "2026-05-17"
+    workaround: "Pin to `apache/polaris:1.0.1` (the locked tag) or bump explicitly with re-verification against the OAuth2 token flow."
+
+  - combination: ["spark:3.5.1_1.5.2"]
+    reason: "Tag was REMOVED from Docker Hub after UDP shipped — carried-over caveat from udp-local-v0.2. Any fresh install fails at `docker compose up` with 'not found' error."
+    discovered: "2026-05-16"
+    workaround: "Stay on `tabulario/spark-iceberg:3.5.5_1.8.1` (the locked pin)."
+
+  - combination: [starrocks-fe:3.3-latest, starrocks-be:3.3-latest]
+    reason: "Floating tag has historically resolved to 3.3.10 (pre-3.3.12) which has the Iceberg REST FileIO propagation bug fixed by PR #55416. Same caveat as udp-local-v0.2."
+    discovered: "2026-05-17"
+    workaround: "Pin to exact 3.3.12 or newer."
+
+  - combination: ["postgres:latest"]
+    reason: "Postgres major-version bumps occasionally change behaviors that Polaris's bootstrap and migration logic expect. The lock-file contract requires a stable tag."
+    discovered: "2026-05-17"
+    workaround: "Pin to `postgres:15-alpine` (the locked tag) or bump explicitly with re-verification."

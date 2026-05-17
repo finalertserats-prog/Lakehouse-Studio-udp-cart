@@ -1,0 +1,326 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK — CANDIDATE STACK
+# =====================================================
+# This is a CANDIDATE compatibility lock. The image tags below have all
+# been verified to EXIST on their registries on the certified_at date,
+# but the COMBINATION has NOT been end-to-end installed yet. No evidence
+# record exists. Do not promote this stack to `pilot-stable` until at
+# least one passing install + smoke + finalize run has been captured in
+# the evidence block.
+#
+# For the certified path that DOES have evidence, see
+# `udp-local-v0.2.lock.yaml` (Spark-based, pilot-stable).
+
+schema_version: "1.0"
+stack_id: iceberg-nessie-trino-local-v0.1
+version_id: "0.1.0"
+certified_at: "2026-05-17T00:00:00+05:30"
+certified_by: vishnu.wildeagle@gmail.com
+certified_on:
+  os: "TBD — no install evidence yet"
+  docker: "TBD — no install evidence yet"
+  docker_compose: "TBD — no install evidence yet"
+# IMPORTANT: status is `candidate`, NOT `pilot-stable`. Studio's compatibility
+# loader exposes this verbatim through /api/stacks/{id}/lock-summary so the UI
+# can warn before showing the option.
+status: "candidate"
+
+# Maturity grades:
+#   candidate       — tags verified present on registry; combination NOT installed end-to-end
+#   pilot-stable    — install completes, lakehouse readable, smoke may need Skip on some OS
+#   linux-stable    — verified end-to-end on a Linux VPS, smoke passes clean
+#   production      — additional hardening (TLS, backups, RBAC) certified
+status_notes: |
+  CANDIDATE — NOT INSTALLABLE END-TO-END YET.
+
+  Evidence classification (honest accounting per the "evidence-backed
+  compatibility" principle):
+
+  SOURCE-VERIFIED marriages (read from upstream docs / image manifests on
+  2026-05-17 — no runtime evidence yet):
+    - nessie:0.99.0 exposes Iceberg-REST at `/iceberg/{branch}` (Nessie
+      release notes + projectnessie.org/iceberg/iceberg-rest/).
+    - trino:475 ships the iceberg connector with `iceberg.catalog.type=rest`
+      and Trino's native S3 filesystem with `s3.path-style-access` flag
+      (trino.io/docs/current/connector/iceberg.html + file-system-s3.html).
+    - starrocks-fe:3.3.12 contains PR #55416 — same axiom as v0.2
+      (StarRocks changelog).
+    - The path-style + http-endpoint axioms for MinIO are identical to
+      v0.2's pilot-stable record (re-used, not re-proven).
+
+  AXIOMATICALLY-CLAIMED marriages (need install evidence to prove):
+    - That Nessie's `/iceberg/main` round-trips cleanly between a Spark
+      writer and a Trino reader on this exact tag combination.
+    - That StarRocks 3.3.12's external Iceberg REST catalog accepts
+      Nessie's branch-scoped URI verbatim (same shape as a plain
+      iceberg-rest URI, but never runtime-checked against Nessie).
+    - That the Windows AWS-SDK→MinIO UnknownHostException from v0.2
+      reproduces (or doesn't) in this stack — same StarRocks version,
+      same MinIO, but Nessie in front instead of tabulario/iceberg-rest.
+    - Nessie's persistence layer ships defaulted to in-memory (`MONGO`,
+      `IN_MEMORY`, etc. per version); the lock does not yet pin which
+      backend Nessie runs against, so durability across container
+      restarts is NOT a guaranteed marriage of this lock.
+
+  Why this stack matters:
+    - Nessie's Iceberg-REST adapter (added in the 0.7x line, mature by 0.99)
+      lets Trino's `iceberg.catalog.type=rest` connector talk straight to
+      Nessie without a separate iceberg-rest sidecar. The reward is branch
+      semantics on the catalog (Nessie's killer feature) reachable from
+      stock Trino + stock StarRocks without bespoke client code.
+
+  Promotion requirements to pilot-stable:
+    1. Append at least one passing evidence[] entry where Trino executes
+       a successful SELECT against an Iceberg table that was created via
+       Spark on the SAME Nessie branch — proving the branch-scoped REST
+       URI (`/iceberg/main`) round-trips cleanly between writer and
+       reader.
+    2. Nessie's Iceberg-REST adapter requires Trino 460+ for the REST
+       endpoint contract that Nessie 0.99 implements; we pin Trino 475
+       which clears that floor with margin, but the runtime verification
+       still has to happen.
+    3. Capture certified_on os/docker/docker_compose from the verified
+       host once an install completes — current `TBD` placeholders block
+       promotion on their own.
+
+  Use udp-local-v0.2 for any real install today.
+
+# ---------------------------------------------------------------------------
+# Component lock — every container image and tag in the candidate stack.
+# All tags below verified present on their registries on 2026-05-17.
+# ---------------------------------------------------------------------------
+components:
+  - id: minio
+    name: MinIO
+    role: object_storage
+    image: minio/minio
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+    registry_url: https://hub.docker.com/r/minio/minio/tags
+    upstream_url: https://github.com/minio/minio
+    notes: |
+      Same MinIO release as udp-local-v0.2. Healthcheck uses `mc ready local`
+      bundled in the image. No Nessie- or Trino-specific MinIO concerns —
+      both engines speak the S3 API surface MinIO implements.
+
+  - id: minio-client
+    name: MinIO Client (mc)
+    role: object_storage_bootstrap
+    image: minio/mc
+    tag: "RELEASE.2025-04-16T18-13-26Z"
+    registry_url: https://hub.docker.com/r/minio/mc/tags
+    upstream_url: https://github.com/minio/mc
+    notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
+
+  - id: nessie
+    name: Project Nessie (Iceberg-REST catalog)
+    role: catalog
+    image: ghcr.io/projectnessie/nessie
+    tag: "0.99.0"
+    registry_url: https://github.com/projectnessie/nessie/pkgs/container/nessie
+    upstream_url: https://projectnessie.org/
+    notes: |
+      Nessie 0.99 ships a stable Iceberg-REST adapter at
+      `/iceberg/{branch}` — Trino and Spark both connect via
+      `iceberg.rest-catalog.uri=http://nessie:19120/iceberg/main`. The
+      branch path segment is the key to Nessie's git-style semantics:
+      pointing two clients at `/iceberg/main` makes them share the same
+      branch; pointing one at `/iceberg/dev` isolates a writer for safe
+      experimentation. DO NOT use the `latest` tag — pin to `0.99.0` so
+      the lock contract holds across registry drift.
+
+  - id: trino
+    name: Trino
+    role: processing
+    image: trinodb/trino
+    tag: "475"
+    registry_url: https://hub.docker.com/r/trinodb/trino/tags
+    upstream_url: https://trino.io/docs/current/connector/iceberg.html
+    notes: |
+      Trino 475 picked for the same reasons as udp-trino-local-v0.1:
+      in-market long enough for Iceberg-REST + MinIO bugs to surface, and
+      numerically pinned so the lock contract holds against the moving
+      `latest` tag. Trino's Iceberg connector targets the Iceberg REST
+      spec — `iceberg.catalog.type=rest` plus `iceberg.rest-catalog.uri`
+      is enough. DO NOT use `trinodb/trino:latest` here.
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    image: starrocks/fe-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/fe-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: |
+      Same StarRocks release as udp-local-v0.2 — PR #55416 (Iceberg REST
+      catalog property propagation to S3 FileIO) is required and shipped
+      in 3.3.12. StarRocks treats Nessie's Iceberg-REST endpoint as a
+      standard Iceberg REST catalog — point its external catalog at
+      `http://nessie:19120/iceberg/main` with the same warehouse location
+      Trino uses. Do not use the floating `3.3-latest` tag.
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    image: starrocks/be-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/be-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: Same version requirement as FE.
+
+# ---------------------------------------------------------------------------
+# Compatibility constraints — pairs that MUST hold for this stack to work.
+# CANDIDATE: rules below are grounded in upstream docs (projectnessie.org,
+# trino.io, iceberg.apache.org, StarRocks GitHub) but `verified` strings
+# are documentation citations, NOT runtime evidence. Bumping any tag in
+# this lock requires re-checking every constraint against the new combo.
+# ---------------------------------------------------------------------------
+constraints:
+  - between: [trino, nessie]
+    rule: "Trino's iceberg connector (iceberg.catalog.type=rest) must point iceberg.rest-catalog.uri at Nessie's branch-scoped Iceberg-REST endpoint (e.g. http://nessie:19120/iceberg/main) — the trailing `/iceberg/{branch}` segment is what selects the Nessie branch the session writes to"
+    verified: "Per projectnessie.org/iceberg/iceberg-rest/ (fetched 2026-05-17): Nessie exposes the Iceberg REST spec at `/iceberg/{ref}` where `ref` is a Nessie branch or tag. Trino's iceberg-rest client treats this URL as the catalog root; branch selection is implicit in the URL path."
+
+  - between: [nessie, trino]
+    rule: "Nessie's Iceberg-REST adapter implements the Iceberg REST spec contract that Trino 460+ requires; Trino 475 clears this floor with margin"
+    verified: "Per Nessie 0.99 release notes (fetched 2026-05-17): the Iceberg-REST adapter is marked stable and tracks Iceberg REST spec v1. Trino's iceberg connector docs list the REST catalog type with no version-specific caveats for 460+."
+
+  - between: [spark_writer_external, nessie, trino]
+    rule: "Any external Spark writer that creates Iceberg tables via Nessie MUST target the SAME branch URL Trino reads from, otherwise the snapshot Trino sees is the empty `main` branch while the writer's data lives on a different branch"
+    verified: "Branch isolation is the documented behavior of Nessie's Iceberg-REST adapter — there is no implicit cross-branch read. The candidate's bootstrap (TBD) must wire both writer and reader to `/iceberg/main` unless an explicit branch is in use."
+
+  - between: [trino, minio]
+    rule: "Trino's native S3 filesystem must be enabled (fs.s3.enabled=true on the iceberg catalog) AND configured for path-style addressing (s3.path-style-access=true) when the endpoint is MinIO"
+    verified: "Per trino.io/docs/current/object-storage/file-system-s3.html (fetched 2026-05-17): MinIO is listed alongside AWS S3 as an officially-tested S3-compatible store; path-style addressing is the documented mode on plain HTTP endpoints. Bootstrap (TBD) must write s3.path-style-access=true and s3.endpoint=http://minio:9000."
+
+  - between: [starrocks-fe, nessie]
+    rule: "StarRocks 3.3.x requires PR #55416 for Iceberg REST catalog FileIO propagation to non-AWS S3 endpoints; the rule applies identically whether the REST server is tabulario/iceberg-rest or Nessie's adapter"
+    verified: "3.3.12 includes PR #55416 — same constraint as udp-local-v0.2.lock.yaml. The StarRocks side does not distinguish Nessie's Iceberg-REST adapter from any other compliant REST catalog."
+
+  - between: [starrocks-fe, starrocks-be]
+    rule: "FE and BE must run the same minor + patch version"
+    verified: "both pinned to 3.3.12"
+
+  - between: [minio, starrocks-fe, starrocks-be]
+    rule: "StarRocks FE+BE must export AWS_REGION + AWS_ENDPOINT_URL_S3 + AWS_S3_US_EAST_1_REGIONAL_ENDPOINT=regional in startup, beyond catalog props"
+    verified: "Same constraint as udp-local-v0.2 — the StarRocks-vs-MinIO contract is independent of which catalog server is in front. The Windows AWS-SDK→MinIO UnknownHostException caveat from v0.2 likely also applies here; not yet observed."
+
+  - between: [trino, starrocks-fe, nessie]
+    rule: "Both engines must connect to the SAME Nessie branch URL and the SAME warehouse location so that tables Trino writes are visible to StarRocks (and vice-versa) without snapshot drift"
+    verified: "Both consume NESSIE_ICEBERG_REST_URI=http://nessie:19120/iceberg/main and ICEBERG_WAREHOUSE=s3://datalake/warehouse from env_defaults (TBD in the manifest). Runtime verification pending."
+
+  - between: [nessie, trino, starrocks-fe]
+    rule: "TABLE FORMAT ⇄ CATALOG version range marriage: Nessie 0.99.0's Iceberg-REST adapter implements Iceberg REST spec v1; both Trino's iceberg-rest client (Iceberg 1.6+ on Trino 460+) and StarRocks 3.3.12's external Iceberg REST client (Iceberg 1.5+ bundled) consume the same spec — so the version floors are: nessie >= 0.95 (for stable `/iceberg/{branch}` mount path), trino >= 460 (for spec v1 client), starrocks >= 3.3.12 (for PR #55416). Bumping Nessie above 0.99 requires re-checking all three clients."
+    verified: "source review 2026-05-17 — projectnessie.org/iceberg/iceberg-rest/, Trino release notes for 460, StarRocks 3.3.12 changelog."
+    evidence: "TBD — needs install run"
+
+  - between: [nessie, trino]
+    rule: "CATALOG ⇄ SERVING ENGINE wire compatibility: Trino's iceberg connector talks plain HTTP REST to Nessie on port 19120 (`http://nessie:19120/iceberg/main`), no TLS, no auth — this is the local-dev posture. Any production deployment must re-validate the constraint with Nessie behind a TLS terminator AND with Trino configured for `iceberg.rest-catalog.security=oauth2` (or similar), because Nessie 0.99 supports OAuth/OIDC but does not enforce it by default."
+    verified: "source review 2026-05-17 — Nessie 0.99 server.yaml ships `authentication.enabled=false` by default; Trino's iceberg-rest client supports OAuth2 properties but does not require them. Local-dev marriage is the unauthenticated plain-HTTP one."
+    evidence: "TBD — needs install run"
+    known_issue: "Local-dev TLS-off + auth-off is fine for laptop; promotion to linux-stable on a shared host requires the OAuth2/TLS variant constraint to be re-codified."
+
+  - between: [starrocks-fe, nessie]
+    rule: "CATALOG ⇄ SERVING ENGINE wire compatibility: StarRocks 3.3.12 reaches Nessie at the same `/iceberg/main` endpoint over plain HTTP. StarRocks's external catalog property `iceberg.catalog.type=rest` + `iceberg.catalog.uri=http://nessie:19120/iceberg/main` is the marriage shape — distinct from `iceberg.catalog.type=hive` (which would point at HMS). Mis-pinning the catalog type silently produces an empty catalog instead of an auth error."
+    verified: "source review 2026-05-17 — StarRocks 3.3 external-catalog docs. Same wire shape as the tabulario/iceberg-rest case verified in udp-local-v0.2."
+    evidence: "TBD — needs install run"
+
+  - between: [trino, minio]
+    rule: "PROCESSING ⇄ STORAGE credential propagation: Trino's iceberg catalog must carry s3.aws-access-key + s3.aws-secret-key matching the MinIO root credentials (or a non-root MinIO user with bucket-level access to `datalake`). Without these the table-list call succeeds (Nessie returns metadata) but the SELECT fails at Parquet read with a 403 from MinIO."
+    verified: "Same constraint as udp-trino-local-v0.1's trino↔minio credentials rule. The bootstrap (TBD) must inject the values from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY into the iceberg catalog properties."
+    evidence: "TBD — needs install run"
+
+  - between: [starrocks-fe, minio]
+    rule: "PROCESSING ⇄ STORAGE credential propagation: StarRocks's external Iceberg catalog must carry `aws.s3.access_key` + `aws.s3.secret_key` + `aws.s3.endpoint=http://minio:9000` + `aws.s3.enable_path_style_access=true` matching MinIO. The OS-level AWS_* env vars are a SEPARATE concern (see the FE+BE env-var constraint above) — both belt-and-suspenders are needed."
+    verified: "source review 2026-05-17 — StarRocks Iceberg REST catalog property docs. Same shape as v0.2."
+    evidence: "TBD — needs install run"
+
+  - between: [nessie]
+    rule: "BACKING DB ⇄ CATALOG durability: Nessie 0.99 defaults its persistence backend to in-memory when no `nessie.version.store.type` is configured. Restarting the Nessie container WILL drop all commits, branches, and tables — only the data on MinIO survives. A pilot-stable promotion must either (a) accept this dev-only behavior and document it, or (b) add a `nessie-postgres` component and pin `nessie.version.store.type=JDBC` with the matching JDBC URL."
+    verified: "source review 2026-05-17 — Nessie 0.99 application.properties defaults. The lock currently does NOT include a persistence backend, so the in-memory default applies."
+    evidence: "TBD — needs install run"
+    known_issue: "This is a deliberate scope cut for v0.1 candidate. Track as GATE 3 for pilot-stable promotion: add a Nessie persistence backend pin."
+
+  - between: [trino, minio, nessie]
+    rule: "PORT BINDING uniqueness for the recommended overlay set: trino:8080, nessie:19120, minio:9000+9001, starrocks-fe:8030+9030 — these MUST be distinct on the host. No collision with v0.2's iceberg-rest:8181 because this stack does NOT include iceberg-rest. If a user runs udp-local-v0.2 and this stack side-by-side, Trino's 8080 will collide with udp-local-v0.2's Jupyter (which also defaults to 8888 NOT 8080 — but bootstrap must verify before binding)."
+    verified: "source review 2026-05-17 — ports_required list in this lock + the v0.2 lock. Host bootstrap (TBD) must pre-flight check these are free."
+    evidence: "TBD — needs install run"
+
+  - between: [nessie, trino, starrocks-fe]
+    rule: "VOLUME MOUNT contract: this stack does NOT require any host bind-mount for catalog data when Nessie runs with the default in-memory store. If pilot-stable promotion adds a Nessie JDBC backend (see Nessie durability constraint above), a bind-mount for the Postgres data volume becomes required and must be added here. Trino's catalog `.properties` files come in via the image's bake or a config bind-mount at `/etc/trino/catalog/` — the bootstrap (TBD) must materialize `iceberg.properties` and bind it in."
+    verified: "source review 2026-05-17 — Trino image documents `/etc/trino/catalog/` as the catalog-config directory; the bootstrap (TBD) must write the iceberg.properties file with the Nessie URI + S3 props before `docker compose up`."
+    evidence: "TBD — needs install run"
+
+  - between: [trino, starrocks-fe, nessie]
+    rule: "ENGINE ⇄ ENGINE PARITY (deeper than just URL): both Trino and StarRocks must agree on the warehouse path that Nessie hands back AND on the implicit Iceberg spec version they consume. Trino 475 + Iceberg 1.6 client and StarRocks 3.3.12 + Iceberg 1.5 client both speak Iceberg v2 table format, so a table Spark writes at format-version=2 is readable by both. A future Iceberg v3 writer (Iceberg 1.9+) would NOT be readable by StarRocks 3.3.12 even though the Nessie URL is identical."
+    verified: "source review 2026-05-17 — Iceberg format-version compatibility matrix (iceberg.apache.org/spec). Table format version is an implicit marriage between writer (Spark+Iceberg client) and ALL readers."
+    evidence: "TBD — needs install run"
+    known_issue: "Any future stack that bumps to Iceberg 1.9+ on the writer must re-verify StarRocks read-side, not just the Nessie/Trino versions."
+
+# ---------------------------------------------------------------------------
+# Host requirements — Trino + Nessie + StarRocks on the same host pushes
+# the RAM floor above the iceberg-rest variant: Nessie's JVM is small
+# (~512 MB working set) but Trino still demands its 3-4 GB heap budget.
+# ---------------------------------------------------------------------------
+host_requirements:
+  docker_min: "28.0"
+  docker_compose_min: "v2.30"
+  bash_min: "5.0"
+  os_verified: []  # CANDIDATE: nothing verified yet
+  os_unverified_but_likely_works:
+    - "Ubuntu 22.04+ (Linux)"
+    - "Windows 11 + Docker Desktop"
+    - "macOS + Docker Desktop"
+  ram_min_gb: 14
+  ram_recommended_gb: 20
+  disk_min_gb: 50
+  ports_required: [9000, 9001, 19120, 8080, 8030, 9030]
+
+# ---------------------------------------------------------------------------
+# Evidence — per-attempt verification records. EMPTY for candidate stacks.
+# Append a record after every install attempt (including failed ones) so
+# the failure mode is documented for the next contributor to pick up.
+# ---------------------------------------------------------------------------
+evidence: []  # no evidence yet — candidate status
+
+# ---------------------------------------------------------------------------
+# Known-incompatible — combinations we know DO NOT work. Carried over from
+# v0.2 where the constraint still applies, plus Nessie/Trino-specific.
+# ---------------------------------------------------------------------------
+incompatible:
+  - combination: [trino:latest]
+    reason: "Floating `latest` tag changes whenever Trino ships. The lock-file contract requires a stable tag — use a numeric pin like `475`."
+    discovered: "2026-05-17"
+    workaround: "Pin to the numeric Trino tag that matches the lock (currently 475)."
+
+  - combination: ["nessie:latest"]
+    reason: "Floating `latest` tag on Nessie moves with every release; the Iceberg-REST adapter has had behavior changes between minor versions (e.g. branch-URL casing). The lock-file contract requires a stable tag."
+    discovered: "2026-05-17"
+    workaround: "Pin to ghcr.io/projectnessie/nessie:0.99.0 or bump explicitly with re-verification."
+
+  - combination: ["trino:<460", "nessie:0.99.0"]
+    reason: "Nessie 0.99's Iceberg-REST adapter assumes spec endpoints that Trino prior to 460 did not implement consistently. Not runtime-observed in this candidate — derived from Trino release notes and Nessie's stated minimum-client expectations."
+    discovered: "2026-05-17"
+    workaround: "Stay on trinodb/trino:475 (the locked pin) or any newer numeric tag with re-verification."
+
+  - combination: [starrocks-fe:3.3-latest, starrocks-be:3.3-latest]
+    reason: "Floating tag has historically resolved to 3.3.10 (pre-3.3.12) which has the Iceberg REST FileIO propagation bug fixed by PR #55416. Same caveat as udp-local-v0.2."
+    discovered: "2026-05-17"
+    workaround: "Pin to exact 3.3.12 or newer."
+
+  - combination: ["iceberg-rest:1.6.0", "nessie:0.99.0"]
+    reason: "Running both Iceberg REST servers in the same stack is redundant and produces confusing behavior — clients pointed at one cannot see tables created via the other (they have separate catalog storage). The whole point of the Nessie variant is to REPLACE tabulario/iceberg-rest with Nessie's adapter, not run them side-by-side."
+    discovered: "2026-05-17"
+    workaround: "Pick one catalog server per stack. This lock chooses Nessie; udp-local-v0.2 chooses tabulario/iceberg-rest."
+
+  - combination: ["nessie:0.99.0 (in-memory persistence)", "production posture"]
+    reason: "Nessie 0.99 defaults to in-memory persistence when no `nessie.version.store.type` is set. A container restart drops all commits, branches, and table pointers — only the data on MinIO survives, but it becomes unreferenced. Fine for laptop dev, unusable for any shared host."
+    discovered: "2026-05-17"
+    workaround: "For pilot-stable on Linux: add a `nessie-postgres` component and pin `nessie.version.store.type=JDBC` with a JDBC URL. The lock will need a GATE 3 closure before promotion."
+
+  - combination: ["trino:475", "nessie:0.99.0", "starrocks-fe:3.3.12 pointed at DIFFERENT Nessie branches"]
+    reason: "Trino at `/iceberg/main` and StarRocks at `/iceberg/dev` see disjoint catalog trees. Bootstrap MUST wire both to the same branch URL — silent divergence (no error, just empty catalogs) is the failure mode."
+    discovered: "2026-05-17"
+    workaround: "Bootstrap injects a single NESSIE_BRANCH env var consumed by both engines."
+
+  - combination: ["nessie:0.99.0", "iceberg-format-version=3"]
+    reason: "Iceberg format-version 3 requires Iceberg client 1.9+ on every reader. StarRocks 3.3.12 ships Iceberg 1.5 client and Trino 475 ships Iceberg 1.6 client — both can read v2 cleanly but neither implements v3. A Spark writer using Iceberg 1.9+ at format-version=3 would produce tables Nessie tracks but neither engine can read."
+    discovered: "2026-05-17"
+    workaround: "Keep the writer on Iceberg 1.8.x (the tabulario/spark-iceberg:3.5.5_1.8.1 image ships this) and explicitly set `format-version=2` on table creation until both reader engines bump."
