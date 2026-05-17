@@ -195,3 +195,5 @@ The same checklist applies for `pilot-stable → linux-stable`: just add a secon
 - **`stacks/components-catalog.yaml`** — the source of truth for component-level `compatible_with` lists that drive the [component compatibility matrix](#component-compatibility-matrix) above.
 
 **When in doubt:** if this doc says a stack is `pilot-stable` but the lock file says `candidate`, trust the lock file and update this doc.
+
+<!-- account-routing test commit 2026-05-17T07:50 — confirms pushes route to finalertserats-prog (NOT -cmd) -->
