@@ -178,10 +178,19 @@ def _render_hms_fragment(env: dict) -> str:
         "    expose:\n"
         '      - "3306"\n'
         "    healthcheck:\n"
-        '      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${HMS_DB_ROOT_PASSWORD:-root_password_pilot}"]\n'
+        # Codex review 2026-05-17: prefer checking the HMS user + db over
+        # bare root ping — this proves init scripts ran AND user/grants
+        # are in place AND the metastore db exists. Without this stricter
+        # check, mysqladmin ping can go green during the MySQL official
+        # image's TWO-PHASE init (temp startup then final startup), and
+        # the dependent HMS container then crashes against an incomplete
+        # MySQL. start_period 60s is generous enough for the cold-volume
+        # init on a stock VPS.
+        '      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uhive -p$${MYSQL_PASSWORD} -D metastore -e \\"SELECT 1\\" >/dev/null"]\n'
         "      interval: 10s\n"
         "      timeout: 5s\n"
-        "      retries: 15\n"
+        "      retries: 30\n"
+        "      start_period: 60s\n"
         "    networks:\n"
         "      - default\n"
         "  hive-metastore:\n"
