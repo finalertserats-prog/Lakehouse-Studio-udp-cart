@@ -188,7 +188,7 @@ echo "[studio-trino-bootstrap] writing Trino iceberg catalog properties..."
 # — writing the same file twice is fine; restart is cheap on a warm host.
 # Path-style + explicit S3 credentials required by MinIO (HTTP, no IAM).
 docker exec udp-trino mkdir -p /data/trino/etc/catalog/
-docker exec udp-trino bash -c 'cat > /data/trino/etc/catalog/iceberg.properties' <<'TRINOCAT'
+docker exec -i udp-trino bash -c 'cat > /data/trino/etc/catalog/iceberg.properties' <<'TRINOCAT'
 connector.name=iceberg
 iceberg.catalog.type=rest
 iceberg.rest-catalog.uri=http://iceberg-rest:8181
@@ -200,6 +200,13 @@ s3.path-style-access=true
 s3.aws-access-key=admin
 s3.aws-secret-key=udp_admin_12345
 TRINOCAT
+
+# Defense: confirm the heredoc actually reached the container. A missing `-i`
+# on `docker exec` silently produces an empty file, which then crashes Trino
+# at startup with "Catalog configuration ... does not contain connector.name".
+# Fail fast here rather than waiting ~10 min for Trino to enter a restart loop.
+docker exec udp-trino test -s /data/trino/etc/catalog/iceberg.properties \
+  || { echo "iceberg.properties wrote empty — bootstrap aborted"; exit 1; }
 
 echo "[studio-trino-bootstrap] restarting Trino to load iceberg catalog..."
 # NOTE: `docker compose restart trino` would fail here because the bootstrap

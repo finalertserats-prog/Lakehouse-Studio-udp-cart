@@ -86,7 +86,7 @@ echo "[studio-nessie-bootstrap] writing Trino iceberg catalog properties (Nessie
 # the file then restart trino to register the iceberg catalog. Idempotent â€”
 # writing the same file twice is fine. Path-style + explicit MinIO creds required.
 docker exec udp-trino mkdir -p /data/trino/etc/catalog/
-docker exec udp-trino bash -c 'cat > /data/trino/etc/catalog/iceberg.properties' <<'TRINOCAT'
+docker exec -i udp-trino bash -c 'cat > /data/trino/etc/catalog/iceberg.properties' <<'TRINOCAT'
 connector.name=iceberg
 iceberg.catalog.type=rest
 iceberg.rest-catalog.uri=http://nessie:19120/iceberg/main
@@ -98,6 +98,13 @@ s3.path-style-access=true
 s3.aws-access-key=admin
 s3.aws-secret-key=udp_admin_12345
 TRINOCAT
+
+# Defense: confirm the heredoc actually reached the container. A missing `-i`
+# on `docker exec` silently produces an empty file, which then crashes Trino
+# at startup with "Catalog configuration ... does not contain connector.name".
+# Fail fast here rather than waiting ~10 min for Trino to enter a restart loop.
+docker exec udp-trino test -s /data/trino/etc/catalog/iceberg.properties \
+  || { echo "iceberg.properties wrote empty — bootstrap aborted"; exit 1; }
 
 echo "[studio-nessie-bootstrap] restarting Trino to load iceberg catalog..."
 # NOTE: `docker compose restart trino` would fail here because the bootstrap
@@ -317,7 +324,7 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-hudi-bootstrap] writing pyspark seed job into spark container..."
-docker exec udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/hudi_bootstrap.py' <<'PYEOF'
+docker exec -i udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/hudi_bootstrap.py' <<'PYEOF'
 # Seed Hudi raw + curated demo tables and sync them to Hive Metastore.
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -422,7 +429,7 @@ docker exec udp-hive-metastore bash -lc 'echo > /dev/tcp/127.0.0.1/9083' >/dev/n
 echo "  HMS OK"
 
 echo "[studio-hudi-smoke] writing pyspark smoke job..."
-docker exec udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/hudi_smoke.py' <<'PYEOF'
+docker exec -i udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/hudi_smoke.py' <<'PYEOF'
 # Read-only smoke: count raw + curated, run an incremental query.
 import sys
 from pyspark.sql import SparkSession
@@ -538,7 +545,7 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-delta-bootstrap] writing pyspark seed job into spark container..."
-docker exec udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/delta_bootstrap.py' <<'PYEOF'
+docker exec -i udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/delta_bootstrap.py' <<'PYEOF'
 # Seed Delta raw + curated demo tables and register them in HMS.
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -612,7 +619,7 @@ echo "[studio-delta-bootstrap] writing Trino delta-lake catalog properties..."
 # Trino's delta-lake connector reads tables registered in HMS; no REST.
 # Trino 475 reads from /data/trino/etc/catalog/ at startup.
 docker exec udp-trino mkdir -p /data/trino/etc/catalog/
-docker exec udp-trino bash -c 'cat > /data/trino/etc/catalog/delta.properties' <<'TRINOCAT'
+docker exec -i udp-trino bash -c 'cat > /data/trino/etc/catalog/delta.properties' <<'TRINOCAT'
 connector.name=delta-lake
 hive.metastore=thrift
 hive.metastore.uri=thrift://hive-metastore:9083
@@ -623,6 +630,13 @@ s3.path-style-access=true
 s3.aws-access-key=admin
 s3.aws-secret-key=udp_admin_12345
 TRINOCAT
+
+# Defense: confirm the heredoc actually reached the container. A missing `-i`
+# on `docker exec` silently produces an empty file, which then crashes Trino
+# at startup with "Catalog configuration ... does not contain connector.name".
+# Fail fast here rather than waiting ~10 min for Trino to enter a restart loop.
+docker exec udp-trino test -s /data/trino/etc/catalog/delta.properties \
+  || { echo "delta.properties wrote empty — bootstrap aborted"; exit 1; }
 
 echo "[studio-delta-bootstrap] restarting Trino to load delta catalog..."
 # NOTE: `docker compose restart trino` would fail here because the bootstrap
@@ -680,7 +694,7 @@ curl -fsS http://localhost:8080/v1/info >/dev/null || { echo "trino unreachable"
 echo "  trino OK"
 
 echo "[studio-delta-smoke] writing pyspark smoke job..."
-docker exec udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/delta_smoke.py' <<'PYEOF'
+docker exec -i udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/delta_smoke.py' <<'PYEOF'
 # Read-only smoke: count raw + curated via Delta + HMS.
 import sys
 from pyspark.sql import SparkSession
@@ -869,7 +883,7 @@ echo "  grants applied"
 
 # Persist credentials for the smoke script to reuse without re-rotating.
 echo "[studio-polaris-bootstrap] persisting principal credentials for smoke..."
-docker exec udp-spark bash -c "mkdir -p /tmp/lhs && cat > /tmp/lhs/polaris_creds.env" <<EOF
+docker exec -i udp-spark bash -c "mkdir -p /tmp/lhs && cat > /tmp/lhs/polaris_creds.env" <<EOF
 POLARIS_CLIENT_ID=${CLIENT_ID}
 POLARIS_CLIENT_SECRET=${CLIENT_SECRET}
 POLARIS_CATALOG_NAME=${CATALOG_NAME}
@@ -889,7 +903,7 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-polaris-bootstrap] writing pyspark seed job into spark container..."
-docker exec udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/polaris_bootstrap.py' <<'PYEOF'
+docker exec -i udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/polaris_bootstrap.py' <<'PYEOF'
 # Seed Iceberg raw + curated via Polaris-governed REST catalog.
 import os
 from pyspark.sql import SparkSession
@@ -1077,7 +1091,7 @@ docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "SELECT 1" >/
 echo "  starrocks-fe OK"
 
 echo "[studio-polaris-smoke] writing pyspark smoke job..."
-docker exec udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/polaris_smoke.py' <<'PYEOF'
+docker exec -i udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/polaris_smoke.py' <<'PYEOF'
 # Read-only smoke against the Polaris-governed Iceberg catalog.
 import os, sys
 from pyspark.sql import SparkSession
