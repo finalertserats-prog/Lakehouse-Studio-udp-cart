@@ -32,7 +32,10 @@ requires a human PR with evidence (same contract as compatibility.py).
 from __future__ import annotations
 
 from typing import Any, TypedDict
-from typing import NotRequired  # py3.11+
+try:
+    from typing import NotRequired  # py3.11+
+except ImportError:  # pragma: no cover — py3.10 fallback for the Finalert VPS
+    from typing_extensions import NotRequired
 
 from .catalog import (
     component_index,

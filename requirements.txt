@@ -10,3 +10,4 @@ pymysql==1.1.1
 anthropic>=0.40.0
 click==8.3.3
 rich==13.9.4
+typing_extensions>=4.12.0  # NotRequired backport for py3.10 compat (Finalert VPS)
