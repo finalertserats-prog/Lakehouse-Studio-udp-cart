@@ -138,10 +138,14 @@ def _render_nessie_fragment(env: dict) -> str:
         "      retries: 12\n"
         "    networks:\n"
         "      - default\n"
+        # Codex P0 fix 2026-05-17: the fragment used to declare
+        # `default: { external: true }` which only works if the network
+        # is pre-created. With docker compose -f base -f fragment, the
+        # base compose creates `default` on first start and our fragment
+        # joins by reference. No `external:` and no explicit `name:`
+        # needed — let compose's merge logic do the work.
         "networks:\n"
-        "  default:\n"
-        f"    name: {_network_name_token(env)}\n"
-        "    external: true\n"
+        "  default: {}\n"
     )
 
 
@@ -212,10 +216,14 @@ def _render_hms_fragment(env: dict) -> str:
         "      - default\n"
         "volumes:\n"
         f"  {_PG_HMS_VOLUME}:\n"
+        # Codex P0 fix 2026-05-17: the fragment used to declare
+        # `default: { external: true }` which only works if the network
+        # is pre-created. With docker compose -f base -f fragment, the
+        # base compose creates `default` on first start and our fragment
+        # joins by reference. No `external:` and no explicit `name:`
+        # needed — let compose's merge logic do the work.
         "networks:\n"
-        "  default:\n"
-        f"    name: {_network_name_token(env)}\n"
-        "    external: true\n"
+        "  default: {}\n"
     )
 
 
@@ -285,10 +293,14 @@ def _render_polaris_fragment(env: dict) -> str:
         "      - default\n"
         "volumes:\n"
         f"  {_PG_POLARIS_VOLUME}:\n"
+        # Codex P0 fix 2026-05-17: the fragment used to declare
+        # `default: { external: true }` which only works if the network
+        # is pre-created. With docker compose -f base -f fragment, the
+        # base compose creates `default` on first start and our fragment
+        # joins by reference. No `external:` and no explicit `name:`
+        # needed — let compose's merge logic do the work.
         "networks:\n"
-        "  default:\n"
-        f"    name: {_network_name_token(env)}\n"
-        "    external: true\n"
+        "  default: {}\n"
     )
 
 

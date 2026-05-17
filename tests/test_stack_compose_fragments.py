@@ -182,16 +182,23 @@ def test_write_fragment_is_idempotent(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
-def test_fragment_attaches_to_external_default_network(stack_id: str, tmp_path: Path):
-    """Every fragment service joins `default`, and that network is
-    declared `external: true` so docker compose merges it with the
-    base stack's network rather than creating a sibling."""
+def test_fragment_attaches_to_default_network(stack_id: str, tmp_path: Path):
+    """Every fragment service joins `default`. Per Codex P0 review
+    (2026-05-17) the network is NO LONGER declared `external: true` —
+    that required a pre-created network and broke first-time installs.
+    The new contract: fragment references `default`, base compose
+    creates it on `up -d`, and compose merges them transparently."""
     path = scf.write_fragment(stack_id, tmp_path, {})
     assert path is not None
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert "networks" in doc, "fragment must declare networks: top-level"
     assert "default" in doc["networks"]
-    assert doc["networks"]["default"].get("external") is True
+    # MUST NOT be external — compose would refuse to create it.
+    network_spec = doc["networks"]["default"] or {}
+    assert network_spec.get("external") is not True, (
+        f"'{stack_id}' fragment declares default network external — "
+        "this breaks fresh installs (Codex P0 2026-05-17)"
+    )
     # Each service must be on the default network.
     for svc_name, svc_def in doc["services"].items():
         nets = svc_def.get("networks") or []
@@ -286,9 +293,17 @@ def test_polaris_fragment_uses_compose_interpolation_for_password(tmp_path: Path
 # Network name override via env
 # ---------------------------------------------------------------------------
 
-def test_explicit_network_name_honored(tmp_path: Path):
-    """When the env supplies LHS_DOCKER_NETWORK, the fragment must
-    attach to that network instead of the install_dir-derived default."""
+def test_default_network_has_no_external_or_name_override(tmp_path: Path):
+    """Per Codex P0 fix (2026-05-17): the fragment defines `default: {}`
+    (empty mapping) and lets `docker compose -f base -f fragment` merge
+    the networks naturally. Explicit `name:` or `external: true` here
+    would either (a) collide with the base's auto-named network or
+    (b) fail to find the not-yet-existent network.
+
+    LHS_DOCKER_NETWORK can still be set to influence the BASE compose
+    project name; that's the right knob, not a fragment-level override.
+    """
+    # With env override — should NOT influence fragment networks block.
     path = scf.write_fragment(
         "iceberg-nessie-trino-local-v0.1",
         tmp_path,
@@ -296,20 +311,19 @@ def test_explicit_network_name_honored(tmp_path: Path):
     )
     assert path is not None
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert doc["networks"]["default"]["name"] == "my-custom-net"
+    net = doc["networks"]["default"] or {}
+    assert net.get("external") is not True
+    assert "name" not in net or not net.get("name"), (
+        "fragment must NOT pin a network name — would conflict with base compose merge"
+    )
 
-
-def test_install_dir_derived_network_name_default(tmp_path: Path):
-    """Without an explicit LHS_DOCKER_NETWORK, the fragment defaults to
-    `<install_dir.name>_default` so it joins the base stack's
-    auto-named network."""
-    install_dir = tmp_path / "my-install"
-    install_dir.mkdir()
-    path = scf.write_fragment(
+    # Without env override — same behavior.
+    path2 = scf.write_fragment(
         "iceberg-nessie-trino-local-v0.1",
-        install_dir,
+        tmp_path / "fresh",
         {},
     )
-    assert path is not None
-    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert doc["networks"]["default"]["name"] == "my-install_default"
+    assert path2 is not None
+    doc2 = yaml.safe_load(path2.read_text(encoding="utf-8"))
+    net2 = doc2["networks"]["default"] or {}
+    assert net2.get("external") is not True

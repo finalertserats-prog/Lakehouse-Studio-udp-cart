@@ -910,14 +910,378 @@ categories:
 
   - id: observability
     label: Observability (optional)
-    description: Metrics + dashboards for the lakehouse itself. Defer for pilot.
+    description: Metrics + dashboards + log aggregation for the lakehouse itself. Per §5.6.1 of the founding architecture doc, this is the dedicated observability layer alongside storage / catalog / processing.
     order: 8
     optional: true
-    components: []
+    components:
+      - id: prometheus
+        name: Prometheus
+        version: "2.55.1"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Prometheus Authors / CNCF
+        url: https://prometheus.io
+        summary: Pull-based metrics scraping with a multi-dimensional time-series store. The CNCF-graduated industry standard. Pre-wired by the observability overlay to scrape MinIO, Trino, StarRocks endpoints.
+        compatible_with: [grafana, loki, minio, trino, starrocks]
+        logo: "/assets/logos/prometheus.svg"
+        tagline: "Pull-based metrics scraping with a multi-dimensional time-series store."
+        what_it_is: >
+          Prometheus is a CNCF-graduated time-series database for metrics.
+          It polls (scrapes) HTTP endpoints on a fixed interval, parses
+          the OpenMetrics / Prometheus text format, stores samples in its
+          own TSDB, and exposes PromQL for queries. The observability
+          overlay ships a scrape config pre-wired for the lakehouse stack:
+          MinIO cluster metrics, Trino JMX, StarRocks FE+BE, Loki, and
+          itself. Targets that don't exist in the current cart show as
+          'down' — that's expected and explained in the dashboards.
+        best_for:
+          - "Pull-based metrics from any Prometheus-compatible exporter"
+          - "Alerting on lakehouse component health (CPU, RAM, query latency)"
+          - "Long-term metric retention for capacity planning"
+          - "Grafana's default + best-tested datasource"
+        capabilities:
+          - "Multi-dimensional time-series with labels"
+          - "PromQL — purpose-built query language for metrics"
+          - "Service discovery (file_sd, dns_sd, kubernetes_sd, etc.)"
+          - "Alertmanager integration for routing + silencing"
+          - "Recording rules for pre-computed aggregations"
+          - "OpenMetrics / Prometheus text format ingestion"
+        why_this_version: >
+          Pinned to v2.55.1 because it's the current stable 2.x release
+          at write time. The 3.x line is in development but not yet
+          recommended for production. Image: `prom/prometheus:v2.55.1`,
+          multi-arch (amd64 + arm64).
+        resource_profile_summary: "Recommended tier: 1 CPU, 2 GB RAM, 20 GB disk. TSDB grows linearly with target count × scrape interval × retention window."
+      - id: grafana
+        name: Grafana
+        version: "11.3.1"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: AGPL-3.0
+        maintainer: Grafana Labs
+        url: https://grafana.com
+        summary: Dashboards over Prometheus, Loki, and any SQL warehouse — one query UI for everything. Pre-provisioned with Prometheus + Loki datasources by the observability overlay.
+        compatible_with: [prometheus, loki, trino, starrocks]
+        logo: "/assets/logos/grafana.svg"
+        tagline: "Dashboards over Prometheus, Loki, and SQL warehouses — one query UI for everything."
+        what_it_is: >
+          Grafana is the industry-standard visualization layer for metrics,
+          logs, traces, and SQL data. The observability overlay drops a
+          datasources.yml provisioning file so first login shows working
+          Prometheus + Loki datasources — no manual wiring needed. The
+          AGPL-3.0 license applies to modifications of the Grafana binary
+          itself, not to dashboards or operational use; this is documented
+          in the overlay header so operators making redistribution
+          decisions see the license clearly.
+        best_for:
+          - "Unified dashboards over metrics + logs + SQL data"
+          - "Alerting (Grafana 11 has native unified alerting)"
+          - "Pre-built community dashboards for Trino / StarRocks / MinIO"
+          - "Multi-tenant orgs with RBAC on dashboards + folders"
+        capabilities:
+          - "200+ datasource plugins (Prometheus, Loki, MySQL, Postgres, Trino, ...)"
+          - "Unified alerting (Grafana 8+) with multi-channel routing"
+          - "Provisioning via YAML for datasources, dashboards, alerts"
+          - "Dashboard variables + templating for parameterized views"
+          - "RBAC: Admin / Editor / Viewer per folder + per dashboard"
+          - "Plugin ecosystem (panels, datasources, apps)"
+        why_this_version: >
+          Pinned to 11.3.1 — current stable 11.x release. Grafana 11
+          ships unified alerting by default, improved Loki query
+          experience, and the new Scenes-based scenes API. Image:
+          `grafana/grafana:11.3.1`, multi-arch. Note: AGPL-3.0 license
+          (relicensed from Apache-2.0 in 2021).
+        resource_profile_summary: "Recommended tier: 1 CPU, 1 GB RAM, 5 GB disk. SQLite default DB is fine for single-host; swap to Postgres for HA."
+      - id: loki
+        name: Grafana Loki
+        version: "3.2.1"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: AGPL-3.0
+        maintainer: Grafana Labs
+        url: https://grafana.com/oss/loki/
+        summary: Log aggregation with Prometheus-style label indexing. Index-light (cheap to run), works seamlessly with Grafana as the query UI. Pre-configured for 7-day local-filesystem retention by the observability overlay.
+        compatible_with: [grafana, prometheus]
+        logo: "/assets/logos/loki.svg"
+        tagline: "Log aggregation with Prometheus-style label indexing — cheap to run, integrates with Grafana."
+        what_it_is: >
+          Loki is a horizontally-scalable, multi-tenant log aggregation
+          system. Unlike Elasticsearch, it only indexes metadata (labels)
+          rather than full log text — much cheaper to run, and queries
+          rely on label selectors + brute-force grep. Pairs perfectly
+          with Prometheus (same label model) and Grafana (native
+          datasource). The overlay ships single-binary mode with local
+          filesystem storage and 7-day retention; operators scaling out
+          swap the storage backend to S3-compatible later.
+        best_for:
+          - "Centralized logs for the lakehouse stack (trino, spark, starrocks logs)"
+          - "Grafana-native log queries alongside metric dashboards"
+          - "Cost-conscious log aggregation (no full-text index overhead)"
+          - "LogQL — Prometheus-style queries on log streams"
+        capabilities:
+          - "Label-indexed log streams (Prometheus-style)"
+          - "LogQL — purpose-built query language for logs"
+          - "Filesystem, S3, GCS, Azure Blob, or Swift backends"
+          - "Retention enforcement with TSDB index compaction"
+          - "Tenant isolation via X-Scope-OrgID header"
+          - "Promtail / Grafana Agent / Fluent Bit as log shippers"
+        why_this_version: >
+          Pinned to 3.2.1 — current stable 3.x release. Loki 3 introduced
+          the TSDB index format as the default + structured metadata for
+          high-cardinality log labels. Image: `grafana/loki:3.2.1`,
+          multi-arch. Note: AGPL-3.0 license (same as Grafana).
+        resource_profile_summary: "Recommended tier: 1 CPU, 1 GB RAM, 20 GB disk. Disk grows with log volume × retention window (default 7 days)."
     coming_soon:
-      - { name: "Prometheus", id: "prometheus", logo: "/assets/logos/prometheus.svg", summary: "Pull-based metrics scraping with a multi-dimensional time-series store.", reason: "Bundled monitoring; v0.4" }
-      - { name: "Grafana",    id: "grafana",    logo: "/assets/logos/grafana.svg",    summary: "Dashboards over Prometheus, Loki, and Iceberg — one query UI for everything.", reason: "Bundled monitoring; v0.4" }
-      - { name: "Loki",       id: "loki",       logo: "/assets/logos/loki.svg",       summary: "Log aggregation with Prometheus-style label indexing.",                   reason: "Log aggregation; v0.5" }
+      - { name: "Mimir",         id: "mimir",         logo: "/assets/logos/mimir.svg",         summary: "Horizontally-scalable long-term metrics store. Backend for Prometheus at scale.", reason: "Long-term metrics; v0.7" }
+      - { name: "OpenTelemetry", id: "opentelemetry", logo: "/assets/logos/opentelemetry.svg", summary: "Unified traces + metrics + logs collector. Feeds Prometheus / Loki / Tempo.",  reason: "Unified telemetry; v0.7" }
+
+  - id: streaming
+    label: Streaming ingest (optional)
+    description: Event bus + CDC + streaming compute for low-latency lakehouse ingestion. Per §5.6.3 of the founding architecture doc — future components on the roadmap. Catalog-only in v0.6.2 (no overlay yet).
+    order: 9
+    optional: true
+    components:
+      - id: kafka
+        name: Apache Kafka
+        version: "3.8.1"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation
+        url: https://kafka.apache.org
+        summary: Distributed event streaming platform. The industry-standard event bus for CDC-into-lakehouse pipelines and real-time analytics. Catalog-only in v0.6.2 — no installable overlay yet, but listed so operators can plan around it.
+        compatible_with: [debezium, flink]
+        logo: "/assets/logos/kafka.svg"
+        tagline: "Distributed event streaming platform — the de-facto event bus for CDC pipelines."
+        what_it_is: >
+          Kafka is the dominant open-source event streaming platform. It
+          stores records in append-only topic partitions, replicates them
+          across brokers, and lets producers / consumers read at their own
+          pace. The KRaft mode (3.3+) removes the Zookeeper dependency.
+          In a lakehouse context Kafka is the source-of-truth event bus
+          that Debezium streams CDC into and that Flink consumes from to
+          land changes in Iceberg / Hudi / Delta.
+        best_for:
+          - "CDC pipelines from operational DBs into the lakehouse"
+          - "Event sourcing + microservice event buses"
+          - "Real-time analytics feeding StarRocks / ClickHouse"
+          - "Streaming ETL with Flink reading Kafka, writing Iceberg"
+        capabilities:
+          - "Append-only topic partitions with replication"
+          - "KRaft mode (no Zookeeper) — Kafka 3.3+"
+          - "Exactly-once semantics for transactional writes"
+          - "Kafka Connect — pluggable source/sink connectors"
+          - "Schema Registry integration for Avro/JSON/Protobuf"
+          - "Stream processing via Kafka Streams or external engines"
+        why_this_version: >
+          Pinned to 3.8.1 — current stable 3.x release at write time.
+          3.x is the long-term line; the 4.x line is in development but
+          not GA yet. Image: `apache/kafka:3.8.1` (official Apache image,
+          multi-arch).
+        resource_profile_summary: "Recommended tier: 2 CPU, 4 GB RAM, 50 GB disk per broker. Single-broker dev / 3-broker prod minimum for replication."
+      - id: debezium
+        name: Debezium
+        version: "2.7.3"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Red Hat / Debezium community
+        url: https://debezium.io
+        summary: Change Data Capture from operational databases (Postgres, MySQL, MongoDB, SQL Server) into Kafka. The standard pre-Flink building block for CDC-into-lakehouse pipelines. Catalog-only in v0.6.2.
+        compatible_with: [kafka]
+        logo: "/assets/logos/debezium.svg"
+        tagline: "Change Data Capture from operational DBs into Kafka — the CDC-into-lakehouse standard."
+        what_it_is: >
+          Debezium is a set of Kafka Connect source connectors that tail
+          the transaction log of an operational database (Postgres WAL,
+          MySQL binlog, MongoDB oplog, SQL Server CDC) and emit each
+          row-level change as a Kafka record. The output topic carries
+          before/after row state, the operation type (c/u/d), and the
+          source's transaction metadata. Downstream consumers (Flink,
+          Spark Structured Streaming, Hudi DeltaStreamer) land the
+          changes into Iceberg / Hudi / Delta as MERGE INTO updates.
+        best_for:
+          - "Pulling Postgres / MySQL changes into the lakehouse in near real-time"
+          - "Outbox pattern — service emits domain events via DB writes"
+          - "Audit-trail capture (every row change becomes a Kafka record)"
+          - "Zero-downtime database migrations via dual-write + verify"
+        capabilities:
+          - "Source connectors for Postgres / MySQL / MongoDB / SQL Server / Oracle / Db2 / Cassandra"
+          - "Schema evolution detection + Avro schema emission"
+          - "Snapshot mode for initial bulk load + log tail for ongoing changes"
+          - "Single-message transforms (SMT) for field redaction / routing"
+          - "Heartbeat events to keep low-traffic topics fresh"
+          - "Embedded Debezium engine for non-Kafka deployments"
+        why_this_version: >
+          Pinned to 2.7.3 — current stable 2.x release. 3.x is in early
+          access but the connector matrix is still maturing. Image:
+          `debezium/connect:2.7.3.Final` (Kafka Connect base + Debezium
+          connectors bundled).
+        resource_profile_summary: "Recommended tier: 1 CPU, 2 GB RAM per Connect worker. Disk usage minimal — state lives in Kafka."
+      - id: flink
+        name: Apache Flink
+        version: "1.20.0"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: Apache Software Foundation
+        url: https://flink.apache.org
+        summary: Stateful stream processing engine with low-latency event-time semantics and a first-class Iceberg sink. The streaming-compute peer of Spark for lakehouse ingestion. Catalog-only in v0.6.2.
+        compatible_with: [kafka, iceberg, hudi]
+        logo: "/assets/logos/flink.svg"
+        tagline: "Stateful stream processing with low-latency event-time semantics and a first-class Iceberg sink."
+        what_it_is: >
+          Flink is a distributed stream processing engine optimized for
+          stateful, low-latency, event-time computation. It pairs
+          naturally with Kafka as a source and Iceberg / Hudi as a sink:
+          a Flink job consumes a Kafka topic of CDC events from Debezium,
+          applies windowed aggregations or joins, and writes the result
+          to an Iceberg table on object storage. Same API for batch +
+          stream, which makes backfill + live-update unified.
+        best_for:
+          - "CDC pipelines: Kafka → Flink → Iceberg / Hudi sink"
+          - "Real-time aggregations with event-time + watermarks"
+          - "Stateful joins across multiple streams"
+          - "Backfill + live computation on the same job"
+        capabilities:
+          - "Exactly-once state semantics with checkpointing"
+          - "Native Iceberg sink with auto-compaction"
+          - "Native Kafka source / sink with offset checkpointing"
+          - "Event-time processing with configurable watermarks"
+          - "SQL + DataStream + Table API"
+          - "Kubernetes-native operator for production deployments"
+        why_this_version: >
+          Pinned to 1.20.0 — current stable 1.x release at write time.
+          1.20 is an LTS line with the new Disaggregated State Storage
+          (FLIP-423) and the Catalog Modification API. Image:
+          `apache/flink:1.20.0-scala_2.12-java17`, multi-arch.
+        resource_profile_summary: "Recommended tier: 2 CPU, 4 GB RAM per TaskManager. Job count + state size drive total sizing."
+    coming_soon:
+      - { name: "Apache Pulsar",       id: "pulsar",          logo: "/assets/logos/pulsar.svg",          summary: "Multi-tenant event streaming alternative to Kafka with tiered storage.", reason: "Alternative event bus; v0.7" }
+      - { name: "Redpanda",            id: "redpanda",        logo: "/assets/logos/redpanda.svg",        summary: "Kafka-API-compatible streaming platform written in C++ — no Zookeeper / no JVM.", reason: "Kafka alternative; v0.7" }
+      - { name: "Schema Registry",     id: "schema-registry", logo: "/assets/logos/schema-registry.svg", summary: "Centralized Avro / JSON / Protobuf schema enforcement for Kafka topics.", reason: "Streaming contract layer; v0.7" }
+
+  - id: transformation
+    label: Transformation (optional)
+    description: SQL-based ELT transformation layer. Sits above the warehouse, defines tables as SELECT statements with dependency-aware materialization. Per §5.6.3 of the founding architecture doc — future components on the roadmap. Catalog-only ("shopping" item — no auto-install in v0.6.2).
+    order: 10
+    optional: true
+    components:
+      - id: dbt-core
+        name: dbt Core
+        version: "1.9.0"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: dbt Labs
+        url: https://docs.getdbt.com/docs/core/about-core
+        summary: SQL transformation framework — `ref()` for dependencies, automatic DAG, materialization strategies, built-in testing. The de-facto T in ELT. Catalog-only in v0.6.2 — install via `pip install dbt-core dbt-trino` or `dbt-spark` in your own venv, point it at the lakehouse.
+        compatible_with: [trino, spark-iceberg, starrocks]
+        logo: "/assets/logos/dbt.svg"
+        tagline: "SQL transformation framework — the T in ELT. Compiles Jinja+SQL into a dependency DAG."
+        what_it_is: >
+          dbt Core is the open-source CLI that compiles SQL files
+          (with Jinja templating) into a DAG of table / view / incremental
+          model materializations. The `ref()` macro links models — dbt
+          builds the dependency graph automatically and runs models in
+          topological order. Built-in tests (unique, not_null, accepted_values,
+          relationships) + custom data tests catch regressions before
+          they hit the warehouse. Adapters exist for Trino, Spark, Postgres,
+          Snowflake, BigQuery, Redshift, Databricks, and dozens more.
+        best_for:
+          - "Modeling raw → staging → marts transformations in SQL"
+          - "Lineage-aware refactors (rename a column, dbt knows what breaks)"
+          - "Data quality checks at the warehouse layer"
+          - "Version-controlled, reviewable transformations (it's just SQL files in git)"
+        capabilities:
+          - "Jinja-templated SQL with ref() / source() / config() macros"
+          - "Materializations: view, table, incremental, ephemeral, snapshot"
+          - "Built-in tests + custom data tests"
+          - "Auto-generated documentation with lineage graph"
+          - "Adapters for every major warehouse engine"
+          - "dbt Cloud is the SaaS layer; dbt Core is the open-source CLI"
+        why_this_version: >
+          Pinned to 1.9.0 — current stable 1.x release at write time.
+          dbt's 1.x line follows semver tightly; 1.9 is the line that
+          gets new features in 2026. Install: `pip install dbt-core==1.9.0`
+          plus the adapter for your engine (`dbt-trino`, `dbt-spark`, etc.).
+        resource_profile_summary: "Client-side only — runs on the operator's laptop or CI runner. No persistent server. Memory dominated by the compiled manifest.json (typically <100MB for small projects)."
+    coming_soon:
+      - { name: "SQLMesh", id: "sqlmesh", logo: "/assets/logos/sqlmesh.svg", summary: "Modern dbt alternative with native time-travel + virtual data environments.", reason: "Newer transformation framework; v0.7" }
+
+  - id: lineage
+    label: Data lineage (optional)
+    description: Track which tables flow into which dashboards / models / queries. Per §5.6.3 of the founding architecture doc — future components on the roadmap. Catalog-only in v0.6.2.
+    order: 11
+    optional: true
+    components:
+      - id: openlineage
+        name: OpenLineage
+        version: "1.24.2"
+        maturity: ga
+        recommended: false
+        status_badge: "Candidate"
+        badges: [Candidate, Optional]
+        compatible: true
+        license: Apache-2.0
+        maintainer: LF AI & Data Foundation
+        url: https://openlineage.io
+        summary: Open standard for collecting data lineage from pipelines. Integrations for Airflow, Dagster, dbt, Spark, Flink — every event carries inputs, outputs, schema, run metadata. Pairs with Marquez as the reference backend. Catalog-only in v0.6.2.
+        compatible_with: [airflow, dagster, dbt-core, spark-iceberg, flink]
+        logo: "/assets/logos/openlineage.svg"
+        tagline: "Open standard for data lineage events — works across Airflow, Dagster, dbt, Spark, Flink."
+        what_it_is: >
+          OpenLineage is a CNCF-incubating open standard for the wire
+          format of data-lineage events. A producer (Airflow operator,
+          Spark listener, dbt run hook) emits a structured event for
+          each job run with inputs / outputs / schema / run metadata.
+          A consumer (Marquez, Datakin, Atlan, custom backend) ingests
+          those events and reconstructs the cross-tool lineage graph.
+          The Studio overlay wires nothing yet — operators add the
+          OpenLineage listener to their Airflow / Spark / Dagster
+          deployment and point it at Marquez or their preferred backend.
+        best_for:
+          - "Cross-tool lineage (Airflow DAG → Spark job → dbt model → BI dashboard)"
+          - "Compliance: showing which raw source flows into a regulated report"
+          - "Impact analysis: 'if we drop column X, what dashboards break?'"
+          - "Audit trails for data-derivation in BFSI / healthcare"
+        capabilities:
+          - "Standardized event format (JSON + Avro schemas)"
+          - "Native integrations: Airflow, Dagster, dbt, Spark, Flink"
+          - "Pluggable backends: Marquez, Datakin, Atlan, custom HTTP endpoint"
+          - "Column-level lineage (Spark + dbt facets)"
+          - "Schema + statistics + custom facets per event"
+          - "OpenLineage client libraries for Python / Java / Scala / JavaScript"
+        why_this_version: >
+          Pinned to 1.24.2 — current stable release at write time.
+          OpenLineage's spec + client libraries version together;
+          1.24 is the line that ships the new dataset versioning facet.
+        resource_profile_summary: "Library-only — no runtime. Backend (Marquez / similar) is sized separately. Per-event overhead is minimal (single HTTP POST per job run)."
+    coming_soon:
+      - { name: "Marquez", id: "marquez", logo: "/assets/logos/marquez.svg", summary: "Reference OpenLineage backend with a web UI for lineage exploration.", reason: "Reference backend; v0.7" }
+      - { name: "DataHub", id: "datahub", logo: "/assets/logos/datahub.svg", summary: "Full data catalog + lineage + governance platform from LinkedIn.",        reason: "Catalog + lineage; v0.8" }
 
 # ============================================================
 # Destinations — downstream BI/analytics tools that read FROM the lakehouse.

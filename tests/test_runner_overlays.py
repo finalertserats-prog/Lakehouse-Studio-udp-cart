@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend import runner
-from backend import airflow_overlay, dagster_overlay, superset_overlay
+from backend import airflow_overlay, dagster_overlay, superset_overlay, observability_overlay
 
 
 # ---------------------------------------------------------------------------
@@ -46,9 +46,10 @@ def test_is_truthy(value, expected):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("mod,flag,filename,n_services", [
-    (airflow_overlay,  "LHS_AIRFLOW_ENABLED",  "docker-compose.airflow.yml",  4),
-    (dagster_overlay,  "LHS_DAGSTER_ENABLED",  "docker-compose.dagster.yml",  3),
-    (superset_overlay, "LHS_SUPERSET_ENABLED", "docker-compose.superset.yml", 4),
+    (airflow_overlay,        "LHS_AIRFLOW_ENABLED",        "docker-compose.airflow.yml",        4),
+    (dagster_overlay,        "LHS_DAGSTER_ENABLED",        "docker-compose.dagster.yml",        3),
+    (superset_overlay,       "LHS_SUPERSET_ENABLED",       "docker-compose.superset.yml",       4),
+    (observability_overlay,  "LHS_OBSERVABILITY_ENABLED",  "docker-compose.observability.yml",  3),
 ])
 def test_overlay_module_exports_runner_contract(mod, flag, filename, n_services):
     assert mod.ENV_FLAG == flag
@@ -89,7 +90,8 @@ def test_write_optional_overlays_noop_when_all_flags_unset(tmp_path):
     r = _fake_runner(tmp_path)
     # Ensure no flag leaks from the parent process env.
     with patch.dict(os.environ, {}, clear=False):
-        for flag in ("LHS_AIRFLOW_ENABLED", "LHS_DAGSTER_ENABLED", "LHS_SUPERSET_ENABLED"):
+        for flag in ("LHS_AIRFLOW_ENABLED", "LHS_DAGSTER_ENABLED",
+                     "LHS_SUPERSET_ENABLED", "LHS_OBSERVABILITY_ENABLED"):
             os.environ.pop(flag, None)
         r._write_optional_overlays({})
     assert r._overlays == []
@@ -103,6 +105,7 @@ def test_write_optional_overlays_noop_when_flag_explicitly_false(tmp_path):
         "LHS_AIRFLOW_ENABLED": "false",
         "LHS_DAGSTER_ENABLED": "0",
         "LHS_SUPERSET_ENABLED": "no",
+        "LHS_OBSERVABILITY_ENABLED": "off",
     }
     r._write_optional_overlays(env)
     assert r._overlays == []
@@ -167,6 +170,50 @@ def test_write_optional_overlays_all_three_enabled(tmp_path):
     assert len(r._overlays) == 3
     names = [o["name"] for o in r._overlays]
     assert names == ["airflow", "dagster", "superset"]
+
+
+def test_write_optional_overlays_calls_observability_when_enabled(tmp_path):
+    """v0.6.2 — observability overlay (Prometheus + Grafana + Loki).
+    Same wiring contract as the airflow/dagster/superset overlays."""
+    r = _fake_runner(tmp_path)
+    fake_path = tmp_path / "docker-compose.observability.yml"
+    fake_path.write_text("services: {}\n")
+    with patch.object(observability_overlay, "write_observability_overlay",
+                      return_value=fake_path) as writer:
+        r._write_optional_overlays({"LHS_OBSERVABILITY_ENABLED": "true"})
+    writer.assert_called_once_with(tmp_path, {"LHS_OBSERVABILITY_ENABLED": "true"})
+    assert len(r._overlays) == 1
+    ov = r._overlays[0]
+    assert ov["name"] == "observability"
+    assert ov["file"] == fake_path
+    assert ov["services"] == observability_overlay.SERVICES
+
+
+def test_write_optional_overlays_all_four_enabled(tmp_path):
+    """v0.6.2 — all four overlays enabled simultaneously must produce
+    four entries in self._overlays in the documented order."""
+    r = _fake_runner(tmp_path)
+    paths = {
+        "airflow":       tmp_path / "docker-compose.airflow.yml",
+        "dagster":       tmp_path / "docker-compose.dagster.yml",
+        "superset":      tmp_path / "docker-compose.superset.yml",
+        "observability": tmp_path / "docker-compose.observability.yml",
+    }
+    for p in paths.values():
+        p.write_text("services: {}\n")
+    with patch.object(airflow_overlay, "write_airflow_overlay", return_value=paths["airflow"]), \
+         patch.object(dagster_overlay, "write_dagster_overlay", return_value=paths["dagster"]), \
+         patch.object(superset_overlay, "write_superset_overlay", return_value=paths["superset"]), \
+         patch.object(observability_overlay, "write_observability_overlay", return_value=paths["observability"]):
+        r._write_optional_overlays({
+            "LHS_AIRFLOW_ENABLED": "true",
+            "LHS_DAGSTER_ENABLED": "true",
+            "LHS_SUPERSET_ENABLED": "true",
+            "LHS_OBSERVABILITY_ENABLED": "true",
+        })
+    assert len(r._overlays) == 4
+    names = [o["name"] for o in r._overlays]
+    assert names == ["airflow", "dagster", "superset", "observability"]
 
 
 # ---------------------------------------------------------------------------

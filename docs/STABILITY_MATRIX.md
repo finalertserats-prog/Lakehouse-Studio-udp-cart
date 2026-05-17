@@ -89,17 +89,39 @@ This is the **table-format × catalog** compatibility surface as expressed in `s
 
 ## Add-on overlays
 
-Three optional components layer on top of **any** of the 6 base stacks:
+Four optional overlays layer on top of **any** of the 6 base stacks. Each is gated by an env flag (`LHS_*_ENABLED`); when set, the runner writes a `docker-compose.<name>.yml` next to the base compose file and appends it via `-f`.
 
-| Overlay | Component (catalog entry) | Image / Tag | Role | Status |
-|---|---|---|---|---|
-| Orchestration | `airflow` | `apache/airflow:2.10.4-python3.11` | DAG scheduler | candidate (catalog-listed, not wired into pipeline) |
-| Orchestration | `dagster` | `dagster/dagster-celery-docker:1.9.4` | Asset-first scheduler | candidate (catalog-listed, not wired into pipeline) |
-| BI | `superset` | `apache/superset:4.1.1` | Self-service BI | candidate (catalog-listed, not wired into pipeline) |
+| Overlay | Components (catalog entries) | Image / Tag | Role | Env flag | Status |
+|---|---|---|---|---|---|
+| Orchestration | `airflow` | `apache/airflow:2.10.4-python3.11` | DAG scheduler | `LHS_AIRFLOW_ENABLED` | candidate (overlay wired in v0.6.1) |
+| Orchestration | `dagster` | `dagster/dagster-celery-docker:1.9.4` | Asset-first scheduler | `LHS_DAGSTER_ENABLED` | candidate (overlay wired in v0.6.1) |
+| BI | `superset` | `apache/superset:4.1.1` | Self-service BI | `LHS_SUPERSET_ENABLED` | candidate (overlay wired in v0.6.1) |
+| Observability | `prometheus` + `grafana` + `loki` | `prom/prometheus:v2.55.1` + `grafana/grafana:11.3.1` + `grafana/loki:3.2.1` | Metrics + dashboards + log aggregation | `LHS_OBSERVABILITY_ENABLED` | candidate (overlay wired in v0.6.2) |
 
-**Important scope note:** these overlays are **not yet wired into `_STUDIO_SCRIPT_SETS`** in `backend/runner.py` (which is what dispatches per-stack bootstrap + smoke scripts). They appear in the component catalog as `Candidate, Optional`, but the install pipeline cannot actually deploy them today — selecting one in the UI is currently a no-op at install time.
+The observability overlay closes the founding architecture doc's § 5.6.1 "Layer 6 — Target Infrastructure" gap: Prometheus + Grafana + Loki were called out by name as the core observability category; v0.6.2 promotes all three out of `coming_soon` into first-class catalog components with a real install pipeline.
 
-Wiring them into the pipeline as compose overrides (same pattern as Caddy TLS / Monitoring / JDBC sidecars — see `COMPATIBILITY.md` § "TLS Sidecar" and § "Monitoring Sidecar") is **v0.6 work**, tracked separately from the 6-stack expansion.
+---
+
+## v0.6.2 catalog coverage vs founding doc
+
+| Category (§ 5.6.1) | Status | Components shipped |
+|---|---|---|
+| Storage formats | ✅ complete | Iceberg + Hudi + Delta |
+| Query / processing | ✅ complete | Trino + Spark (+ spark-hudi + spark-delta) + StarRocks |
+| Catalogs | ✅ complete | Iceberg-REST + Nessie + Hive Metastore + Polaris |
+| Orchestrators | ✅ complete | Airflow + Dagster (Prefect in `coming_soon`) |
+| Object storage | ✅ complete (config) | MinIO ships; AWS S3 / GCS / Azure Blob in `coming_soon` (config-only) |
+| Observability | ✅ complete (v0.6.2) | **Prometheus + Grafana + Loki** — promoted out of `coming_soon` with real overlay |
+| Auxiliary | ✅ complete (auto-included) | PostgreSQL, Redis, NGINX, cert-manager, Vault — included by compose fragments when needed |
+
+| Category (§ 5.6.3 — future roadmap) | Status | Components shipped |
+|---|---|---|
+| Streaming ingest | ✅ catalog (v0.6.2) | Kafka + Debezium + Flink — all `candidate`, catalog-only (no overlay) |
+| Transformation (dbt) | ✅ catalog (v0.6.2) | dbt-core — `candidate`, catalog-only (operator installs in their own venv) |
+| BI (Superset) | ✅ complete | Superset shipped in v0.6.1 with overlay |
+| Lineage (OpenLineage / Marquez) | ✅ catalog (v0.6.2) | OpenLineage — `candidate`, catalog-only; Marquez in `coming_soon` |
+
+**Per-component pipeline status:** the orchestration / BI / observability overlays are wired into `backend/runner._write_optional_overlays`. Streaming / transformation / lineage are catalog-only — operators install them outside Studio for now. Promotion to overlay-wired status follows the same evidence-based pattern as the stack lock files.
 
 ---
 

@@ -22,6 +22,10 @@ UI-driven, compatibility-validated installer and operator for open data lakehous
 
 Promotion to `pilot-stable` requires at least one passing end-to-end install captured as an `evidence[]` record in the stack's `.lock.yaml`. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) and the [stability matrix](docs/STABILITY_MATRIX.md) for the honest state of every stack × OS combination.
 
+### Catalog coverage
+
+As of v0.6.2 the component catalog spans every major lakehouse layer named in the founding architecture doc (§ 5.6.1 + § 5.6.3): storage formats (Iceberg + Hudi + Delta), query/processing (Trino + Spark + StarRocks), catalogs (Iceberg-REST + Nessie + HMS + Polaris), object storage (MinIO + cloud config), orchestrators (Airflow + Dagster), BI (Superset), **observability (Prometheus + Grafana + Loki — promoted in v0.6.2)**, streaming ingest (Kafka + Debezium + Flink), transformation (dbt Core), and lineage (OpenLineage). The streaming / transformation / lineage components are `candidate`, catalog-only — listed so operators can plan around them, but installed outside Studio for now. Everything else has a real install path. See [docs/STABILITY_MATRIX.md](docs/STABILITY_MATRIX.md) for the per-category status table.
+
 ### Optional add-ons (opt-in via env flags)
 
 Layer any of these on top of any stack via the override-compose pattern:
@@ -31,8 +35,9 @@ Layer any of these on top of any stack via the override-compose pattern:
 | Apache Airflow 2.10 | `LHS_AIRFLOW_ENABLED=true` | DAG scheduler — auto-includes Postgres backing |
 | Dagster 1.9 | `LHS_DAGSTER_ENABLED=true` | Asset-first orchestrator — Dagit UI + daemon |
 | Apache Superset 4.1 | `LHS_SUPERSET_ENABLED=true` | Open-source BI — auto-wires to StarRocks (MySQL dialect) or Trino |
+| Prometheus + Grafana + Loki | `LHS_OBSERVABILITY_ENABLED=true` | Metrics + dashboards + log aggregation — Grafana pre-provisioned with Prometheus & Loki datasources, Prometheus pre-wired to scrape MinIO / Trino / StarRocks / Loki |
 
-Overlay modules live at `backend/{airflow,dagster,superset}_overlay.py`. Each writes a `docker-compose.<name>.yml` next to the base compose; the runner appends them via `-f` during the start step when the env flag is on.
+Overlay modules live at `backend/{airflow,dagster,superset,observability}_overlay.py`. Each writes a `docker-compose.<name>.yml` next to the base compose; the runner appends them via `-f` during the start step when the env flag is on.
 
 ## Feature pillars
 

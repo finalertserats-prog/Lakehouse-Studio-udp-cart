@@ -830,12 +830,12 @@ class UDPRunner:
         never block the base stack from coming up.
         """
         try:
-            from . import airflow_overlay, dagster_overlay, superset_overlay
+            from . import airflow_overlay, dagster_overlay, superset_overlay, observability_overlay
         except ImportError as e:
             self._log("env", "stderr", f"overlay modules unavailable: {e}")
             return
 
-        for mod in (airflow_overlay, dagster_overlay, superset_overlay):
+        for mod in (airflow_overlay, dagster_overlay, superset_overlay, observability_overlay):
             flag = getattr(mod, "ENV_FLAG", None)
             if not flag:
                 continue
@@ -853,8 +853,11 @@ class UDPRunner:
                 path = mod.write_airflow_overlay(self.install_dir, env) \
                     if mod is airflow_overlay else (
                         mod.write_dagster_overlay(self.install_dir, env)
-                        if mod is dagster_overlay else
-                        mod.write_superset_overlay(self.install_dir, env)
+                        if mod is dagster_overlay else (
+                            mod.write_superset_overlay(self.install_dir, env)
+                            if mod is superset_overlay else
+                            mod.write_observability_overlay(self.install_dir, env)
+                        )
                     )
             except Exception as e:
                 self._log("env", "stderr",
