@@ -17,10 +17,12 @@ UI-driven, compatibility-validated installer and operator for open data lakehous
 | `udp-trino-local-v0.1` | Iceberg | Iceberg REST | Trino + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
 | `iceberg-nessie-trino-local-v0.1` | Iceberg | **Nessie** (git-for-data) | Trino + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
 | `iceberg-polaris-spark-local-v0.1` | Iceberg | **Polaris** (RBAC + cred vending) | Spark + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
-| `hudi-hms-spark-local-v0.1` | **Hudi** (streaming-first) | Hive Metastore + Postgres | Spark | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
+| `hudi-hms-spark-local-v0.1` | **Hudi** (streaming-first) | Hive Metastore + MySQL | Spark | ![pilot-stable](https://img.shields.io/badge/status-pilot--stable-green) |
 | `delta-hms-spark-trino-local-v0.1` | **Delta Lake** | Hive Metastore + Postgres | Spark + Trino | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
 
 Promotion to `pilot-stable` requires at least one passing end-to-end install captured as an `evidence[]` record in the stack's `.lock.yaml`. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) and the [stability matrix](docs/STABILITY_MATRIX.md) for the honest state of every stack × OS combination.
+
+As of 2026-05-17, `hudi-hms-spark-local-v0.1` is the **second** pilot-stable stack — promoted alongside `udp-local-v0.2` after an evidence-backed install on a Linux VPS (Ubuntu 22.04, Docker 29.5.0, install_id `inst_806a879b2e`).
 
 ### Catalog coverage
 

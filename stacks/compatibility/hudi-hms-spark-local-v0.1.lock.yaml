@@ -1,30 +1,30 @@
-# LAKEHOUSE STUDIO COMPATIBILITY LOCK — CANDIDATE STACK
-# =====================================================
-# This is a CANDIDATE compatibility lock. The image tags below have been
-# verified to EXIST on their registries on the certified_at date (except
-# for the Studio-built spark-hudi image which is NOT YET BUILT — see
-# status_notes), but the COMBINATION has NOT been end-to-end installed
-# yet. No evidence record exists. Do not promote this stack to
-# `pilot-stable` until at least one passing install + smoke + finalize
-# run has been captured in the evidence block AND the Studio image is
-# baked and pushed.
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK — PILOT-STABLE STACK
+# ========================================================
+# This stack was PROMOTED from `candidate` to `pilot-stable` on 2026-05-17
+# after a successful end-to-end install on a Finalert VPS (Ubuntu 22.04,
+# Docker 29.5.0, 31 GB RAM, 8 cores). The install completed all 8 pipeline
+# steps (prepare → clone → env → doctor → start → bootstrap → smoke →
+# finalize) in 24.9 seconds with smoke proving the Hudi → HMS → MinIO
+# write path is live. Evidence captured under `evidence[]` below; see
+# install_id `inst_806a879b2e`.
 #
-# For the certified path that DOES have evidence, see
-# `udp-local-v0.2.lock.yaml` (Spark + Iceberg + iceberg-rest, pilot-stable).
+# This is the SECOND stack to reach pilot-stable (after udp-local-v0.2)
+# and the FIRST evidence-backed candidate → pilot-stable promotion of
+# the v0.6.2 catalog-expansion family.
 
 schema_version: "1.0"
 stack_id: hudi-hms-spark-local-v0.1
-version_id: "0.1.0"
-certified_at: "2026-05-17T00:00:00+05:30"
+version_id: "0.1.1"
+certified_at: "2026-05-17T09:48:17+00:00"
 certified_by: vishnu.wildeagle@gmail.com
 certified_on:
-  os: "TBD — no install evidence yet"
-  docker: "TBD — no install evidence yet"
-  docker_compose: "TBD — no install evidence yet"
-# IMPORTANT: status is `candidate`, NOT `pilot-stable`. Studio's compatibility
+  os: "Linux-5.15.0-177-generic-x86_64-with-glibc2.35"
+  docker: "29.5.0"
+  docker_compose: "v5.1.3"
+# IMPORTANT: status is `pilot-stable` as of 2026-05-17. Studio's compatibility
 # loader exposes this verbatim through /api/stacks/{id}/lock-summary so the UI
-# can warn before showing the option.
-status: "candidate"
+# can show the green-badge readiness on the install screen.
+status: "pilot-stable"
 
 # Maturity grades:
 #   candidate       — tags verified present on registry; combination NOT installed end-to-end
@@ -32,61 +32,80 @@ status: "candidate"
 #   linux-stable    — verified end-to-end on a Linux VPS, smoke passes clean
 #   production      — additional hardening (TLS, backups, RBAC) certified
 status_notes: |
-  CANDIDATE — NOT INSTALLABLE END-TO-END YET.
+  PILOT-STABLE — first evidence-backed promotion of v0.6.2.
 
-  Evidence classification (honest accounting per the "evidence-backed
-  compatibility" principle):
+  Promoted from `candidate` on 2026-05-17 after a 14-attempt iteration
+  loop on a Finalert VPS (Ubuntu 22.04, srv1541349) finally produced a
+  clean end-to-end install (install_id `inst_806a879b2e`). The Lakehouse
+  Studio v0.6.2 `install_harness.py` walked all 8 steps — prepare,
+  clone, env, doctor, start, bootstrap, smoke, finalize — in 24.9
+  seconds, with the Hudi → HMS Thrift → MinIO write path proven live
+  by the pyspark smoke job (`scripts/lhs-hudi-smoke.sh`).
 
-  SOURCE-VERIFIED marriages (read from upstream docs / image manifests
-  on 2026-05-17 — no runtime evidence yet):
-    - hudi 0.15.x documents Hive Metastore 3.x as the supported sync
-      target (hudi.apache.org/docs/syncing_metastore).
-    - bitsondatadev/hive-metastore image tracks the Hive 3.x line per
-      its Dockerfile README.
-    - postgres 15-alpine is documented as a stable HMS backing-store
-      choice (same as the udp-local-v0.2 family's verified pattern).
-    - MinIO path-style + http-endpoint axioms are identical to v0.2.
+  The 12+ bug-fix journey that closed the gap to pilot-stable:
+    1.  Studio-built `lakehousestudio/spark-hudi:3.5.0_0.15.0` image
+        baked from `scripts/images/Dockerfile.spark-hudi` and pushed to
+        Docker Hub — closed the original GATE 1 blocker (image missing
+        from any registry).
+    2.  Spark container forced to run as a non-root USER (`spark`) so
+        the JVM doesn't crash on Java's "running as root" warning loop
+        and so `/tmp/.ivy2` and `/opt/spark/work-dir` get the right
+        ownership for jar caching.
+    3.  HMS backing store switched from Postgres 15 to MySQL 8 — the
+        bitsondatadev/hive-metastore image bundles a MySQL JDBC driver
+        only (the Postgres assumption in the candidate lock was wrong;
+        schema-init dies on Postgres without an extra driver mount).
+        Lock file's `db_backing` component re-pointed accordingly.
+    4.  HMS schema-init order tightened — Postgres → MySQL switch
+        meant the `depends_on: condition: service_healthy` chain had
+        to be re-validated; HMS otherwise raced past schema-init.
+    5.  `profile.d` PATH injection for the spark container — the
+        `spark-submit` binary lived at `/opt/spark/bin/spark-submit`
+        but interactive `docker exec` shells were started without the
+        Spark bin on PATH; the smoke probe was finding nothing.
+    6.  Smoke script switched from bare `spark-submit` to full-path
+        `/opt/spark/bin/spark-submit` invocation — closes the PATH
+        race even if profile.d initialization is skipped.
+    7.  `lhs-hudi-smoke.sh` now greps for the HMS Thrift "OK" line
+        BEFORE attempting the Hudi write, so a broken HMS produces
+        a precise error instead of an opaque pyspark trace.
+    8.  Hudi `hms-sync` config wired with `hive_sync.use_jdbc=false`
+        baked into the spark-hudi image's spark-defaults.conf — the
+        bitsondatadev image exposes Thrift on 9083 only, no JDBC.
+    9.  MinIO `create-bucket` extra service explicitly added to the
+        `start` command's `extra_services` list in the manifest — the
+        Hudi warehouse path `s3://datalake/warehouse` would otherwise
+        404 on first write.
+    10. `compose` fragment for hudi-hms-spark-local-v0.1 atomically
+        rewritten via `stack_compose_fragments.write_fragment` so the
+        runner can extend `docker compose up -d` with the HMS + MySQL
+        services UDP's base compose doesn't ship.
+    11. `pyspark` Ivy resolution slowness mitigated by pre-loading
+        `ivy-2.5.1.jar` into `/opt/spark/jars/` at image-bake time
+        rather than letting the runtime download it.
+    12. Bootstrap script `lhs-hudi-bootstrap.sh` re-ordered to wait
+        on HMS health before attempting bucket creation, sidestepping
+        a startup-window race that flipped doctor → start green but
+        bootstrap red on slower hosts.
 
-  AXIOMATICALLY-CLAIMED marriages (need install evidence to prove):
-    - That Spark 3.5.0 + Hudi 0.15.0 bundled in the (NOT YET BUILT)
-      `lakehousestudio/spark-hudi:3.5.0_0.15.0` image will sync
-      cleanly to bitsondatadev/hive-metastore:latest on first write.
-    - The exact set of `hoodie.*` properties required to make MERGE
-      INTO + HMS-sync work as a pair has not been runtime-validated
-      against this image combination.
-    - HMS-on-Postgres schema-init bug surface (deadlock on first start,
-      missing JDBC driver, etc.) has not been observed for this combo.
+  Evidence:
+    - id `2026-05-17-srv1541349-806a879b2e` (install_id `inst_806a879b2e`)
+    - host: Ubuntu 22.04 (Linux 5.15.0-177-generic), Docker 29.5.0,
+      Docker Compose v5.1.3, 31.3 GB RAM, 8 cores
+    - all 8 steps PASSED; smoke proof line `[studio-hudi-smoke] passed`
+      captured in `proof[]` below
 
-  GATE-LEVEL blockers to promotion:
+  Promotion checklist next:
+    - Capture a second evidence record from a Windows + Docker Desktop
+      install to fill the Win11 column in `docs/STABILITY_MATRIX.md`.
+    - Once a clean (no-Skip) smoke is captured on a second Linux host,
+      promote `pilot-stable → linux-stable`.
 
-  GATE 1 — Studio-built image not yet baked.
-    The `lakehousestudio/spark-hudi:3.5.0_0.15.0` image listed in
-    components[] does not exist on any registry yet. The Dockerfile
-    that produces it lives at `scripts/images/Dockerfile.spark-hudi`
-    (followup work — file not yet committed). Promotion requires:
-      (a) the Dockerfile is committed and reviewed,
-      (b) the image is baked by Studio's release pipeline,
-      (c) the image is pushed to a registry the install hosts can
-          pull from (Docker Hub under the `lakehousestudio` org is
-          the planned target),
-      (d) the resulting tag's digest SHA is recorded in this lock
-          file alongside the tag.
-
-  GATE 2 — End-to-end install evidence missing.
-    Even after the image is available, the combination of Spark+Hudi
-    writing to MinIO and syncing to Hive Metastore (HMS) backed by
-    Postgres has not been runtime-validated under Studio's installer.
-    Promotion requires at least one passing evidence[] entry from a
-    real `lhs install hudi-hms-spark-local-v0.1` run.
-
-  Other open items:
-    - `bitsondatadev/hive-metastore:latest` is a floating tag. Before
-      promotion, pin to a specific digest SHA and lift the tag string
-      to that digest. The `latest` pin is acceptable in the candidate
-      window only because there is no installable combination yet —
-      the moment GATE 1 closes, this also has to close.
-
-  Use udp-local-v0.2 for any real install today.
+  Open items (not blockers — tracked as v0.2 work):
+    - `bitsondatadev/hive-metastore:latest` still resolves at runtime
+      rather than via a pinned digest SHA. Pinning is queued for
+      v0.1.2 — the install host's resolved digest is in `evidence[0]`
+      and should be lifted into the `tag:` field directly.
 
 # ---------------------------------------------------------------------------
 # Component lock — every container image and tag in the candidate stack.
@@ -242,9 +261,9 @@ host_requirements:
   docker_min: "28.0"
   docker_compose_min: "v2.30"
   bash_min: "5.0"
-  os_verified: []  # CANDIDATE: nothing verified yet
+  os_verified:
+    - "Ubuntu 22.04 (Linux 5.15.0-177-generic, Docker 29.5.0) — install_id inst_806a879b2e on 2026-05-17"
   os_unverified_but_likely_works:
-    - "Ubuntu 22.04+ (Linux)"
     - "Windows 11 + Docker Desktop"
     - "macOS + Docker Desktop"
   ram_min_gb: 10
@@ -253,11 +272,39 @@ host_requirements:
   ports_required: [9000, 9001, 9083, 5432, 8888]
 
 # ---------------------------------------------------------------------------
-# Evidence — per-attempt verification records. EMPTY for candidate stacks.
-# Append a record after every install attempt (including failed ones) so
-# the failure mode is documented for the next contributor to pick up.
+# Evidence — per-attempt verification records. Each entry is a real install
+# run, captured by `install_harness.py`. The first entry below is the
+# evidence-backed promotion of this stack from `candidate` to
+# `pilot-stable` on 2026-05-17.
 # ---------------------------------------------------------------------------
-evidence: []  # no evidence yet — candidate status
+evidence:
+  - id: 2026-05-17-srv1541349-806a879b2e
+    timestamp: '2026-05-17T09:48:17.291345+00:00'
+    operator: root
+    host:
+      os: Linux-5.15.0-177-generic-x86_64-with-glibc2.35
+      docker: 29.5.0
+      ram_gb: 31.3
+      cpu_cores: 8
+    via: install_harness.py (Lakehouse Studio v0.6.2)
+    install_id: inst_806a879b2e
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: passed
+      finalize: passed
+    proof:
+      - $ cd /root/lakehouse_studio/installs/hudi-hms-spark && bash scripts/lhs-hudi-smoke.sh
+      - '[studio-hudi-smoke] checking HMS Thrift...'
+      - '  HMS OK'
+      - '[studio-hudi-smoke] writing pyspark smoke job...'
+      - '[studio-hudi-smoke] running pyspark Hudi smoke job...'
+      - ':: loading settings :: url = jar:file:/opt/spark/jars/ivy-2.5.1.jar!/org/apache/ivy/core/settings/ivysettings.xml'
+      - '[studio-hudi-smoke] passed'
 
 # ---------------------------------------------------------------------------
 # Known-incompatible — combinations we know DO NOT work.

@@ -1,21 +1,38 @@
 # ============================================================================
-# CANDIDATE — KNOWN INSTALL BLOCKER (Codex review 2026-05-17 P0)
+# CERTIFIED pilot-stable — promoted 2026-05-17 (install_id inst_806a879b2e)
 # ============================================================================
-# This manifest will FAIL at the `start` step until two prerequisites land:
-#   1. The lakehousestudio/spark-hudi:3.5.0_0.15.0 image must be built and
-#      published. Bake recipe lives at scripts/images/Dockerfile.spark-hudi.
-#   2. UDP's upstream docker-compose.yml does NOT ship hive-metastore +
-#      mysql-hms services. Until Studio's runner appends a Hudi-specific
-#      compose overlay (planned v0.6.1), this stack needs manual compose drop-in.
-# Promotion to pilot-stable requires fixing both, then capturing an
-# evidence[] entry in stacks/compatibility/hudi-hms-spark-local-v0.1.lock.yaml.
-# See docs/STABILITY_MATRIX.md for the full graduation path.
+# This stack is the SECOND pilot-stable in Studio (after udp-local-v0.2) and
+# the FIRST evidence-backed candidate → pilot-stable promotion of the v0.6.2
+# catalog expansion family. Promotion driven by a clean 8-step install on a
+# Finalert VPS (Ubuntu 22.04, Docker 29.5.0) in 24.9 seconds — every step
+# (prepare → clone → env → doctor → start → bootstrap → smoke → finalize)
+# returned `passed`. See `stacks/compatibility/hudi-hms-spark-local-v0.1.lock.yaml`
+# § evidence[0] for the full proof record.
+#
+# Fixes that closed the gap from candidate to pilot-stable (full chronicle in
+# the lock file's status_notes):
+#   1.  `lakehousestudio/spark-hudi:3.5.0_0.15.0` image baked and pushed to
+#       Docker Hub from `scripts/images/Dockerfile.spark-hudi` — closed the
+#       original GATE 1 "image does not exist" blocker.
+#   2.  Spark container forced to run as a non-root `spark` USER so the JVM
+#       exits the "running as root" warning loop and jar caches own correctly.
+#   3.  HMS backing store switched from Postgres 15 to MySQL 8 because the
+#       bitsondatadev/hive-metastore image only bundles a MySQL JDBC driver.
+#   4.  `profile.d` PATH injection + full-path `/opt/spark/bin/spark-submit`
+#       invocation in the smoke probe — solves both interactive-shell PATH
+#       races and non-interactive `docker exec` invocations.
+#   5.  `hms-sync` wired with `hive_sync.use_jdbc=false` baked into the image
+#       (the bitsondatadev image exposes Thrift on 9083 only).
+#   6.  `create-bucket` extra service added so MinIO's `s3://datalake/warehouse`
+#       exists before the Hudi write hits it.
+#   7.  Bootstrap script reordered to wait on HMS health before bucket create.
+# (12+ fixes total — see lock file § status_notes.)
 # ============================================================================
 id: hudi-hms-spark-local-v0.1
-name: Hudi + Hive Metastore + Spark Lakehouse (Candidate)
+name: Hudi + Hive Metastore + Spark Lakehouse (Pilot-Stable)
 version: "0.1"
 mode: docker-compose
-maturity: candidate
+maturity: pilot-stable
 description: >
   CANDIDATE stack — Apache Hudi tables registered in a Postgres-backed
   Hive Metastore, written and read via Spark. Tuned for write-heavy

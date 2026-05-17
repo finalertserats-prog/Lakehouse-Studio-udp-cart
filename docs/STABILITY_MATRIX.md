@@ -37,7 +37,7 @@ The lock file's `status:` field on each stack is the authoritative source. Studi
 | `udp-local-v0.2` | Iceberg | Iceberg-REST | Spark | StarRocks | — | **pilot-stable** | 2026-05-16 (Windows Docker Desktop, `inst_0d13069722`) | Win11 + Docker Desktop (with smoke-step Skip caveat) | Linux droplet evidence → `linux-stable` |
 | `udp-trino-local-v0.1` | Iceberg | Iceberg-REST | Trino | StarRocks | — | candidate | none | none | Windows + Linux install evidence; bootstrap + smoke already written |
 | `iceberg-nessie-trino-local-v0.1` | Iceberg | Nessie | Trino | StarRocks | — | candidate | none | none | Image-tag-verify + install evidence (Windows + Linux) |
-| `hudi-hms-spark-local-v0.1` | Hudi | HMS + Postgres | Spark | — | — | candidate (TBD — lock file not yet written) | none | none | Build `lakehousestudio/spark-hudi:3.5.0_0.15.0` image, ship bake script, then install evidence |
+| `hudi-hms-spark-local-v0.1` | Hudi | HMS + MySQL | Spark | — | — | **pilot-stable** | 2026-05-17 (Ubuntu 22.04, `inst_806a879b2e`) | Ubuntu 22.04 + Docker 29.5.0 | DONE — first evidence-backed candidate→pilot-stable promotion of v0.6.2 |
 | `delta-hms-spark-trino-local-v0.1` | Delta | HMS + Postgres | Spark + Trino | — | — | candidate (TBD — lock file not yet written) | none | none | Build `lakehousestudio/spark-delta:3.5.0_3.2.1` image, ship bake script, then install evidence |
 | `iceberg-polaris-spark-local-v0.1` | Iceberg | Polaris + Postgres | Spark | StarRocks | — | candidate (TBD — lock file not yet written) | none | none | Image-tag-verify (`apache/polaris:1.0.1`) + install evidence |
 
@@ -59,11 +59,11 @@ Legend:
 | `udp-local-v0.2` | ⚠ (smoke Skip — StarRocks→MinIO via AWS SDK fails; lakehouse data IS reachable via Spark) | ❌ | ❌ (likely-works per lock file, not verified) | ❌ |
 | `udp-trino-local-v0.1` | ❌ | ❌ | ❌ | ❌ |
 | `iceberg-nessie-trino-local-v0.1` | ❌ | ❌ | ❌ | ❌ |
-| `hudi-hms-spark-local-v0.1` | ❌ | ❌ | ❌ | ❌ |
+| `hudi-hms-spark-local-v0.1` | ❌ | ❌ | ✅ (install_id `inst_806a879b2e`, 2026-05-17 — all 8 steps passed in 24.9s, smoke proved Hudi → HMS → MinIO write path live) | ❌ |
 | `delta-hms-spark-trino-local-v0.1` | ❌ | ❌ | ❌ | ❌ |
 | `iceberg-polaris-spark-local-v0.1` | ❌ | ❌ | ❌ | ❌ |
 
-**Today's reality:** only `udp-local-v0.2` × Win11 has any green-ish cell. Everything else is untested. The Windows `⚠` on v0.2 is documented in detail in `udp-local-v0.2.lock.yaml` under `evidence[0].smoke_failure_root_cause` — the lakehouse data is readable via Spark (proven with a real `SELECT * FROM udp.curated.demo_customer_summary` returning AMER/APAC/EMEA rows), only the StarRocks BE → MinIO query path is broken on Docker Desktop's Windows network stack.
+**Today's reality (post-2026-05-17 promotion):** two stacks have evidence — `udp-local-v0.2` × Win11 (⚠ smoke Skip, lakehouse readable) and `hudi-hms-spark-local-v0.1` × Ubuntu 22.04 (✅ clean 8/8). The remaining four stacks remain untested across every OS. The Windows `⚠` on v0.2 is documented in detail in `udp-local-v0.2.lock.yaml` under `evidence[0].smoke_failure_root_cause` — the lakehouse data is readable via Spark (proven with a real `SELECT * FROM udp.curated.demo_customer_summary` returning AMER/APAC/EMEA rows), only the StarRocks BE → MinIO query path is broken on Docker Desktop's Windows network stack.
 
 ---
 
