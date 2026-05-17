@@ -833,7 +833,8 @@ HTTP_CODE=$(curl -s -o /tmp/polaris_cat.out -w "%{http_code}" -X POST \
         \"roleArn\": \"arn:aws:iam::000000000000:role/minio-dummy\",
         \"region\": \"us-east-1\",
         \"endpoint\": \"http://minio:9000\",
-        \"pathStyleAccess\": true
+        \"pathStyleAccess\": true,
+        \"stsUnavailable\": true
       }
     }
   }")
@@ -866,20 +867,57 @@ if [ -z "${CLIENT_ID}" ] || [ -z "${CLIENT_SECRET}" ]; then
 fi
 echo "  principal credentials captured (client_id=${CLIENT_ID:0:8}...)"
 
-echo "[studio-polaris-bootstrap] granting catalog_admin to principal..."
-# Create catalog role if missing, grant to principal â€” both idempotent.
-curl -s -o /dev/null -X PUT \
-  "${POLARIS_MGMT}/catalogs/${CATALOG_NAME}/catalog-roles/catalog_admin/grants" \
+echo "[studio-polaris-bootstrap] wiring explicit grant chain (Gemini Polaris 1.4.1 audit 2026-05-17)..."
+# Gemini Polaris 1.4.1 audit 2026-05-17: the previous chain assumed a
+# pre-existing `catalog_admin` catalog-role and PUT a grant onto a
+# `/grants` subresource that Polaris 1.4.x does NOT auto-create. With no
+# real grant in place, Spark and StarRocks authenticated successfully
+# but saw ZERO tables -- the principal had a principal-role but the
+# principal-role had no catalog-role bound to it, so no privileges
+# reached the catalog. Full explicit chain below:
+#   1. Create CATALOG_ROLE `engineer` on the catalog (POST)
+#   2. Grant CATALOG_MANAGE_CONTENT privilege to `engineer`
+#   3. Create PRINCIPAL_ROLE `service_admin` (POST)
+#   4. Assign principal -> principal-role
+#   5. Bind catalog-role `engineer` -> principal-role `service_admin`
+# Each step tolerates 409 (already-exists) for re-run idempotency.
+# Ref: https://polaris.apache.org/docs/configuration/#bootstrapping
+
+# 1. Create the engineer catalog-role on the catalog.
+curl -s -o /dev/null -X POST \
+  "${POLARIS_MGMT}/catalogs/${CATALOG_NAME}/catalog-roles" \
   -H "Authorization: Bearer ${ROOT_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d "{ \"type\": \"catalog\", \"privilege\": \"CATALOG_MANAGE_CONTENT\" }" || true
+  -d '{ "catalogRole": { "name": "engineer" } }' || true
+
+# 2. Grant CATALOG_MANAGE_CONTENT to the engineer catalog-role.
+curl -s -o /dev/null -X PUT \
+  "${POLARIS_MGMT}/catalogs/${CATALOG_NAME}/catalog-roles/engineer/grants" \
+  -H "Authorization: Bearer ${ROOT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{ "grant": { "type": "catalog", "privilege": "CATALOG_MANAGE_CONTENT" } }' || true
+
+# 3. Create the service_admin principal-role (no-op if it already exists).
+curl -s -o /dev/null -X POST \
+  "${POLARIS_MGMT}/principal-roles" \
+  -H "Authorization: Bearer ${ROOT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{ "principalRole": { "name": "service_admin" } }' || true
+
+# 4. Assign the principal to the principal-role.
 curl -s -o /dev/null -X PUT \
   "${POLARIS_MGMT}/principal-roles/service_admin/principals/${PRINCIPAL_NAME}" \
   -H "Authorization: Bearer ${ROOT_TOKEN}" || true
+
+# 5. Bind the engineer catalog-role to the service_admin principal-role.
+#    This is the critical link that was missing -- without it, the
+#    principal-role had no privileges, and Spark/StarRocks saw ZERO tables.
 curl -s -o /dev/null -X PUT \
-  "${POLARIS_MGMT}/catalogs/${CATALOG_NAME}/catalog-roles/catalog_admin/principal-roles/service_admin" \
-  -H "Authorization: Bearer ${ROOT_TOKEN}" || true
-echo "  grants applied"
+  "${POLARIS_MGMT}/principal-roles/service_admin/catalog-roles/${CATALOG_NAME}" \
+  -H "Authorization: Bearer ${ROOT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{ "catalogRole": { "name": "engineer" } }' || true
+echo "  grant chain applied (engineer -> service_admin -> ${PRINCIPAL_NAME})"
 
 # Persist credentials for the smoke script to reuse without re-rotating.
 echo "[studio-polaris-bootstrap] persisting principal credentials for smoke..."
@@ -945,6 +983,14 @@ spark = (
         f"{os.environ['POLARIS_CLIENT_ID']}:{os.environ['POLARIS_CLIENT_SECRET']}",
     )
     .config(f"spark.sql.catalog.{catalog}.scope", "PRINCIPAL_ROLE:ALL")
+    # Gemini Polaris 1.4.1 audit 2026-05-17: pin the realm header so
+    # Polaris routes the request to the same realm we bootstrapped
+    # (default-realm via POLARIS_REALM_CONTEXT_REALMS). Spark's Iceberg
+    # REST client forwards any `header.*` catalog property as a literal
+    # HTTP header on every request -- without this Polaris falls back
+    # to a different realm and rejects the request as wrong-realm.
+    # Ref: https://polaris.apache.org/docs/configuration/#bootstrapping
+    .config(f"spark.sql.catalog.{catalog}.header.X-Iceberg-Realm", "default-realm")
     .config(f"spark.sql.catalog.{catalog}.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
     .config(f"spark.sql.catalog.{catalog}.s3.endpoint", "http://minio:9000")
     .config(f"spark.sql.catalog.{catalog}.s3.path-style-access", "true")
@@ -1037,6 +1083,15 @@ PROPERTIES (
     "iceberg.catalog.oauth2.credential" = "${CLIENT_ID}:${CLIENT_SECRET}",
     "iceberg.catalog.oauth2.scope" = "PRINCIPAL_ROLE:ALL",
     "iceberg.catalog.vended-credentials-enabled" = "true",
+    -- Gemini Polaris 1.4.1 audit 2026-05-17: pin the realm via the
+    -- StarRocks property convention (`iceberg.catalog.x-iceberg-realm`).
+    -- StarRocks forwards this as the `X-Iceberg-Realm` HTTP header on
+    -- every REST call to Polaris. Without it, Polaris falls back to a
+    -- different realm than the one we bootstrapped (default-realm via
+    -- POLARIS_REALM_CONTEXT_REALMS) and rejects the request as
+    -- wrong-realm -- StarRocks then sees zero tables in the catalog.
+    -- Ref: https://polaris.apache.org/docs/configuration/#bootstrapping
+    "iceberg.catalog.x-iceberg-realm" = "default-realm",
     "aws.s3.endpoint" = "http://minio:9000",
     "aws.s3.enable_ssl" = "false",
     "aws.s3.enable_path_style_access" = "true",
@@ -1127,6 +1182,10 @@ spark = (
         f"{os.environ['POLARIS_CLIENT_ID']}:{os.environ['POLARIS_CLIENT_SECRET']}",
     )
     .config(f"spark.sql.catalog.{catalog}.scope", "PRINCIPAL_ROLE:ALL")
+    # Gemini Polaris 1.4.1 audit 2026-05-17: mirror the realm header from
+    # the bootstrap Spark config -- without it Polaris rejects the smoke
+    # query as wrong-realm. See bootstrap config above for full rationale.
+    .config(f"spark.sql.catalog.{catalog}.header.X-Iceberg-Realm", "default-realm")
     .config(f"spark.sql.catalog.{catalog}.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
     .config(f"spark.sql.catalog.{catalog}.s3.endpoint", "http://minio:9000")
     .config(f"spark.sql.catalog.{catalog}.s3.path-style-access", "true")
