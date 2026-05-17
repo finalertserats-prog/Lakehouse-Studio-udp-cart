@@ -24,6 +24,20 @@ FROM tabulario/spark-iceberg:3.5.5_1.8.1
 USER root
 ADD https://repo1.maven.org/maven2/org/apache/hudi/hudi-spark3.5-bundle_2.12/0.15.0/hudi-spark3.5-bundle_2.12-0.15.0.jar /opt/spark/jars/
 RUN chmod 644 /opt/spark/jars/hudi-spark3.5-bundle_2.12-0.15.0.jar
+# Required for direct spark.sql writes to s3a:// (not just Iceberg-routed writes).
+# The base image's iceberg-spark-runtime jar bundles hadoop-aws internally for
+# Iceberg's own use, but plain spark.sql writes to s3a:// need hadoop-aws as a
+# STANDALONE jar on the classpath. Without these jars, attempts to write Hudi
+# tables to s3a:// fail with:
+#   java.lang.ClassNotFoundException: Class org.apache.hadoop.fs.s3a.S3AFileSystem not found
+# (mirroring the Delta attempt 3 stack trace, 2026-05-17 17:49 — applied
+# preemptively to Hudi since the same latent bug exists). hadoop-aws 3.3.6
+# matches the hadoop version bundled with Spark 3.5; aws-java-sdk-bundle
+# 1.12.262 is the matching SDK version per Apache Hadoop's documented compat
+# matrix.
+ADD https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.6/hadoop-aws-3.3.6.jar /opt/spark/jars/
+ADD https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar /opt/spark/jars/
+RUN chmod 644 /opt/spark/jars/hadoop-aws-*.jar /opt/spark/jars/aws-java-sdk-bundle-*.jar
 # NOTE: tabulario/spark-iceberg:3.5.5_1.8.1 has no `spark` user (it runs as
 # root by default — verified via `docker run --rm ... id` returning uid=0).
 # A trailing `USER spark` here caused every container start to fail with
