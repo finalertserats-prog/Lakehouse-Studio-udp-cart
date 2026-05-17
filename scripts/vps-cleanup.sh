@@ -137,9 +137,13 @@ mapfile -t STUDIO_NETWORKS < <(
       done
 )
 
-# Volumes — strict allowlist by exact name OR udp-/lhs- prefix.
-# Per-install compose-prefixed volumes (e.g. `udp_minio-data`) also caught
-# by the prefix match.
+# Volumes — strict allowlist by exact name, udp-/lhs- prefix, OR
+# per-install compose-project-prefixed pattern (`<install_dir>_udp_*`,
+# `<install_dir>_udp-*`). The per-install case catches volumes like
+# `delta-hms-spark-trino_udp_minio_data` and `iceberg-polaris-spark_udp_starrocks_fe_meta`
+# that compose creates when the install_dir name becomes the compose
+# project name (commit 06fde64). Without the substring rule, the script
+# would silently miss ~60% of volumes after a multi-stack VPS session.
 STUDIO_VOLUME_EXACT=(
   "spark_jdbc_jars"
   "airflow-pgdata"
@@ -154,6 +158,9 @@ mapfile -t STUDIO_VOLUMES < <(
         # Prefix match (udp- / lhs- / udp_ / lhs_)
         case "$vol" in
           udp-*|lhs-*|udp_*|lhs_*) echo "$vol"; continue ;;
+          # Per-install compose-project prefix — install_dir name is the
+          # project name (e.g. `iceberg-polaris-spark_udp_minio_data`).
+          *_udp_*|*_udp-*|*_lhs_*|*_lhs-*) echo "$vol"; continue ;;
         esac
         # Exact-name allowlist
         for exact in "${STUDIO_VOLUME_EXACT[@]}"; do
