@@ -198,8 +198,14 @@ def _render_hms_fragment(env: dict) -> str:
         "    container_name: udp-hive-metastore\n"
         "    restart: unless-stopped\n"
         "    depends_on:\n"
+        # 2026-05-17 fix: was `condition: service_healthy` which compose v5
+        # enforces synchronously at up-time. MySQL's first-init takes
+        # 30-60s for permission setup; compose timed out at ~4s waiting.
+        # HMS's own entrypoint has its own `nc -z $METASTORE_DB_HOSTNAME
+        # 3306` wait loop, so service_started is sufficient — HMS will
+        # block-loop until MySQL is reachable, then schematool runs.
         "      mysql-hms:\n"
-        "        condition: service_healthy\n"
+        "        condition: service_started\n"
         "    environment:\n"
         "      METASTORE_DB_HOSTNAME: mysql-hms\n"
         "    volumes:\n"
