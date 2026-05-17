@@ -278,6 +278,22 @@ for i in $(seq 1 120); do
   if [ "$i" = "120" ]; then echo "postgres-hms never came up"; exit 1; fi
 done
 
+echo "[studio-hudi-bootstrap] downloading postgres JDBC driver into HMS container..."
+# The bitsondatadev/hive-metastore image ships with NO postgres JDBC driver,
+# so schematool falls back to Derby and fails with "No suitable driver found".
+# Fetch postgresql-42.7.4 (current stable) into the HMS lib dir before any
+# schematool call. Idempotent — re-run is a no-op (-z check).
+docker exec udp-hive-metastore bash -lc '
+  set -e
+  JAR=/opt/apache-hive-metastore-3.0.0-bin/lib/postgresql-42.7.4.jar
+  if [ ! -s "$JAR" ]; then
+    curl -fsSLo "$JAR" https://jdbc.postgresql.org/download/postgresql-42.7.4.jar
+    echo "  postgres-jdbc downloaded"
+  else
+    echo "  postgres-jdbc already present"
+  fi
+' || { echo "postgres-jdbc download failed — schematool will hit Derby fallback"; exit 1; }
+
 echo "[studio-hudi-bootstrap] initializing HMS schema (idempotent)..."
 # schematool needs explicit JDBC URL + creds â€” without them it defaults
 # to Derby (in-process embedded DB) and tries to create `metastore_db`
@@ -526,6 +542,22 @@ for i in $(seq 1 120); do
   echo "  ($i/120) postgres-hms not ready yet"; sleep 5
   if [ "$i" = "120" ]; then echo "postgres-hms never came up"; exit 1; fi
 done
+
+echo "[studio-delta-bootstrap] downloading postgres JDBC driver into HMS container..."
+# The bitsondatadev/hive-metastore image ships with NO postgres JDBC driver,
+# so schematool falls back to Derby and fails with "No suitable driver found".
+# Fetch postgresql-42.7.4 (current stable) into the HMS lib dir before any
+# schematool call. Idempotent — re-run is a no-op (-z check).
+docker exec udp-hive-metastore bash -lc '
+  set -e
+  JAR=/opt/apache-hive-metastore-3.0.0-bin/lib/postgresql-42.7.4.jar
+  if [ ! -s "$JAR" ]; then
+    curl -fsSLo "$JAR" https://jdbc.postgresql.org/download/postgresql-42.7.4.jar
+    echo "  postgres-jdbc downloaded"
+  else
+    echo "  postgres-jdbc already present"
+  fi
+' || { echo "postgres-jdbc download failed — schematool will hit Derby fallback"; exit 1; }
 
 echo "[studio-delta-bootstrap] initializing HMS schema (idempotent)..."
 # Same JDBC-explicit fix as hudi bootstrap (2026-05-17 VPS attempt 3).
