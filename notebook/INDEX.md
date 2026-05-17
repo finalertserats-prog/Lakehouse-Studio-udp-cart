@@ -8,6 +8,7 @@ Master map of project knowledge captured across sessions.
 - [2026-05-16 (Part B) — post-restart hardening + NotebookLM sync fix](sessions/2026-05-16b-post-restart-hardening-and-notebooklm-sync.md) — catalog-503 fix, RBAC UserPublic split, ws_service_logs RBAC gate, sync-to-drive.py patched for .md→.txt
 - [2026-05-16 (Part C) — Insyght connector + destinations framework](sessions/2026-05-16c-insyght-destinations-connector.md) — outbound BI connector, Insyght-specific provisioning (SELECT_PRIV), catalog endpoint exposes destinations[]
 - [2026-05-17 — Pilot hardening, doc closure, RBAC tightening (trio push)](sessions/2026-05-17-pilot-hardening-doc-rbac-trio-push.md) — 14 commits, full-team parallel (Codex 7 dispatches + Gemini 3 + 3 sub-agents), pilot scope ~85% → ~90%, RBAC permissions tightened on 31 WRITE-RISK routes
+- [2026-05-18 — VPS deep clean + udp-local-v0.2 H1 lock update](sessions/2026-05-18-vps-cleanup-and-h1-lock-update.md) — 3 commits, vps-cleanup.sh shipped (hostname-gated to srv1541349), VPS reclaimed 28 GB, lock file aligned with already-landed fix; 4 memory writes capturing SSH-key-blindness + check-first-then-talk feedback
 
 ## Where things live
 
