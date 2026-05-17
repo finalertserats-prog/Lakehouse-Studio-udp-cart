@@ -19,7 +19,10 @@ keystroke-level responsiveness. No network calls. No subprocess.
 from __future__ import annotations
 
 from typing import Any, TypedDict
-from typing import NotRequired  # py3.11+
+try:
+    from typing import NotRequired  # py3.11+
+except ImportError:  # pragma: no cover — py3.10 fallback for the Finalert VPS
+    from typing_extensions import NotRequired
 
 from .catalog import component_index, recommended_sets
 from .compatibility import list_locks, load_lock
