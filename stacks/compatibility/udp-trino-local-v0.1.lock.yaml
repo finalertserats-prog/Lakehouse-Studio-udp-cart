@@ -1,28 +1,23 @@
-# LAKEHOUSE STUDIO COMPATIBILITY LOCK — CANDIDATE STACK
-# =====================================================
-# This is a CANDIDATE compatibility lock. The image tags below have all
-# been verified to EXIST on their registries via `docker manifest inspect`
-# on the certified_at date, but the COMBINATION has NOT been end-to-end
-# installed yet. No evidence record exists. Do not promote this stack to
-# `pilot-stable` until at least one passing install + smoke + finalize
-# run has been captured in the evidence block.
-#
-# For the certified path that DOES have evidence, see
-# `udp-local-v0.2.lock.yaml` (Spark-based, pilot-stable).
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK — PILOT-STABLE STACK
+# ========================================================
+# Promoted to pilot-stable on 2026-05-17 after an evidence-backed end-to-end
+# install on a Finalert Linux VPS (Ubuntu 22.04, Docker 29.5.0). All 8 pipeline
+# steps passed in 1m30s with cross-engine reads verified — Trino round-trip on
+# the curated table plus StarRocks queries through the same shared Iceberg
+# REST catalog. See `evidence[0]` (install_id `inst_bf7a3b026a`) below.
 
 schema_version: "1.0"
 stack_id: udp-trino-local-v0.1
-version_id: "0.1.0"
-certified_at: "2026-05-16T19:30:00+05:30"
+version_id: "0.1.1"
+certified_at: "2026-05-17T12:17:41+00:00"
 certified_by: vishnu.wildeagle@gmail.com
 certified_on:
-  os: "Windows 11 + Docker Desktop"
-  docker: "28.3.0"
-  docker_compose: "v2.38.1-desktop.1"
-# IMPORTANT: status is `candidate`, NOT `pilot-stable`. Studio's compatibility
-# loader exposes this verbatim through /api/stacks/{id}/lock-summary so the UI
-# can warn before showing the option.
-status: "candidate"
+  os: "Linux 5.15.0 (Ubuntu 22.04)"
+  docker: "29.5.0"
+  docker_compose: "v5.1.3"
+# Studio's compatibility loader exposes this verbatim through
+# /api/stacks/{id}/lock-summary so the UI can show the maturity tier honestly.
+status: "pilot-stable"
 
 # Maturity grades:
 #   candidate       — tags verified present on registry; combination NOT installed end-to-end
@@ -208,11 +203,43 @@ host_requirements:
   ports_required: [9000, 9001, 8181, 8080, 8030, 9030]
 
 # ---------------------------------------------------------------------------
-# Evidence — per-attempt verification records. EMPTY for candidate stacks.
+# Evidence — per-attempt verification records.
 # Append a record after every install attempt (including failed ones) so
 # the failure mode is documented for the next contributor to pick up.
 # ---------------------------------------------------------------------------
-evidence: []
+evidence:
+  - id: 2026-05-17-srv1541349-bf7a3b026a
+    timestamp: '2026-05-17T12:17:41+00:00'
+    operator: root
+    host:
+      os: Linux-5.15.0-177-generic-x86_64-with-glibc2.35
+      docker: 29.5.0
+      ram_gb: 31.3
+      cpu_cores: 8
+    via: install_harness.py (Lakehouse Studio v0.6.2)
+    install_id: inst_bf7a3b026a
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: passed
+      finalize: passed
+    proof:
+    - '  trino OK'
+    - '[studio-trino-smoke] checking StarRocks FE...'
+    - '  starrocks-fe OK'
+    - '[studio-trino-smoke] Trino round-trip query (curated table)...'
+    - '"apac","1","199.99"'
+    - '"eu-central","1","75.25"'
+    - '"us-east","2","541.49"'
+    - '"us-west","1","300.00"'
+    - '[studio-trino-smoke] StarRocks queries (same Iceberg catalog)...'
+    - 'iceberg_rest_catalog Iceberg'
+    - 'customer_summary_rows: 4'
+    - '[studio-trino-smoke] passed'
 
 # ---------------------------------------------------------------------------
 # Known-incompatible — combinations we know DO NOT work. Carried over from

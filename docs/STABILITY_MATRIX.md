@@ -35,7 +35,7 @@ The lock file's `status:` field on each stack is the authoritative source. Studi
 | Stack ID | Table Format | Catalog | Processing | Serving | BI | Status | Last Evidence | OS Verified | What's Needed to Promote |
 |---|---|---|---|---|---|---|---|---|---|
 | `udp-local-v0.2` | Iceberg | Iceberg-REST | Spark | StarRocks | — | **pilot-stable** | 2026-05-16 (Windows Docker Desktop, `inst_0d13069722`) | Win11 + Docker Desktop (with smoke-step Skip caveat) | Linux droplet evidence → `linux-stable` |
-| `udp-trino-local-v0.1` | Iceberg | Iceberg-REST | Trino | StarRocks | — | candidate | none | none | Windows + Linux install evidence; bootstrap + smoke already written |
+| `udp-trino-local-v0.1` | Iceberg | Iceberg-REST | Trino | StarRocks | — | **pilot-stable** | 2026-05-17 (Ubuntu 22.04, `inst_bf7a3b026a`) | Ubuntu 22.04 + Docker 29.5.0 | Windows + macOS install evidence → broader OS coverage; Linux smoke clean → already `linux-stable` candidate |
 | `iceberg-nessie-trino-local-v0.1` | Iceberg | Nessie | Trino | StarRocks | — | candidate | none | none | Image-tag-verify + install evidence (Windows + Linux) |
 | `hudi-hms-spark-local-v0.1` | Hudi | HMS + MySQL | Spark | — | — | **pilot-stable** | 2026-05-17 (Ubuntu 22.04, `inst_806a879b2e`) | Ubuntu 22.04 + Docker 29.5.0 | DONE — first evidence-backed candidate→pilot-stable promotion of v0.6.2 |
 | `delta-hms-spark-trino-local-v0.1` | Delta | HMS + Postgres | Spark + Trino | — | — | candidate (TBD — lock file not yet written) | none | none | Build `lakehousestudio/spark-delta:3.5.0_3.2.1` image, ship bake script, then install evidence |
@@ -57,7 +57,7 @@ Legend:
 | Stack | Win11 + Docker Desktop | macOS + Docker Desktop | Ubuntu 22.04 | RHEL 9 |
 |---|---|---|---|---|
 | `udp-local-v0.2` | ⚠ (smoke Skip — StarRocks→MinIO via AWS SDK fails; lakehouse data IS reachable via Spark) | ❌ | ❌ (likely-works per lock file, not verified) | ❌ |
-| `udp-trino-local-v0.1` | ❌ | ❌ | ❌ | ❌ |
+| `udp-trino-local-v0.1` | ❌ | ❌ | ✅ (install_id `inst_bf7a3b026a`, 2026-05-17 — all 8 steps passed in 1m30s, smoke proved Trino + StarRocks cross-engine reads against the same Iceberg REST catalog) | ❌ |
 | `iceberg-nessie-trino-local-v0.1` | ❌ | ❌ | ❌ | ❌ |
 | `hudi-hms-spark-local-v0.1` | ❌ | ❌ | ✅ (install_id `inst_806a879b2e`, 2026-05-17 — all 8 steps passed in 24.9s, smoke proved Hudi → HMS → MinIO write path live) | ❌ |
 | `delta-hms-spark-trino-local-v0.1` | ❌ | ❌ | ❌ | ❌ |

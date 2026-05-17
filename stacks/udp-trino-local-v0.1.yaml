@@ -1,8 +1,8 @@
 id: udp-trino-local-v0.1
-name: Unified Data Plug — Trino Lakehouse (Candidate)
+name: Unified Data Plug — Trino Lakehouse
 version: "0.1"
 mode: docker-compose
-maturity: candidate
+maturity: pilot-stable
 description: >
   CANDIDATE stack — Trino-based variant of the UDP reference lakehouse.
   MinIO object storage + Iceberg REST catalog + Trino federated SQL +

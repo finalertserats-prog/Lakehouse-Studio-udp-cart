@@ -14,7 +14,7 @@ UI-driven, compatibility-validated installer and operator for open data lakehous
 | Stack ID | Table Format | Catalog | Engines | Status |
 |---|---|---|---|---|
 | `udp-local-v0.2` | Iceberg | Iceberg REST | Spark + StarRocks | ![pilot-stable](https://img.shields.io/badge/status-pilot--stable-green) |
-| `udp-trino-local-v0.1` | Iceberg | Iceberg REST | Trino + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
+| `udp-trino-local-v0.1` | Iceberg | Iceberg REST | Trino + StarRocks | ![pilot-stable](https://img.shields.io/badge/status-pilot--stable-green) |
 | `iceberg-nessie-trino-local-v0.1` | Iceberg | **Nessie** (git-for-data) | Trino + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
 | `iceberg-polaris-spark-local-v0.1` | Iceberg | **Polaris** (RBAC + cred vending) | Spark + StarRocks | ![candidate](https://img.shields.io/badge/status-candidate-yellow) |
 | `hudi-hms-spark-local-v0.1` | **Hudi** (streaming-first) | Hive Metastore + MySQL | Spark | ![pilot-stable](https://img.shields.io/badge/status-pilot--stable-green) |
