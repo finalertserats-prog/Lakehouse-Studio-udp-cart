@@ -29,3 +29,14 @@ RUN chmod 644 /opt/spark/jars/delta-*.jar
 # A trailing `USER spark` here caused every container start to fail with
 # "unable to find user spark: no matching entries in passwd file" (Hudi
 # attempt 12, 2026-05-17). Stay as root to match the base image.
+#
+# PATH FIX (2026-05-17): the base image sets $SPARK_HOME=/opt/spark and
+# places spark-submit at /opt/spark/bin/spark-submit, but /opt/spark/bin
+# is NOT on the default $PATH for login shells (verified:
+#   docker run --rm --entrypoint /bin/bash <image> -lc 'echo $PATH'
+#   → /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin).
+# Bootstrap probes using `bash -lc 'command -v spark-submit'` therefore
+# return empty and time out at 10 minutes claiming "spark never came up".
+# Drop a /etc/profile.d/ snippet so login shells discover Spark binaries.
+RUN echo 'export SPARK_HOME=/opt/spark' > /etc/profile.d/spark.sh && \
+    echo 'export PATH=$SPARK_HOME/bin:$PATH' >> /etc/profile.d/spark.sh

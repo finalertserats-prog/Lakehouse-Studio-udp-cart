@@ -297,8 +297,14 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-hudi-bootstrap] waiting for Spark..."
+# NOTE: probe via full path + --version (not `command -v` in a login shell).
+# The lakehousestudio/spark-hudi image inherits tabulario/spark-iceberg, whose
+# default $PATH for login shells does NOT include /opt/spark/bin. A
+# `bash -lc 'command -v spark-submit'` probe therefore returns empty and
+# times out at 10 minutes. `spark-submit --version` proves the binary can
+# actually start, not just that the file exists.
 for i in $(seq 1 120); do
-  if docker exec udp-spark bash -lc 'command -v spark-submit' >/dev/null 2>&1; then
+  if docker exec udp-spark /opt/spark/bin/spark-submit --version >/dev/null 2>&1; then
     echo "  spark OK"; break
   fi
   echo "  ($i/120) spark not ready yet"; sleep 5
@@ -515,8 +521,11 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-delta-bootstrap] waiting for Spark..."
+# NOTE: probe via full path + --version (not `command -v` in a login shell).
+# See spark-hudi bootstrap above for rationale — same $PATH gap applies to
+# lakehousestudio/spark-delta.
 for i in $(seq 1 120); do
-  if docker exec udp-spark bash -lc 'command -v spark-submit' >/dev/null 2>&1; then
+  if docker exec udp-spark /opt/spark/bin/spark-submit --version >/dev/null 2>&1; then
     echo "  spark OK"; break
   fi
   echo "  ($i/120) spark not ready yet"; sleep 5
@@ -857,8 +866,11 @@ POLARIS_CATALOG_URI=http://polaris:8181/api/catalog
 EOF
 
 echo "[studio-polaris-bootstrap] waiting for Spark..."
+# NOTE: probe via full path + --version (not `command -v` in a login shell).
+# Same $PATH gap as spark-hudi/spark-delta bootstraps — see those for the
+# full rationale (login shells don't see /opt/spark/bin by default).
 for i in $(seq 1 120); do
-  if docker exec udp-spark bash -lc 'command -v spark-submit' >/dev/null 2>&1; then
+  if docker exec udp-spark /opt/spark/bin/spark-submit --version >/dev/null 2>&1; then
     echo "  spark OK"; break
   fi
   echo "  ($i/120) spark not ready yet"; sleep 5
