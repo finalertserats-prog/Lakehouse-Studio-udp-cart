@@ -127,10 +127,10 @@ components:
     notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
 
   - id: postgres
-    name: PostgreSQL (Hive Metastore backing DB)
+    name: MySQL 8 (Hive Metastore backing DB)
     role: db_backing
-    image: postgres
-    tag: "15-alpine"
+    image: mysql
+    tag: "8.0"
     registry_url: https://hub.docker.com/_/postgres/tags
     upstream_url: https://www.postgresql.org/
     notes: |
@@ -250,7 +250,7 @@ constraints:
     evidence: "TBD — needs install run"
 
   - between: [hive-metastore, postgres]
-    rule: "BACKING DB ⇄ CATALOG driver/schema match: identical constraint to the hudi-hms-spark candidate — bitsondatadev/hive-metastore bundles a Postgres JDBC driver in the 42.x line, verified against Postgres 12-15. Pinning postgres:15-alpine is the safe marriage; postgres:16 is not yet verified."
+    rule: "BACKING DB ⇄ CATALOG driver/schema match: identical constraint to the hudi-hms-spark candidate — bitsondatadev/hive-metastore bundles a Postgres JDBC driver in the 42.x line, verified against MySQL 8.0. Pinning mysql:8.0 is the safe marriage; postgres:16 is not yet verified."
     verified: "source review 2026-05-17 — same as the hudi-hms candidate's hive-metastore↔postgres constraint. Cross-referenced for traceability."
     evidence: "TBD — needs install run"
 
@@ -267,7 +267,7 @@ constraints:
 
   - between: [hive-metastore, postgres]
     rule: "VOLUME MOUNT contract: Postgres MUST mount a named volume for `/var/lib/postgresql/data` (same as the hudi-hms candidate). HMS schema-init runs exactly once per fresh data volume; losing the volume between restarts means HMS re-initializes, which IS idempotent in 3.x but invalidates every Delta-table pointer the previous schema held. Trino then sees no tables; Spark writes succeed against new HMS but the OLD tables on MinIO are unreferenced."
-    verified: "source review 2026-05-17 — postgres:15-alpine documents `/var/lib/postgresql/data` as PGDATA. Same constraint as the hudi-hms candidate, restated for traceability."
+    verified: "source review 2026-05-17 — mysql:8.0 documents `/var/lib/postgresql/data` as PGDATA. Same constraint as the hudi-hms candidate, restated for traceability."
     evidence: "TBD — needs install run"
 
   - between: [spark-delta, trino]
@@ -319,7 +319,7 @@ incompatible:
   - combination: ["postgres:latest"]
     reason: "Postgres major-version bumps occasionally change pg_dump/pg_restore output formats and minor SQL behaviors the HMS schema-init expects. The lock-file contract requires a stable tag."
     discovered: "2026-05-17"
-    workaround: "Pin to `postgres:15-alpine` (the locked tag) or bump explicitly with re-verification against HMS schema-init."
+    workaround: "Pin to `mysql:8.0` (the locked tag) or bump explicitly with re-verification against HMS schema-init."
 
   - combination: ["hive-metastore:4.x", "trino:475 delta-lake connector"]
     reason: "Trino's delta-lake connector uses the same metastore client code path as the iceberg connector — both break on HMS 4.x Thrift schema changes (mirroring the hudi-hms candidate's HMS 3.x→4.x incompatibility). The supported HMS line for Trino's delta-lake connector at Trino 475 is HMS 3.x."

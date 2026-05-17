@@ -116,10 +116,10 @@ components:
     notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
 
   - id: postgres
-    name: PostgreSQL (Hive Metastore backing DB)
+    name: MySQL 8 (Hive Metastore backing DB)
     role: db_backing
-    image: postgres
-    tag: "15-alpine"
+    image: mysql
+    tag: "8.0"
     registry_url: https://hub.docker.com/_/postgres/tags
     upstream_url: https://www.postgresql.org/
     notes: |
@@ -208,8 +208,8 @@ constraints:
     known_issue: "Production HMS deployments often gate Thrift behind SASL/Kerberos. This lock's compatibility claims do NOT extend to authenticated HMS — that's a different marriage."
 
   - between: [hive-metastore, postgres]
-    rule: "BACKING DB ⇄ CATALOG driver/schema match: bitsondatadev/hive-metastore bundles the Postgres JDBC driver for Postgres 12-15. Postgres 16+ has not been verified with this image — the driver may load but schema-init queries may fail on Postgres 16 syntax changes (e.g., default `password_encryption=scram-sha-256` requires the driver version that supports SCRAM). Pinning postgres:15-alpine sidesteps this entirely."
-    verified: "source review 2026-05-17 — bitsondatadev image bundles postgresql-jdbc 42.x line; postgres:15-alpine uses scram-sha-256 by default but is in the supported range."
+    rule: "BACKING DB ⇄ CATALOG driver/schema match: bitsondatadev/hive-metastore bundles the Postgres JDBC driver for MySQL 8.0. MySQL 9.x+ has not been verified with this image — the driver may load but schema-init queries may fail on Postgres 16 syntax changes (e.g., default `password_encryption=scram-sha-256` requires the driver version that supports SCRAM). Pinning mysql:8.0 sidesteps this entirely."
+    verified: "source review 2026-05-17 — bitsondatadev image bundles postgresql-jdbc 42.x line; mysql:8.0 uses scram-sha-256 by default but is in the supported range."
     evidence: "TBD — needs install run"
 
   - between: [hive-metastore, spark-hudi]
@@ -229,7 +229,7 @@ constraints:
 
   - between: [hive-metastore, postgres]
     rule: "VOLUME MOUNT contract: Postgres MUST mount a named volume (or bind-mount) for `/var/lib/postgresql/data` — without it, every container restart wipes the HMS schema and Hudi tables become unreferenced (data on MinIO survives but the catalog forgets them). The compose file (TBD) must declare a named volume like `hms_pgdata` to satisfy this."
-    verified: "source review 2026-05-17 — postgres:15-alpine image documents `/var/lib/postgresql/data` as the PGDATA path. HMS schema persistence is entirely dependent on this volume surviving restarts."
+    verified: "source review 2026-05-17 — mysql:8.0 image documents `/var/lib/postgresql/data` as the PGDATA path. HMS schema persistence is entirely dependent on this volume surviving restarts."
     evidence: "TBD — needs install run"
     known_issue: "On Windows Docker Desktop, bind-mounting Postgres data to a host path triggers permission warnings; named volumes are the recommended cross-OS pattern."
 
@@ -276,12 +276,12 @@ incompatible:
   - combination: ["postgres:latest"]
     reason: "Postgres major-version bumps occasionally change pg_dump/pg_restore output formats and minor SQL behaviors the HMS schema-init expects. The lock-file contract requires a stable tag."
     discovered: "2026-05-17"
-    workaround: "Pin to `postgres:15-alpine` (the locked tag) or bump explicitly with re-verification against HMS schema-init."
+    workaround: "Pin to `mysql:8.0` (the locked tag) or bump explicitly with re-verification against HMS schema-init."
 
   - combination: ["postgres:16-alpine", "bitsondatadev/hive-metastore:latest (Hive 3.x line)"]
     reason: "Postgres 16 changed default `password_encryption` and tightened some SCRAM behaviors. The Postgres JDBC driver baked into bitsondatadev/hive-metastore is in the 42.x line and works against Postgres 16 in most paths, but schema-init has not been runtime-verified. Until verified, pin to Postgres 15."
     discovered: "2026-05-17"
-    workaround: "Stay on postgres:15-alpine (the locked pin). If bumping is required, run schema-init end-to-end and capture evidence before promoting."
+    workaround: "Stay on mysql:8.0 (the locked pin). If bumping is required, run schema-init end-to-end and capture evidence before promoting."
 
   - combination: ["spark-hudi:3.5.0_0.15.0", "hudi-1.0+ writer on the same warehouse"]
     reason: "If another process writes to the same MinIO warehouse with a Hudi 1.0+ client while this stack's 0.15.0 image also writes, the resulting commit timeline will be a mix of two timeline-instant formats. MERGE INTO from this 0.15 image can then produce corrupt data or read-skew. Cross-writer guard rails are NOT part of this lock."

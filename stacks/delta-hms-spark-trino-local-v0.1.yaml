@@ -49,15 +49,15 @@ components:
       minimal:     { cpu: 1, ram_gb: 2, disk_gb: 20 }
       recommended: { cpu: 2, ram_gb: 4, disk_gb: 50 }
       comfortable: { cpu: 4, ram_gb: 8, disk_gb: 200 }
-  - id: postgres-hms
-    name: Postgres (Hive Metastore backing DB)
+  - id: mysql-hms
+    name: MySQL 8 (Hive Metastore backing DB)
     category: metastore_db
-    # postgres:15-alpine — see hudi-hms-spark-local-v0.1 for sizing
+    # mysql:8.0 — see hudi-hms-spark-local-v0.1 for sizing rationale (MySQL backing per HMS image requirements)
     # and version rationale (identical here).
     version: "15-alpine"
-    image: postgres:15-alpine
-    service_name: postgres-hms
-    ports: [5432]
+    image: mysql:8.0
+    service_name: mysql-hms
+    ports: [3306]
     resource_profiles:
       minimal:     { cpu: 1, ram_gb: 1, disk_gb: 5 }
       recommended: { cpu: 1, ram_gb: 2, disk_gb: 10 }
@@ -129,7 +129,7 @@ requirements:
 ports:
   # MinIO console + API, HMS Thrift, Spark notebook, Trino UI.
   required: [9000, 9001, 9083, 8888, 8080]
-  optional: [4040, 5432]
+  optional: [4040, 3306]
 
 env_defaults:
   UDP_PROJECT_NAME: lakehouse-studio-delta
@@ -141,10 +141,10 @@ env_defaults:
   AWS_SECRET_ACCESS_KEY: udp_admin_12345
   AWS_REGION: us-east-1
   S3_ENDPOINT: http://minio:9000
-  # Hive Metastore backing DB (Postgres). Consumed by the HMS image's
+  # Hive Metastore backing DB (MySQL). Consumed by the HMS image's
   # entrypoint to render metastore-site.xml at boot.
-  HMS_DB_HOST: postgres-hms
-  HMS_DB_PORT: "5432"
+  HMS_DB_HOST: mysql-hms
+  HMS_DB_PORT: "3306"
   HMS_DB_NAME: metastore
   HMS_DB_USER: hive
   HMS_DB_PASSWORD: hive_password_pilot
