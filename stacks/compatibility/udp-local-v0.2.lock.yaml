@@ -35,12 +35,21 @@ status: "pilot-stable"
 status_notes: |
   pilot-stable: install completes through bootstrap and finalize on
   Windows Docker Desktop; Spark can read the Iceberg tables from MinIO.
-  The smoke step's final StarRocks SELECT-from-Iceberg-on-MinIO path
-  fails on Windows due to a documented StarRocks-3.3 AWS SDK interaction
-  (the SDK ignores some catalog-property settings and falls back to its
-  default chain in a way that mishandles non-AWS endpoints). Same code
-  path is reported working on Linux per Codex source review. Linux
-  end-to-end verification pending → bump to `linux-stable` after.
+  The original 2026-05-16 evidence below recorded a smoke FAILURE on
+  the final StarRocks SELECT-from-Iceberg-on-MinIO path
+  (UnknownHostException at query time). Root cause was identified on
+  2026-05-17 via Linux VPS reproduction: NOT a Windows / SDK / Docker
+  bug — a missing dual-namespace S3 property block. The StarRocks-native
+  S3 client reads `aws.s3.*`; the Iceberg REST FileIO layer reads
+  unprefixed `s3.*`. Setting only one half left FileIO defaulting to
+  virtual-hosted addressing and tried to resolve `datalake.minio`.
+  Fix landed in commit 8a5914c (`fix(starrocks+hms): dual S3 props +
+  explicit JDBC for schematool`) which added the parallel `s3.*` /
+  `client.*` block to `_STUDIO_BOOTSTRAP_SH` in `backend/runner.py`.
+  Same fix in the sister stack `udp-trino-local-v0.1` produced a
+  clean `smoke: passed` evidence record — pattern is verified.
+  Re-verification of this stack on Windows + Linux is pending; flip
+  smoke to `passed` only after a fresh bootstrap+smoke run.
 
 # ---------------------------------------------------------------------------
 # Component lock — every container image and tag in the stack.
@@ -142,7 +151,21 @@ constraints:
   - between: [minio, starrocks-fe, starrocks-be]
     rule: "StarRocks FE+BE must export AWS_REGION + AWS_ENDPOINT_URL_S3 + AWS_S3_US_EAST_1_REGIONAL_ENDPOINT=regional in startup, beyond catalog props"
     verified: "UDP PR #6 docker-compose.yml injects these into both FE and BE startup commands"
-    known_issue: "On Windows Docker Desktop, the AWS SDK may still fail SELECT queries from StarRocks BE → MinIO with UnknownHostException despite all env vars being set. Not reproduced on Linux."
+    known_issue: "RESOLVED in commit 8a5914c (2026-05-17). Prior text: 'On Windows Docker Desktop, the AWS SDK may still fail SELECT queries from StarRocks BE → MinIO with UnknownHostException despite all env vars being set. Not reproduced on Linux.' That framing was wrong — Linux VPS reproduction on 2026-05-17 confirmed cross-OS. Real root cause: missing unprefixed `s3.*` properties on the Iceberg REST FileIO layer. Fix is additive properties to the CREATE EXTERNAL CATALOG statement — see new constraint below."
+
+  - between: [iceberg-rest, starrocks-fe, starrocks-be]
+    rule: "CREATE EXTERNAL CATALOG must set BOTH the `aws.s3.*` keys (StarRocks-native S3 client path) AND the unprefixed `s3.*` / `client.region` keys (Iceberg REST FileIO path). Setting only one half leaves the other code path defaulting to virtual-hosted addressing → UnknownHostException against `<bucket>.minio:9000`."
+    verified: "Fix landed in commit 8a5914c (backend/runner.py _STUDIO_BOOTSTRAP_SH). Sister stack udp-trino-local-v0.1 with identical pattern produced smoke: passed evidence."
+    required_keys:
+      - "aws.s3.endpoint"
+      - "aws.s3.enable_path_style_access"
+      - "aws.s3.access_key"
+      - "aws.s3.secret_key"
+      - "s3.endpoint"
+      - "s3.path-style-access"
+      - "s3.access-key-id"
+      - "s3.secret-access-key"
+      - "client.region"
 
 # ---------------------------------------------------------------------------
 # Host requirements — what the install target needs.
@@ -200,6 +223,38 @@ evidence:
       - "APAC  2  195.75  2026-05-16 12:37:49"
       - "EMEA  2  480.75  2026-05-16 12:37:49"
 
+  - id: "2026-05-17-h1-fix-landed-pending-reverify"
+    timestamp: "2026-05-17T13:27:44+05:30"
+    operator: vishnu.wildeagle@gmail.com
+    type: "code-fix-landed"
+    via: "commit 8a5914c — fix(starrocks+hms): dual S3 props + explicit JDBC for schematool"
+    investigation: "notebook/sessions/2026-05-17-starrocks-minio-investigation.md"
+    fix_summary: |
+      Added the unprefixed `s3.*` / `client.region` Iceberg REST FileIO
+      properties to the CREATE EXTERNAL CATALOG block in
+      backend/runner.py::_STUDIO_BOOTSTRAP_SH (alongside the existing
+      `aws.s3.*` StarRocks-native keys). This makes BOTH S3 client code
+      paths inside the StarRocks BE use the explicit MinIO endpoint and
+      path-style addressing — eliminating the UnknownHostException that
+      came from FileIO defaulting to virtual-hosted `datalake.minio:9000`.
+    cross_stack_evidence: |
+      The identical dual-property pattern was applied to the sister stack
+      udp-trino-local-v0.1 in the same commit. That stack's evidence
+      record `2026-05-17-finalert-vps-pilot-stable-bring-up` records
+      `smoke: passed` against the StarRocks-on-Iceberg-REST query path
+      (`iceberg_rest_catalog Iceberg; customer_summary_rows: 4`) —
+      confirming the property pattern is correct.
+    re_verification_required: |
+      To flip this stack's `smoke: failed` → `smoke: passed`, run on
+      a clean Windows + Linux host:
+        cd udp/ && ./udp clean && ./udp start
+        bash scripts/lhs-bootstrap.sh
+        bash scripts/lhs-smoke.sh
+      Then append a new evidence record with the actual run results,
+      and only then update the 2026-05-16 evidence's `smoke` field.
+      Per the append-only evidence convention, the original failed
+      record stays for historical accuracy.
+
 # ---------------------------------------------------------------------------
 # Known-incompatible — combinations we know DO NOT work. Just as important
 # as the positive matrix.
@@ -223,3 +278,24 @@ incompatible:
       stayed in Created state forever.
     discovered: "2026-05-16"
     workaround: "Use UDP PR #6+ which makes hive-metastore opt-in via `hms` compose profile"
+
+  - combination: ["CREATE EXTERNAL CATALOG with only aws.s3.* keys (StarRocks 3.3.x + Iceberg REST + MinIO)"]
+    reason: |
+      StarRocks 3.3 has two S3 client code paths inside the BE:
+      (1) the native S3 reader for direct queries reads `aws.s3.*`
+          properties (fixed in PR #55416 to propagate from the catalog);
+      (2) the Iceberg REST FileIO layer for vended-credentials-style
+          and REST-served file reads uses the upstream Iceberg property
+          spec — unprefixed `s3.endpoint`, `s3.path-style-access`,
+          `s3.access-key-id`, `s3.secret-access-key`.
+      Setting only `aws.s3.*` leaves FileIO defaulting to virtual-hosted
+      addressing and the `client.region` defaults to AWS's standard
+      resolver, which composes `<bucket>.minio:9000` (or worse,
+      `<bucket>.s3.us-east-1.amazonaws.com`) at query time → manifests
+      as `UnknownHostException` in the FE smoke output.
+    discovered: "2026-05-17"
+    workaround: "Set BOTH property blocks in CREATE EXTERNAL CATALOG. See constraint `iceberg-rest, starrocks-fe, starrocks-be` above for required_keys list. Pattern landed in commit 8a5914c."
+    related_upstream:
+      - "apache/iceberg-python#908 (bucket name prepended to MinIO service name)"
+      - "apache/iceberg#7709 (REST catalog can't resolve S3 domain name)"
+      - "trinodb/trino#25187 (engine ignores s3.path-style-access=true, falls back to virtual-hosted)"
