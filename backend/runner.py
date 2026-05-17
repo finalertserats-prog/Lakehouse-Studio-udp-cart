@@ -201,7 +201,11 @@ s3.aws-secret-key=udp_admin_12345
 TRINOCAT
 
 echo "[studio-trino-bootstrap] restarting Trino to load iceberg catalog..."
-docker compose restart trino
+# NOTE: `docker compose restart trino` would fail here because the bootstrap
+# script runs without the `-f docker-compose.fragment.yml` flag, so compose
+# only sees the base manifest (no trino service) and rejects the command.
+# Use `docker restart <container_name>` directly — bypasses compose entirely.
+docker restart udp-trino
 
 echo "[studio-trino-bootstrap] waiting for Trino after restart..."
 for i in $(seq 1 60); do
