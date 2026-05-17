@@ -69,12 +69,29 @@ PROPERTIES (
     "iceberg.catalog.uri" = "http://iceberg-rest:8181",
     "iceberg.catalog.warehouse" = "s3://datalake/warehouse",
     "iceberg.catalog.vended-credentials-enabled" = "false",
+    -- StarRocks-native S3 client properties (aws.s3.*) — PR #55416
+    -- propagates these to the BE's native S3 reader. Required.
     "aws.s3.endpoint" = "http://minio:9000",
     "aws.s3.enable_ssl" = "false",
     "aws.s3.enable_path_style_access" = "true",
     "aws.s3.region" = "us-east-1",
     "aws.s3.access_key" = "admin",
-    "aws.s3.secret_key" = "udp_admin_12345"
+    "aws.s3.secret_key" = "udp_admin_12345",
+    -- Iceberg REST FileIO properties (unprefixed s3.*) — required for
+    -- the FileIO layer inside the Iceberg REST client which reads
+    -- DIFFERENT property keys than StarRocks's native S3 client.
+    -- Without these, FileIO defaults to virtual-hosted-style addressing
+    -- which tries `datalake.minio:9000` (no DNS entry) and fails with
+    -- UnknownHostException at query time. Same root cause for the
+    -- "Windows-only" failure documented in udp-local-v0.2.lock.yaml's
+    -- evidence — actually a property propagation bug, not OS-specific.
+    -- Fix discovered via StarRocks investigation 2026-05-17 (see
+    -- notebook/sessions/2026-05-17-starrocks-minio-investigation.md).
+    "s3.endpoint" = "http://minio:9000",
+    "s3.path-style-access" = "true",
+    "s3.access-key-id" = "admin",
+    "s3.secret-access-key" = "udp_admin_12345",
+    "client.region" = "us-east-1"
 );
 SQL
 
@@ -257,12 +274,20 @@ PROPERTIES (
     "iceberg.catalog.uri" = "http://iceberg-rest:8181",
     "iceberg.catalog.warehouse" = "s3://datalake/warehouse",
     "iceberg.catalog.vended-credentials-enabled" = "false",
+    -- Same dual-property pattern as udp-local-v0.2 bootstrap above.
+    -- aws.s3.* for StarRocks-native S3 client (PR #55416);
+    -- s3.* unprefixed for the Iceberg REST FileIO layer.
     "aws.s3.endpoint" = "http://minio:9000",
     "aws.s3.enable_ssl" = "false",
     "aws.s3.enable_path_style_access" = "true",
     "aws.s3.region" = "us-east-1",
     "aws.s3.access_key" = "admin",
-    "aws.s3.secret_key" = "udp_admin_12345"
+    "aws.s3.secret_key" = "udp_admin_12345",
+    "s3.endpoint" = "http://minio:9000",
+    "s3.path-style-access" = "true",
+    "s3.access-key-id" = "admin",
+    "s3.secret-access-key" = "udp_admin_12345",
+    "client.region" = "us-east-1"
 );
 SQL
 

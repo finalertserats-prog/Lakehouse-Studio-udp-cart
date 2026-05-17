@@ -279,17 +279,29 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-hudi-bootstrap] initializing HMS schema (idempotent)..."
+# schematool needs explicit JDBC URL + creds — without them it defaults
+# to Derby (in-process embedded DB) and tries to create `metastore_db`
+# locally, which is exactly what the VPS install attempt 3 hit.
+# Bug fix 2026-05-17: pass -url / -userName / -passWord explicitly.
+HMS_JDBC_URL="jdbc:postgresql://postgres-hms:5432/metastore"
+HMS_DB_USER="${HMS_DB_USER:-hive}"
+HMS_DB_PASSWORD="${HMS_DB_PASSWORD:-hive_password_pilot}"
 # schematool exits non-zero if schema already exists; we treat that as success.
 if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-    -dbType postgres -info >/dev/null 2>&1; then
+    -dbType postgres -info \
+    -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER" -passWord "$HMS_DB_PASSWORD" \
+    >/dev/null 2>&1; then
   echo "  HMS schema already initialized"
 else
   echo "  HMS schema missing — running initSchema"
   docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-    -dbType postgres -initSchema || {
+    -dbType postgres -initSchema \
+    -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER" -passWord "$HMS_DB_PASSWORD" || {
       # Race with the HMS image's own entrypoint that may have just init'd it.
       if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-          -dbType postgres -info >/dev/null 2>&1; then
+          -dbType postgres -info \
+          -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER" -passWord "$HMS_DB_PASSWORD" \
+          >/dev/null 2>&1; then
         echo "  HMS schema initialized by entrypoint race — OK"
       else
         echo "HMS initSchema failed"; exit 1
@@ -516,15 +528,20 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-delta-bootstrap] initializing HMS schema (idempotent)..."
+# Same JDBC-explicit fix as hudi bootstrap (2026-05-17 VPS attempt 3).
+# Without -url/-userName/-passWord schematool defaults to Derby.
+HMS_JDBC_URL="jdbc:postgresql://postgres-hms:5432/metastore"
+HMS_DB_USER_HERE="${HMS_DB_USER:-hive}"
+HMS_DB_PASSWORD_HERE="${HMS_DB_PASSWORD:-hive_password_pilot}"
 if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-    -dbType postgres -info >/dev/null 2>&1; then
+    -dbType postgres -info -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" >/dev/null 2>&1; then
   echo "  HMS schema already initialized"
 else
   echo "  HMS schema missing — running initSchema"
   docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-    -dbType postgres -initSchema || {
+    -dbType postgres -initSchema -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" || {
       if docker exec udp-hive-metastore /opt/apache-hive-metastore-3.0.0-bin/bin/schematool \
-          -dbType postgres -info >/dev/null 2>&1; then
+          -dbType postgres -info -url "$HMS_JDBC_URL" -userName "$HMS_DB_USER_HERE" -passWord "$HMS_DB_PASSWORD_HERE" >/dev/null 2>&1; then
         echo "  HMS schema initialized by entrypoint race — OK"
       else
         echo "HMS initSchema failed"; exit 1
