@@ -758,14 +758,20 @@ for i in $(seq 1 24); do
   echo "  ($i/24) delta catalog not yet visible"; sleep 5
 done
 
-echo "[studio-delta-bootstrap] registering Delta tables in Trino delta catalog..."
-# Trino delta-lake requires explicit registration when the schema/table
-# exist in HMS but not yet known to the Trino catalog. Idempotent: failing
-# because "already registered" is fine.
-docker exec -e JAVA_TOOL_OPTIONS= -i udp-trino trino <<'SQL'
-CALL delta.system.register_table(schema_name => 'delta_raw',     table_name => 'demo_customers',         table_location => 's3://datalake/warehouse/delta_raw/demo_customers');
-CALL delta.system.register_table(schema_name => 'delta_curated', table_name => 'demo_customer_summary', table_location => 's3://datalake/warehouse/delta_curated/demo_customer_summary');
-SQL
+# Spark's saveAsTable already registered both Delta tables in HMS, and Trino's
+# delta-lake connector reads them straight from HMS — so no register_table CALL
+# is needed (Trino also disables that procedure by default, which used to abort
+# the bootstrap). Verify Trino can actually read them via HMS instead.
+echo "[studio-delta-bootstrap] verifying Trino sees the Delta tables via HMS..."
+for i in $(seq 1 12); do
+  if docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute \
+       "SELECT COUNT(*) FROM delta.delta_raw.demo_customers" 2>/dev/null \
+       | tr -d '"' | tr -d '\r' | grep -q '^5$'; then
+    echo "  Trino reads delta_raw.demo_customers (5 rows) OK"; break
+  fi
+  echo "  ($i/12) delta tables not visible to Trino yet"; sleep 5
+  if [ "$i" = "12" ]; then echo "delta tables never became visible to Trino"; exit 1; fi
+done
 
 echo "[studio-delta-bootstrap] complete"
 """
