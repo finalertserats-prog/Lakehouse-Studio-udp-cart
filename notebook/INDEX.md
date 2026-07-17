@@ -9,6 +9,7 @@ Master map of project knowledge captured across sessions.
 - [2026-05-16 (Part C) — Insyght connector + destinations framework](sessions/2026-05-16c-insyght-destinations-connector.md) — outbound BI connector, Insyght-specific provisioning (SELECT_PRIV), catalog endpoint exposes destinations[]
 - [2026-05-17 — Pilot hardening, doc closure, RBAC tightening (trio push)](sessions/2026-05-17-pilot-hardening-doc-rbac-trio-push.md) — 14 commits, full-team parallel (Codex 7 dispatches + Gemini 3 + 3 sub-agents), pilot scope ~85% → ~90%, RBAC permissions tightened on 31 WRITE-RISK routes
 - [2026-05-18 — VPS deep clean + udp-local-v0.2 H1 lock update](sessions/2026-05-18-vps-cleanup-and-h1-lock-update.md) — 3 commits, vps-cleanup.sh shipped (hostname-gated to srv1541349), VPS reclaimed 28 GB, lock file aligned with already-landed fix; 4 memory writes capturing SSH-key-blindness + check-first-then-talk feedback
+- [2026-07-18 — Phase 0 security hardening (VPS re-verified)](sessions/2026-07-18-phase0-security-hardening.md) — 4 commits (P0.3 AI-provision gate, P0.2 runtime hardening + raw-argv coverage fix, P0.4b credential generation), all default-off/byte-identical; re-certified live on VPS (34 containers hardened across 3 stacks, MinIO secret rotation proven on 2); P0.5 egress deferred (needs package pre-bake); 559 tests pass
 
 ## Where things live
 
