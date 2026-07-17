@@ -139,7 +139,13 @@ def test_each_service_has_required_keys(stack_id: str, tmp_path: Path):
         assert isinstance(svc_def, dict), (
             f"service '{svc_name}' in '{stack_id}' is not a dict"
         )
-        for key in ("image", "container_name", "healthcheck"):
+        # One-shot init containers (restart: "no") run once and exit, so a
+        # healthcheck is meaningless — nothing waits on them being "healthy",
+        # only on them completing. They still need image + container_name.
+        required = ("image", "container_name")
+        if svc_def.get("restart") != "no":
+            required = required + ("healthcheck",)
+        for key in required:
             assert key in svc_def, (
                 f"service '{svc_name}' in fragment for '{stack_id}' "
                 f"is missing required key '{key}'"
@@ -166,7 +172,7 @@ EXPECTED_SERVICES_PER_STACK = {
     "hudi-hms-spark-local-v0.1":        {"mysql-hms", "hive-metastore"},
     # delta: HMS pair + Trino.
     "delta-hms-spark-trino-local-v0.1": {"mysql-hms", "hive-metastore", "trino"},
-    "iceberg-polaris-spark-local-v0.1": {"postgres-polaris", "polaris"},
+    "iceberg-polaris-spark-local-v0.1": {"postgres-polaris", "polaris-bootstrap", "polaris"},
 }
 
 

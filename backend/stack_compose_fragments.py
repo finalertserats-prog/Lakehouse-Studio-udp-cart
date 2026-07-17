@@ -54,6 +54,14 @@ _HMS_IMAGE = "bitsondatadev/hive-metastore:latest"
 # ETL (e.g. Nessie). Delta/Hudi/hadoop-aws come in at submit time via --packages.
 _SPARK_ICEBERG_IMAGE = "tabulario/spark-iceberg:3.5.5_1.8.1"
 _POLARIS_IMAGE = "apache/polaris:1.4.1"  # bumped from 1.0.1 — that tag never published; 1.4.1 is real + has CVE fixes (Gemini research 2026-05-17, verified via docker manifest inspect)
+# Polaris 1.4.x with relational-jdbc persistence needs its Postgres schema
+# CREATED before the server can serve tokens — the server's own
+# POLARIS_BOOTSTRAP_CREDENTIALS env seeds the realm but does NOT create the
+# `polaris_schema` tables, so the token endpoint 500s with
+# `relation "polaris_schema.entities" does not exist`. The admin-tool
+# `bootstrap` command creates the schema + realm + root principal. Verified on
+# the Finalert VPS 2026-07-17.
+_POLARIS_ADMIN_IMAGE = "apache/polaris-admin-tool:1.4.1"
 _POSTGRES_IMAGE = "postgres:15-alpine"
 _MYSQL_IMAGE = "mysql:8.0"
 # Trino 481 — updated from 475 on 2026-06-17 to match lock files.
@@ -91,7 +99,7 @@ FRAGMENT_SERVICES: dict[str, list[str]] = {
     "iceberg-nessie-trino-local-v0.1":  ["nessie", "trino", "postgres-airflow", "airflow", "spark", "mysql-hms", "hive-metastore"],
     "hudi-hms-spark-local-v0.1":        ["mysql-hms", "hive-metastore"],
     "delta-hms-spark-trino-local-v0.1": ["mysql-hms", "hive-metastore", "trino"],
-    "iceberg-polaris-spark-local-v0.1": ["postgres-polaris", "polaris"],
+    "iceberg-polaris-spark-local-v0.1": ["postgres-polaris", "polaris-bootstrap", "polaris"],
 }
 
 
@@ -882,6 +890,26 @@ def _render_polaris_fragment(env: dict) -> str:
         "      retries: 10\n"
         "    networks:\n"
         "      - default\n"
+        # One-shot schema bootstrap. Creates the polaris_schema tables + the
+        # `default-realm` realm + root principal in Postgres BEFORE the server
+        # starts, so the server never 500s on a missing schema. Exits 0 on
+        # success; the server depends_on it completing.
+        "  polaris-bootstrap:\n"
+        f"    image: {_POLARIS_ADMIN_IMAGE}\n"
+        "    container_name: udp-polaris-bootstrap\n"
+        "    restart: \"no\"\n"
+        "    depends_on:\n"
+        "      postgres-polaris:\n"
+        "        condition: service_healthy\n"
+        "    environment:\n"
+        "      POLARIS_PERSISTENCE_TYPE: relational-jdbc\n"
+        "      QUARKUS_DATASOURCE_DB_KIND: postgresql\n"
+        "      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres-polaris:5432/polaris?sslmode=disable\n"
+        "      QUARKUS_DATASOURCE_USERNAME: polaris\n"
+        "      QUARKUS_DATASOURCE_PASSWORD: ${POLARIS_DB_PASSWORD:-polaris_password_pilot}\n"
+        "    command: [\"bootstrap\", \"--realm\", \"default-realm\", \"--credential\", \"${POLARIS_BOOTSTRAP_CREDENTIALS:-default-realm,root,s3cr3t}\"]\n"
+        "    networks:\n"
+        "      - default\n"
         "  polaris:\n"
         f"    image: {_POLARIS_IMAGE}\n"
         "    container_name: udp-polaris\n"
@@ -889,6 +917,8 @@ def _render_polaris_fragment(env: dict) -> str:
         "    depends_on:\n"
         "      postgres-polaris:\n"
         "        condition: service_healthy\n"
+        "      polaris-bootstrap:\n"
+        "        condition: service_completed_successfully\n"
         "    environment:\n"
         # Codex P0 fix 2026-05-17: Polaris 1.4.x uses Quarkus datasource
         # env vars + the persistence type is `relational-jdbc`, not `jdbc`.
