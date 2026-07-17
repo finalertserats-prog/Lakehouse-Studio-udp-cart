@@ -45,7 +45,7 @@ The product spans the full lifecycle:
 
 Its distinctive idea — the **moat** — is that compatibility is treated as a **governed, evidence-backed contract**: every certified stack ships a lock file pinning exact image tags, with a `candidate → pilot-stable` certification lifecycle that only advances on a recorded, passing end-to-end install.
 
-**Where it stands today (verified this session):** synced to a stable v0.6.2; the automated test suite is **498 passed / 0 failed**; dependencies install cleanly; and a confirmed prompt-injection→shell RCE in the AI provisioner has been gated. A five-model council scored the product at **~6.1 / 10 overall** — high on innovation, UX and test discipline; gated by security hardening and by the fact that only 2 of ~12 stacks are yet pilot-stable.
+**Where it stands today (verified this session):** synced to a stable v0.6.2; the automated test suite is **498 passed / 0 failed**; dependencies install cleanly; and a confirmed prompt-injection→shell RCE in the AI provisioner has been gated. A five-model council scored the product at **~6.1 / 10 overall** — high on innovation, UX and test discipline; gated by security hardening and by the fact that only 4 of the ~12 stacks carry `pilot-stable` status (3 locally-installed — `udp-local-v0.2`, `udp-trino-local-v0.1`, `hudi-hms-spark-local-v0.1` — plus the remote `techsophy-sdp-hadoop-v1.0` cluster); the rest are `candidate` (image tags verified, but no recorded end-to-end install).
 
 **Where it needs to go:** finish the security/sandbox boundary, earn install evidence for the remaining stacks, digest-pin and scan images, and add SSO/enforced-RBAC/multi-tenancy. Section 10 lays out the step-by-step plan.
 
@@ -297,7 +297,7 @@ Two AI surfaces, both driven via `litellm` (provider-agnostic) / the Anthropic S
 | Dependencies | Install cleanly (litellm needs a prebuilt wheel via pip ≥ 25) |
 | Catalog integrity | Enforced by `scripts/catalog_lint.py` CI gate |
 | AI-provisioning RCE | Gated (`backend/ai_safety.py`) |
-| Certified stacks | 2 pilot-stable (`udp-local-v0.2`, `hudi-hms-spark-local-v0.1`); the rest `candidate` (no install evidence) |
+| Certified stacks | **4 `pilot-stable`** (`udp-local-v0.2`, `udp-trino-local-v0.1`, `hudi-hms-spark-local-v0.1`, + remote `techsophy-sdp-hadoop-v1.0`); 1 `pilot` (`streaming-local-v1.0`); the remaining 6 `candidate` (no install evidence); `enterprise-hadoop-v1.0` lock added as `candidate` |
 | Auth / RBAC | Opt-in bearer-token RBAC; not SSO/OIDC |
 | Sandboxing | None — host Docker daemon |
 | Supply chain | Mostly tag-pinned; no image scanning |
@@ -315,7 +315,7 @@ A five-model council (Claude Opus, Claude Sonnet, Claude Fable, the Google/agy l
 | UX / product design | **7.5 / 10** | "Shop → pre-flight → live-streamed install → day-2" is a genuinely good operator experience |
 | Testing & QA | **7.4 / 10** | 498/0 green + clean installs; coverage is thin on the uncertified stacks |
 | Architecture & code quality | **7.0 / 10** | Clean FastAPI/SPA/CLI split + lock-file discipline; host-Docker coupling caps the ceiling |
-| Functionality & completeness | **6.4 / 10** | Broad surface, but only 2/12 stacks proven |
+| Functionality & completeness | **6.4 / 10** | Broad surface, but only 4/12 stacks carry pilot-stable evidence |
 | Documentation | **5.9 / 10** | Strong compatibility/certification artifacts; per-stack evidence & runbooks lag |
 | Security posture | **4.2 / 10** | RCE caught and gated, but no sandbox, tag-not-digest pins, no image scan, no SSO |
 | Enterprise readiness | **3.4 / 10** | Single-host, no SSO/OIDC, no isolation — pilot-grade, not production |
@@ -325,6 +325,8 @@ A five-model council (Claude Opus, Claude Sonnet, Claude Fable, the Google/agy l
 ### ⚖️ Overall score: **6.1 / 10**
 
 **Council consensus (verbatim themes):** *"An impressively conceived, well-tested product with a differentiated compatibility-contract model and excellent install UX, but honestly self-assessed as early."* The ceiling is not vision or engineering hygiene — it is **breadth of evidence and hardening**. Every panellist converged on the same lever: **get 5–6 stacks pilot-stable, digest-pin and scan images, add OIDC + a runtime sandbox, and the score jumps ~1.5 points.**
+
+> **Note on the evidence count:** the panel was briefed with an early under-count of "2 of ~12 stacks proven." The accurate figure from the repo's authoritative lock `status:` fields is **4 pilot-stable** (3 locally-installed + the remote techsophy cluster) plus 1 `pilot`. This does not change the qualitative verdict — a majority of stacks (6 `candidate` + `enterprise-hadoop`) still lack recorded install evidence — so the scores stand.
 
 ---
 
