@@ -14,8 +14,8 @@
 
 schema_version: "1.0"
 stack_id: hudi-hms-spark-local-v0.1
-version_id: "0.1.1"
-certified_at: "2026-05-17T09:48:17+00:00"
+version_id: "0.1.2"
+certified_at: "2026-07-17T10:27:48+00:00"
 certified_by: vishnu.wildeagle@gmail.com
 certified_on:
   os: "Linux-5.15.0-177-generic-x86_64-with-glibc2.35"
@@ -305,6 +305,30 @@ evidence:
       - '[studio-hudi-smoke] running pyspark Hudi smoke job...'
       - ':: loading settings :: url = jar:file:/opt/spark/jars/ivy-2.5.1.jar!/org/apache/ivy/core/settings/ivysettings.xml'
       - '[studio-hudi-smoke] passed'
+  - id: "2026-07-17-srv1541349-eeeda3d1e4"
+    timestamp: "2026-07-17T10:27:48.194139+00:00"
+    operator: root
+    install_id: "inst_eeeda3d1e4"
+    host:
+      os: "Linux-5.15.0-177-generic-x86_64-with-glibc2.35"
+      docker: "29.5.0"
+      ram_gb: 31.3
+      cpu_cores: 8
+    via: "install_harness.py on Finalert VPS srv1541349"
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: passed
+      finalize: passed
+    proof:
+      - "all 8 pipeline steps passed (terminal state READY, 1m20s)"
+      - "[hudi-smoke] raw=5 curated=4 incremental=5"
+      - "[etl-verify] PASSED — 1 format(s) x 3 pipelines, all >= 1000 rows"
+    notes: "Re-verified on current code after fixing the multi-format-refactor regression (commit 9c59a11): pinned spark.sql.defaultCatalog=spark_catalog + s3a warehouse + added hadoop-aws jars, so CREATE DATABASE hits HMS not iceberg-rest."
 
 # ---------------------------------------------------------------------------
 # Known-incompatible — combinations we know DO NOT work.
