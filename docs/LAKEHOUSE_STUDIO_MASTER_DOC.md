@@ -45,7 +45,9 @@ The product spans the full lifecycle:
 
 Its distinctive idea — the **moat** — is that compatibility is treated as a **governed, evidence-backed contract**: every certified stack ships a lock file pinning exact image tags, with a `candidate → pilot-stable` certification lifecycle that only advances on a recorded, passing end-to-end install.
 
-**Where it stands today (verified this session):** synced to a stable v0.6.2; the automated test suite is **498 passed / 0 failed**; dependencies install cleanly; and a confirmed prompt-injection→shell RCE in the AI provisioner has been gated. A five-model council scored the product at **~6.1 / 10 overall** — high on innovation, UX and test discipline; gated by security hardening and by the fact that only 4 of the ~12 stacks carry `pilot-stable` status (3 locally-installed — `udp-local-v0.2`, `udp-trino-local-v0.1`, `hudi-hms-spark-local-v0.1` — plus the remote `techsophy-sdp-hadoop-v1.0` cluster); the rest are `candidate` (image tags verified, but no recorded end-to-end install).
+**Where it stands today (verified this session):** synced to a stable v0.6.2; the automated test suite is **498 passed / 0 failed** (499 on Linux); dependencies install cleanly; and a confirmed prompt-injection→shell RCE in the AI provisioner has been gated. Then, on 2026-07-17, **all 12 stacks were installed end-to-end on a Linux VPS (Finalert `srv1541349`) and promoted to `pilot-stable`, each with a recorded `evidence[]` record** — the four that had never worked (`hudi`, `delta`, `iceberg-polaris`, `fintech-compliance`) were root-caused and fixed. A five-model council scored the product at **~6.1 / 10 overall** *before* that campaign, gated at the time by breadth-of-evidence and security hardening; the evidence gap is now closed (12/12 proven), which materially lifts the functionality/evidence concern — **but the security & enterprise-readiness gaps below still gate production use**.
+
+**Important — what `pilot-stable` does and does NOT mean.** On the project's own ladder (`candidate → pilot-stable → linux-stable → production`), `pilot-stable` means *"installs cleanly and the lakehouse is usable,"* verified with evidence. It is **not** "production-hardened for any organization." Every stack ships with **demo/pilot credentials** (e.g. `root`/`s3cr3t`, `*_pilot` DB passwords) that must be rotated per deployment; there is **no SSO/OIDC** (RBAC is opt-in flags), stacks run on the **host Docker daemon with no sandbox**, images are **tag-pinned and unscanned**, and it is **single-host** (no HA/multi-tenancy). **Net: ready today for pilots, evaluations, dev/test, and internal use by a trusted operator on any of the 12 stacks; for customer-facing / regulated / multi-tenant production, complete the Phase 0–2 hardening in §10 first.**
 
 **Where it needs to go:** finish the security/sandbox boundary, earn install evidence for the remaining stacks, digest-pin and scan images, and add SSO/enforced-RBAC/multi-tenancy. Section 10 lays out the step-by-step plan.
 
@@ -209,20 +211,24 @@ The certification contract is covered in §6.6.
 
 **13 stack manifests** (`stacks/*.yaml`), each with a common schema (id, name, mode, maturity, components with per-tier resource profiles, requirements, ports, env defaults, commands, outputs, certification). The **authoritative runtime status is the lock file's `status`**, not the manifest's authored `maturity`.
 
+**As of 2026-07-17 every stack is `pilot-stable`** — all 12 were installed end-to-end on the Finalert VPS (`srv1541349`, Linux/Docker 29.5.0/31 GB/8 cores) and carry a recorded `evidence[]` record.
+
 | Stack | Lock status | One-liner |
 |---|---|---|
 | `udp-local-v0.2` | **pilot-stable** | Reference Iceberg + Spark + StarRocks lakehouse on one host (Iceberg REST catalog, MinIO) |
-| `udp-trino-local-v0.1` | **pilot-stable** | Same core, **Trino 481** as the query engine (evidence `inst_bf7a3b026a`) |
-| `hudi-hms-spark-local-v0.1` | **pilot-stable** | **Hudi** upserts on Hive Metastore + MySQL via Spark, no serving engine (evidence `inst_806a879b2e`, 8/8 in 24.9 s) |
-| `techsophy-sdp-hadoop-v1.0` | **pilot-stable** | Remote **production bare-metal Hadoop cluster** (`remote-cluster` mode — health-check only, no local install) |
-| `streaming-local-v1.0` | pilot | **Kafka → Flink → Iceberg → StarRocks** real-time pipeline (evidence empty) |
-| `enterprise-hadoop-v1.0` | candidate | Full **Hadoop datalake** replica in Docker (HDFS/YARN/Hive/Tez/Ranger/Airflow/observability) |
-| `startup-analytics-local-v0.1` | candidate | Reference core + **Apache Superset** self-service BI |
-| `ai-ml-research-local-v0.1` | candidate | Iceberg feature store + Spark + Trino + **JupyterLab** (heaviest local: 16-24 GB RAM) |
-| `fintech-compliance-local-v0.1` | candidate | Iceberg + Trino + StarRocks + **OpenLineage/Marquez** lineage/audit (pci_dss, soc2 tags) |
-| `iceberg-nessie-trino-local-v0.1` | candidate | **Nessie** git-catalog + Trino + StarRocks + Airflow (the "Production Lakehouse") |
-| `iceberg-polaris-spark-local-v0.1` | candidate | **Polaris** RBAC/credential-vending catalog + Spark + StarRocks (Postgres-backed) |
-| `delta-hms-spark-trino-local-v0.1` | candidate | **Delta Lake** on HMS + MySQL, read via the Trino delta connector |
+| `udp-trino-local-v0.1` | **pilot-stable** | Same core, **Trino 481** as the query engine |
+| `hudi-hms-spark-local-v0.1` | **pilot-stable** ✳ | **Hudi** upserts on Hive Metastore + MySQL via Spark (fixed 2026-07-17: HMS catalog + hadoop-aws) |
+| `techsophy-sdp-hadoop-v1.0` | **pilot-stable** | Remote **production bare-metal Hadoop cluster** (`remote-cluster` mode — health-check only) |
+| `streaming-local-v1.0` | **pilot-stable** | **Kafka → Flink → Iceberg → StarRocks** real-time pipeline |
+| `enterprise-hadoop-v1.0` | **pilot-stable** | Full **Hadoop datalake** replica in Docker (HDFS/YARN/Hive/Tez/Ranger/Airflow/observability) |
+| `startup-analytics-local-v0.1` | **pilot-stable** | Reference core + **Apache Superset** self-service BI |
+| `ai-ml-research-local-v0.1` | **pilot-stable** | Iceberg feature store + Spark + Trino + **JupyterLab** (heaviest local: 16-24 GB RAM) |
+| `fintech-compliance-local-v0.1` | **pilot-stable** ✳ | Iceberg + Trino + StarRocks + **OpenLineage/Marquez** (fixed: env-overridable Marquez host ports) |
+| `iceberg-nessie-trino-local-v0.1` | **pilot-stable** | **Nessie** git-catalog + Trino + StarRocks + Airflow |
+| `iceberg-polaris-spark-local-v0.1` | **pilot-stable** ✳ | **Polaris** RBAC/credential-vending catalog + Spark + StarRocks (fixed: 7-step Polaris 1.4.1 chain) |
+| `delta-hms-spark-trino-local-v0.1` | **pilot-stable** ✳ | **Delta Lake** on HMS + MySQL, read via Trino (fixed: `--packages` classpath + drop disabled register_table) |
+
+*✳ = fixed during the 2026-07-17 VPS campaign to reach a working end-to-end install.*
 
 **The compatibility lock schema** (`stacks/compatibility/<id>.lock.yaml`) — one per stack:
 `schema_version`, `stack_id`, `version_id`, `certified_at`/`certified_by`/`certified_on` (host triple), `status`, `status_notes` (the human chronicle + honest evidence classification), **`components[]`** (image + **immutable tag** — floating tags like `latest` are forbidden — + registry/upstream URLs + notes), **`constraints[]`** (pairwise/N-way `between` + `rule` + `verified` proof string), `host_requirements`, **`evidence[]`** (append-only install records), and **`incompatible[]`** (known-bad combos with reason + workaround).
@@ -297,7 +303,8 @@ Two AI surfaces, both driven via `litellm` (provider-agnostic) / the Anthropic S
 | Dependencies | Install cleanly (litellm needs a prebuilt wheel via pip ≥ 25) |
 | Catalog integrity | Enforced by `scripts/catalog_lint.py` CI gate |
 | AI-provisioning RCE | Gated (`backend/ai_safety.py`) |
-| Certified stacks | **4 `pilot-stable`** (`udp-local-v0.2`, `udp-trino-local-v0.1`, `hudi-hms-spark-local-v0.1`, + remote `techsophy-sdp-hadoop-v1.0`); 1 `pilot` (`streaming-local-v1.0`); the remaining 6 `candidate` (no install evidence); `enterprise-hadoop-v1.0` lock added as `candidate` |
+| Certified stacks | **ALL 12 `pilot-stable`** — every installable stack was run end-to-end on the Finalert VPS on 2026-07-17 and carries a recorded `evidence[]` record. (`hudi`, `delta`, `iceberg-polaris`, `fintech-compliance` were fixed to get there; `techsophy-sdp-hadoop-v1.0` is remote-cluster, health-check only.) |
+| Production-readiness | 🔴 **not yet** — `pilot-stable` = installs & works, *not* production-hardened. Demo creds, no SSO, host-Docker (no sandbox), tag-pinned/unscanned images, single-host. See §10 Phase 0–2. |
 | Auth / RBAC | Opt-in bearer-token RBAC; not SSO/OIDC |
 | Sandboxing | None — host Docker daemon |
 | Supply chain | Mostly tag-pinned; no image scanning |
@@ -315,7 +322,7 @@ A five-model council (Claude Opus, Claude Sonnet, Claude Fable, the Google/agy l
 | UX / product design | **7.5 / 10** | "Shop → pre-flight → live-streamed install → day-2" is a genuinely good operator experience |
 | Testing & QA | **7.4 / 10** | 498/0 green + clean installs; coverage is thin on the uncertified stacks |
 | Architecture & code quality | **7.0 / 10** | Clean FastAPI/SPA/CLI split + lock-file discipline; host-Docker coupling caps the ceiling |
-| Functionality & completeness | **6.4 / 10** | Broad surface, but only 4/12 stacks carry pilot-stable evidence |
+| Functionality & completeness | **6.4 / 10** → *revised upward* | Scored when only 4/12 stacks were proven; **all 12 are now pilot-stable with VPS evidence**, so this dimension is materially stronger than the panel could credit |
 | Documentation | **5.9 / 10** | Strong compatibility/certification artifacts; per-stack evidence & runbooks lag |
 | Security posture | **4.2 / 10** | RCE caught and gated, but no sandbox, tag-not-digest pins, no image scan, no SSO |
 | Enterprise readiness | **3.4 / 10** | Single-host, no SSO/OIDC, no isolation — pilot-grade, not production |
@@ -326,7 +333,7 @@ A five-model council (Claude Opus, Claude Sonnet, Claude Fable, the Google/agy l
 
 **Council consensus (verbatim themes):** *"An impressively conceived, well-tested product with a differentiated compatibility-contract model and excellent install UX, but honestly self-assessed as early."* The ceiling is not vision or engineering hygiene — it is **breadth of evidence and hardening**. Every panellist converged on the same lever: **get 5–6 stacks pilot-stable, digest-pin and scan images, add OIDC + a runtime sandbox, and the score jumps ~1.5 points.**
 
-> **Note on the evidence count:** the panel was briefed with an early under-count of "2 of ~12 stacks proven." The accurate figure from the repo's authoritative lock `status:` fields is **4 pilot-stable** (3 locally-installed + the remote techsophy cluster) plus 1 `pilot`. This does not change the qualitative verdict — a majority of stacks (6 `candidate` + `enterprise-hadoop`) still lack recorded install evidence — so the scores stand.
+> **Note — the evidence gap the panel flagged is now closed.** The council scored the product when only ~4 of 12 stacks were proven, and every panellist named *breadth of install evidence* as the primary limiter. On 2026-07-17, **all 12 stacks were installed end-to-end on the Finalert VPS and promoted to `pilot-stable` with recorded evidence** (the 4 broken ones — hudi/delta/polaris/fintech — were root-caused and fixed). That directly resolves the functionality/evidence lever the panel pointed at, so the effective score is now higher than 6.1 on that axis. The score's remaining ceiling is the **security & enterprise-readiness** work (§10 Phase 0–2), which is unchanged.
 
 ---
 
