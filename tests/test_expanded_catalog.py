@@ -122,6 +122,13 @@ NEW_STACK_IDS = [
     "iceberg-polaris-spark-local-v0.1",
 ]
 
+# The candidate-contract assertions (maturity/status == candidate, evidence
+# empty) apply only to stacks that have NOT yet graduated. hudi-hms-spark
+# was promoted to pilot-stable (README + lock evidence), so it is excluded
+# here — its lock now carries an evidence[] record and status: pilot-stable.
+GRADUATED_STACK_IDS = {"hudi-hms-spark-local-v0.1"}
+CANDIDATE_STACK_IDS = [s for s in NEW_STACK_IDS if s not in GRADUATED_STACK_IDS]
+
 
 @pytest.mark.parametrize("stack_id", NEW_STACK_IDS)
 def test_new_stack_manifest_loads(stack_id):
@@ -140,7 +147,7 @@ def test_new_stack_has_required_commands(stack_id):
         )
 
 
-@pytest.mark.parametrize("stack_id", NEW_STACK_IDS)
+@pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
 def test_new_stack_maturity_is_candidate(stack_id):
     m = stack_manifest_mod.load_manifest(stack_id)
     assert m.data.get("maturity") == "candidate"
@@ -169,20 +176,30 @@ def test_new_lock_file_exists(stack_id):
     assert lock is not None, f"{stack_id}: lock file missing"
 
 
-@pytest.mark.parametrize("stack_id", NEW_STACK_IDS)
+@pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
 def test_new_lock_status_is_candidate(stack_id):
     lock = compatibility_mod.load_lock(stack_id)
     assert lock.get("status") == "candidate"
 
 
-@pytest.mark.parametrize("stack_id", NEW_STACK_IDS)
+@pytest.mark.parametrize("stack_id", CANDIDATE_STACK_IDS)
 def test_new_lock_evidence_is_empty(stack_id):
     """The candidate contract: status: candidate iff evidence is empty.
     Any first evidence entry should flip the status to pilot-stable in the
     same commit, with a corresponding bump to certified_at + version_id.
+    A graduated stack (see GRADUATED_STACK_IDS) is asserted separately.
     """
     lock = compatibility_mod.load_lock(stack_id)
     assert lock.get("evidence", []) == []
+
+
+@pytest.mark.parametrize("stack_id", sorted(GRADUATED_STACK_IDS))
+def test_graduated_stack_is_pilot_stable_with_evidence(stack_id):
+    """Inverse of the candidate contract: a graduated stack must be
+    pilot-stable AND carry at least one evidence record."""
+    lock = compatibility_mod.load_lock(stack_id)
+    assert lock.get("status") == "pilot-stable"
+    assert lock.get("evidence"), f"{stack_id}: pilot-stable stack must have evidence"
 
 
 @pytest.mark.parametrize("stack_id", NEW_STACK_IDS)
@@ -311,6 +328,24 @@ def test_runner_script_filenames_match_manifest(stack_id):
 # Recommended sets — every new stack must be registered in components-catalog
 # so the cart compatibility checker can suggest the right marriage.
 # ---------------------------------------------------------------------------
+
+def test_catalog_lint_gate_is_clean():
+    """The scripts/catalog_lint.py CI gate must pass: every stack locked,
+    every docker stack in a recommended_set, and the candidate/pilot-stable
+    evidence contract upheld. This is the guard that stops the v0.6.2-class
+    catalog-hygiene gaps (unlocked stack, missing recommended_set) recurring."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "catalog_lint",
+        __import__("pathlib").Path(__file__).resolve().parent.parent
+        / "scripts" / "catalog_lint.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    problems = mod.check()
+    assert problems == [], "catalog_lint found violations:\n  " + "\n  ".join(problems)
+
 
 def test_recommended_sets_cover_all_new_stacks():
     sets_by_stack_id = {

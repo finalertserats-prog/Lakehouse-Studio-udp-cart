@@ -39,15 +39,17 @@ CANDIDATE_STACK_IDS = [
 # write_fragment dispatch — None for stacks with no renderer
 # ---------------------------------------------------------------------------
 
-def test_write_fragment_returns_none_for_stable_udp_stack(tmp_path: Path):
-    """udp-local-v0.2 is the stable stack — UDP's upstream compose ships
-    every service it needs, so no fragment is required. The runner
-    relies on the None return to skip overlay injection for stable
-    installs."""
-    result = scf.write_fragment("udp-local-v0.2", tmp_path, {})
-    assert result is None
-    # And critically: NO file should have been written.
-    assert not (tmp_path / scf.FRAGMENT_FILENAME).exists()
+def test_write_fragment_renders_multiformat_hms_for_udp_local(tmp_path: Path):
+    """udp-local-v0.2 is now a MULTI-FORMAT lakehouse: the v0.6.2 refactor
+    gives it a MySQL + HMS pair so a user who adds Delta/Hudi can register
+    delta_catalog / hudi_catalog against HMS (Iceberg keeps its REST catalog;
+    the HMS just goes unused for the pure-Iceberg case). So it now writes a
+    fragment rather than returning None."""
+    path = scf.write_fragment("udp-local-v0.2", tmp_path, {})
+    assert path is not None
+    assert path.exists()
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert set(doc["services"].keys()) == {"mysql-hms", "hive-metastore"}
 
 
 def test_write_fragment_returns_none_for_unknown_stack(tmp_path: Path):
@@ -148,19 +150,21 @@ def test_each_service_has_required_keys(stack_id: str, tmp_path: Path):
 # Stack-specific service-name expectations (regression guard)
 # ---------------------------------------------------------------------------
 
+# Exact rendered service set per stack. These mirror FRAGMENT_SERVICES — the
+# multi-format v0.6.2 refactor gives every StarRocks-bearing stack a MySQL + HMS
+# pair so users can register Delta/Hudi catalogs (Iceberg keeps its REST/Nessie
+# catalog; the HMS just goes unused for the Iceberg case).
 EXPECTED_SERVICES_PER_STACK = {
-    # 2026-05-17 bug fix: udp-trino-local-v0.1 needs a Trino service
-    # (UDP's upstream compose doesn't ship one).
-    "udp-trino-local-v0.1":              {"trino"},
-    # iceberg-nessie-trino: Nessie catalog + Trino query engine, both
-    # missing from the upstream compose file.
-    "iceberg-nessie-trino-local-v0.1":  {"nessie", "trino"},
-    # v0.6.2 refactor 2026-05-17: HMS backing is MySQL (not Postgres) —
-    # bitsondatadev/hive-metastore image is MySQL-only by design.
+    # udp-trino: Trino (upstream compose omits it) + the shared multi-format HMS.
+    "udp-trino-local-v0.1":              {"trino", "mysql-hms", "hive-metastore"},
+    # iceberg-nessie-trino: Nessie catalog + Trino, plus Airflow orchestration
+    # (postgres-airflow + airflow), Spark, and the multi-format HMS pair.
+    "iceberg-nessie-trino-local-v0.1":  {"nessie", "trino", "postgres-airflow",
+                                          "airflow", "spark", "mysql-hms",
+                                          "hive-metastore"},
+    # HMS backing is MySQL (bitsondatadev/hive-metastore is MySQL-only by design).
     "hudi-hms-spark-local-v0.1":        {"mysql-hms", "hive-metastore"},
-    # delta-hms-spark-trino: HMS pair + Trino, but Hudi uses ONLY the
-    # HMS pair (no Trino), so this stack gets its own renderer to avoid
-    # bleeding Trino into the Hudi install.
+    # delta: HMS pair + Trino.
     "delta-hms-spark-trino-local-v0.1": {"mysql-hms", "hive-metastore", "trino"},
     "iceberg-polaris-spark-local-v0.1": {"postgres-polaris", "polaris"},
 }
@@ -309,17 +313,17 @@ def test_polaris_fragment_uses_compose_interpolation_for_password(tmp_path: Path
 # Network name override via env
 # ---------------------------------------------------------------------------
 
-def test_default_network_has_no_external_or_name_override(tmp_path: Path):
-    """Per Codex P0 fix (2026-05-17): the fragment defines `default: {}`
-    (empty mapping) and lets `docker compose -f base -f fragment` merge
-    the networks naturally. Explicit `name:` or `external: true` here
-    would either (a) collide with the base's auto-named network or
-    (b) fail to find the not-yet-existent network.
+def test_default_network_is_not_external_and_is_install_specific(tmp_path: Path):
+    """The default network must never be `external: true` — that requires a
+    pre-created network and breaks fresh installs (Codex P0 2026-05-17).
 
-    LHS_DOCKER_NETWORK can still be set to influence the BASE compose
-    project name; that's the right knob, not a fragment-level override.
+    The v0.6.2 HMS refactor DOES pin an explicit network name via compose
+    interpolation (`${LHS_NET:-udp-net}`): a hyphenated name is required so a
+    container's reverse-DNS PTR is `<container>.<net>` with no underscore —
+    the default `<project>_default` breaks HMS self-resolution -> StarRocks
+    getAllDatabases. It stays install-specific (driven by LHS_NET) so
+    side-by-side installs don't share a network.
     """
-    # With env override — should NOT influence fragment networks block.
     path = scf.write_fragment(
         "iceberg-nessie-trino-local-v0.1",
         tmp_path,
@@ -329,11 +333,14 @@ def test_default_network_has_no_external_or_name_override(tmp_path: Path):
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     net = doc["networks"]["default"] or {}
     assert net.get("external") is not True
-    assert "name" not in net or not net.get("name"), (
-        "fragment must NOT pin a network name — would conflict with base compose merge"
-    )
+    # If a name is pinned it must be the LHS_NET-interpolated, install-specific
+    # value — never a hardcoded literal that could collide across installs.
+    name = net.get("name")
+    if name:
+        assert "LHS_NET" in name, (
+            f"network name must be install-specific via LHS_NET, got {name!r}"
+        )
 
-    # Without env override — same behavior.
     path2 = scf.write_fragment(
         "iceberg-nessie-trino-local-v0.1",
         tmp_path / "fresh",
@@ -400,22 +407,30 @@ def test_trino_service_absent_from_non_trino_stacks(stack_id: str, tmp_path: Pat
     )
 
 
-def test_udp_trino_fragment_is_trino_only(tmp_path: Path):
-    """udp-trino-local-v0.1 uses the upstream iceberg-rest catalog — its
-    fragment supplies ONLY the missing Trino service (no Nessie, no HMS)."""
+def test_udp_trino_fragment_supplies_trino_and_multiformat_hms(tmp_path: Path):
+    """udp-trino-local-v0.1 uses the upstream iceberg-rest catalog. Its
+    fragment supplies the missing Trino service plus the multi-format HMS
+    pair (mysql-hms + hive-metastore) so Delta/Hudi catalogs can be
+    registered against StarRocks — Iceberg itself keeps the REST catalog."""
     path = scf.write_fragment("udp-trino-local-v0.1", tmp_path, {})
     assert path is not None
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert set(doc["services"].keys()) == {"trino"}
+    assert set(doc["services"].keys()) == {"trino", "mysql-hms", "hive-metastore"}
 
 
 def test_nessie_fragment_includes_nessie_and_trino(tmp_path: Path):
-    """iceberg-nessie-trino-local-v0.1 needs BOTH services from its
-    fragment because UDP ships neither."""
+    """iceberg-nessie-trino-local-v0.1 supplies Nessie + Trino (UDP ships
+    neither), plus the multi-format HMS pair, Spark, and Airflow
+    orchestration per the v0.6.2 renderer."""
     path = scf.write_fragment("iceberg-nessie-trino-local-v0.1", tmp_path, {})
     assert path is not None
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert set(doc["services"].keys()) == {"nessie", "trino"}
+    services = set(doc["services"].keys())
+    # The two catalog/query services the stack is named for must be present.
+    assert {"nessie", "trino"}.issubset(services)
+    # Full rendered contract (matches FRAGMENT_SERVICES).
+    assert services == {"nessie", "trino", "postgres-airflow", "airflow",
+                        "spark", "mysql-hms", "hive-metastore"}
 
 
 def test_delta_fragment_includes_hms_pair_and_trino(tmp_path: Path):

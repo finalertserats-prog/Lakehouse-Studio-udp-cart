@@ -196,9 +196,11 @@ def _render_udp_trino_fragment(env: dict) -> str:
     -d minio iceberg-rest trino starrocks-fe starrocks-be create-bucket`
     — without this fragment that fails with `no such service: trino`.
 
-    Trino-only fragment (no Nessie, no HMS). The stack uses the upstream
-    iceberg-rest catalog, which the bootstrap wires via
-    /etc/trino/catalog/iceberg.properties after Trino starts.
+    The stack uses the upstream iceberg-rest catalog (wired by the bootstrap
+    via /etc/trino/catalog/iceberg.properties after Trino starts). Per the
+    v0.6.2 multi-format refactor it also gets the shared MySQL + HMS pair so a
+    user who adds Delta/Hudi can register those catalogs against StarRocks;
+    the HMS is unused for the pure-Iceberg case.
     """
     return (
         "# docker-compose.fragment.yml -- Trino service for "

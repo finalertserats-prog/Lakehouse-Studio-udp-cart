@@ -63,7 +63,18 @@ recommended_sets:
   production-lakehouse:
     name: Production Lakehouse
     stack_id: iceberg-nessie-trino-local-v0.1
-    components: [nessie, spark-iceberg, minio, trino, starrocks, airflow]
+    # Invariant: a recommended_set mirrors its certified lock's cart-facing
+    # marriage. The iceberg-nessie-trino-local-v0.1 lock is Nessie + Trino +
+    # StarRocks over Iceberg/MinIO (no Spark, no Airflow — those are optional
+    # add-ons surfaced via templates, not part of the certified marriage).
+    components: [iceberg, nessie, trino, minio, starrocks]
+
+  udp-trino:
+    name: UDP Trino Reference Stack
+    stack_id: udp-trino-local-v0.1
+    # Mirrors the udp-trino-local-v0.1 lock: Iceberg-REST + Trino + StarRocks
+    # over MinIO. Trino is the query engine (no Spark in this variant).
+    components: [iceberg, iceberg-rest, trino, minio, starrocks]
 
   startup-analytics:
     name: Startup Analytics
@@ -115,6 +126,15 @@ recommended_sets:
     name: Hudi Lakehouse
     stack_id: hudi-hms-spark-local-v0.1
     components: [hudi, hive-metastore, spark-hudi, minio]
+
+  # Iceberg + Polaris (RBAC + credential-vending catalog) on Spark. Mirrors the
+  # lock's cart-facing vocab: `iceberg` (format), `spark-iceberg` and `starrocks`
+  # aliases, plus polaris/minio. postgres-polaris is the internal Polaris backing
+  # (like mysql-hms for the HMS stacks) so it's omitted from the cart surface.
+  iceberg-polaris:
+    name: Iceberg + Polaris Lakehouse
+    stack_id: iceberg-polaris-spark-local-v0.1
+    components: [iceberg, polaris, spark-iceberg, minio, starrocks]
 
   # ── Legacy alias (kept so older references don't break).
   udp-recommended:

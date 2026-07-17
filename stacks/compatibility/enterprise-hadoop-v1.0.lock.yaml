@@ -1,0 +1,218 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK
+# =====================================
+# Enterprise Hadoop Datalake — single-host Docker replica of the techsophy.com
+# Enterprise On-Prem Datalake (HDFS + YARN + Hive/Tez + Spark/Hudi + StarRocks
+# + Trino + Ranger + Airflow + observability).
+#
+# This is a DOCKER lock — image tags are pinned below. Versions and layout
+# mirror the 2026-05-21 live-cluster scan (see stacks/enterprise-hadoop-v1.0.yaml).
+#
+# STATUS: candidate. No end-to-end install evidence has been captured in
+# Studio yet, so per the certification contract (status: candidate iff
+# evidence is empty) this ships as candidate. The first passing
+# install -> bootstrap -> smoke run captured under evidence[] flips this to
+# pilot-stable in the same commit, with a bump to version_id + certified_at.
+
+schema_version: "1.0"
+stack_id: enterprise-hadoop-v1.0
+version_id: "1.0.0"
+certified_at: "2026-07-17T00:00:00+05:30"
+certified_on:
+  deployment: "single-host Docker (docker-compose)"
+  cluster_type: "local-docker"
+status: "candidate"
+
+status_notes: |
+  candidate: image tags are pinned and mirror the live techsophy cluster
+  scan, but no end-to-end install has been captured as evidence in Studio.
+  Do not advertise as pilot-stable until an evidence[] record exists.
+
+# ---------------------------------------------------------------------------
+# Component versions — image tags pinned to the enterprise-hadoop-v1.0 stack.
+# `ehd-*` images are Studio-built from stacks/enterprise-hadoop/docker/*.
+# ---------------------------------------------------------------------------
+components:
+  - id: hdfs
+    name: Apache HDFS (NameNode + DataNodes)
+    role: storage
+    image: ehd-hadoop
+    tag: "3.4.1"
+    notes: |
+      Studio-built from stacks/enterprise-hadoop/docker/hadoop. NameNode RPC
+      9820, UI 9871 (HTTPS_ONLY). 3 DataNodes, replication factor 3.
+
+  - id: hadoop-yarn
+    name: Apache YARN (ResourceManager + NodeManagers)
+    role: compute
+    image: ehd-hadoop
+    tag: "3.4.1"
+    notes: |
+      Shares the ehd-hadoop image. RM web UI 8090, MR History 19890.
+
+  - id: postgresql
+    name: PostgreSQL
+    role: metadata_store
+    image: postgres
+    tag: "14-alpine"
+    notes: |
+      Single instance, three logical DBs: metastore (Hive HMS), ranger
+      (Ranger policy store), airflow (Airflow metadata). Direct 5432.
+
+  - id: pgbouncer
+    name: PgBouncer
+    role: connection_pooling
+    image: edoburu/pgbouncer
+    tag: "v1.23.1-p3"
+    notes: "Connection pool fronting the HMS database on 6432."
+
+  - id: hive-metastore-hadoop
+    name: Hive Metastore + HiveServer2
+    role: catalog
+    image: ehd-hive
+    tag: "4.0.1-ranger"
+    notes: |
+      Studio-built (Hive 4.0.1 + Ranger plugin). Thrift 9083, JDBC 10000,
+      web UI 10002. Tez execution engine.
+
+  - id: tez
+    name: Apache Tez
+    role: processing
+    image: ""
+    tag: "0.10.4"
+    notes: |
+      DAG execution engine for Hive — no standalone image; the tarball is
+      prefetched (scripts/lhs-prefetch.sh) and staged into HDFS.
+
+  - id: hudi-v1
+    name: Apache Hudi
+    role: table_format
+    image: ""
+    tag: "1.0.1"
+    notes: "Hudi 1.0.1 Spark bundle — no standalone image; JAR prefetched."
+
+  - id: spark-hadoop
+    name: Apache Spark (on YARN)
+    role: processing
+    image: apache/spark
+    tag: "3.4.4-scala2.12-java11-python3-ubuntu"
+    notes: "spark.master=yarn. Uses the hudi-spark3.4 bundle JAR."
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    image: starrocks/fe-ubuntu
+    tag: "4.0.0-rc01"
+    notes: "MySQL protocol 9030, HTTP 8030, RPC 9020. Hive catalog -> HMS 9083."
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    image: starrocks/be-ubuntu
+    tag: "4.0.0-rc01"
+    notes: "FE and BE must match the same 4.0.0-rc01 build exactly."
+
+  - id: trino-enterprise
+    name: Trino Coordinator
+    role: federated_sql
+    image: trinodb/trino
+    tag: "480"
+    notes: "Host 28080 -> container 8080. Catalogs: hive, hudi, starrocks."
+
+  - id: airflow
+    name: Apache Airflow
+    role: orchestration
+    image: apache/airflow
+    tag: "2.10.5"
+    notes: "Celery executor + RabbitMQ broker. Host 28081 -> container 8080."
+
+  - id: prometheus
+    name: Prometheus
+    role: observability
+    image: prom/prometheus
+    tag: "v3.4.1"
+    notes: "Host 29090. Scrapes cluster exporters."
+
+  - id: grafana
+    name: Grafana
+    role: observability
+    image: grafana/grafana
+    tag: "12.0.1"
+    notes: "Host 23000. Datasources: Prometheus + Loki."
+
+  - id: loki
+    name: Grafana Loki
+    role: observability
+    image: grafana/loki
+    tag: "3.0.0"
+    notes: "Host 23100. Promtail ships container logs."
+
+  - id: ranger
+    name: Apache Ranger Admin
+    role: security
+    image: ehd-ranger-admin
+    tag: "3.0.0-SNAPSHOT"
+    notes: |
+      Studio-built. HTTP 6080, HTTPS 6182. Plugins: HDFS, Hive, YARN, Trino.
+      Audit store: Apache Solr. Policy store: PostgreSQL 14 (ranger db).
+
+  - id: solr
+    name: Apache Solr (Ranger Audit)
+    role: audit
+    image: solr
+    tag: "8.11.4"
+    notes: "Backs Ranger audit. Admin UI 8983."
+
+# ---------------------------------------------------------------------------
+# Compatibility constraints — known inter-service dependencies.
+# ---------------------------------------------------------------------------
+constraints:
+  - between: [spark-hadoop, hudi-v1]
+    rule: "Spark 3.4.x must use the hudi-spark3.4 bundle JAR — not spark3.5 or generic"
+    verified: "aligned with the live techsophy cluster; unverified in Docker"
+
+  - between: [hive-metastore-hadoop, tez]
+    rule: "Hive 4.0.1 requires Tez 0.10.x; 0.10.4 is the pinned version"
+    verified: "matches hive-site.xml execution engine config"
+
+  - between: [starrocks-fe, starrocks-be]
+    rule: "FE and BE must match the same 4.0.0-rc01 build exactly"
+    verified: "both pinned to 4.0.0-rc01"
+
+  - between: [ranger, trino-enterprise]
+    rule: "Trino 480 uses the Ranger 3.0 plugin — do not upgrade either independently"
+    verified: "aligned with live cluster (Trino 479/480 + Ranger 3.0)"
+
+  - between: [hive-metastore-hadoop, postgresql]
+    rule: "Hive Metastore 4.0.1 requires PostgreSQL 14+ as its backend"
+    verified: "HMS points at the postgres:14 metastore database"
+
+  - between: [ranger, solr]
+    rule: "Ranger 3.0 audit sink requires a reachable Solr collection"
+    verified: "Solr 8.11.4 provisioned for the ranger_audits collection"
+
+# ---------------------------------------------------------------------------
+# Host requirements — mirror stacks/enterprise-hadoop-v1.0.yaml requirements.
+# ---------------------------------------------------------------------------
+host_requirements:
+  docker_min: "24.0"
+  os_verified:
+    - "Linux (Ubuntu 22.04)"
+  ram_min_gb: 20
+  ram_recommended_gb: 48
+  disk_min_gb: 60
+  disk_recommended_gb: 120
+  network: "Single host — all services on the internal compose network."
+
+# ---------------------------------------------------------------------------
+# Evidence — EMPTY until the first passing install/bootstrap/smoke run.
+# Appending the first record must flip status -> pilot-stable in the same commit.
+# ---------------------------------------------------------------------------
+evidence: []
+
+# ---------------------------------------------------------------------------
+# Known issues / do-not-change notes.
+# ---------------------------------------------------------------------------
+incompatible:
+  - combination: ["StarRocks 4.0.0-rc01 in production"]
+    reason: "rc01 is a release candidate — mirrors the live cluster but is not a GA build."
+    workaround: "Acceptable for parity with the live scan; pin GA before any production promotion."
