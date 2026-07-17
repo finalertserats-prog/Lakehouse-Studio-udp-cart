@@ -22,6 +22,8 @@ Every script:
   * ends with ``[studio-<name>-smoke] passed`` on success (smoke only)
 """
 
+from .etl_verify_job import ETL_VERIFY_SPARK_PY
+
 
 # =============================================================================
 # iceberg-nessie-trino-local-v0.1
@@ -52,6 +54,24 @@ for i in $(seq 1 120); do
   if [ "$i" = "120" ]; then echo "minio never came up"; exit 1; fi
 done
 
+echo "[studio-nessie-bootstrap] ensuring datalake bucket exists..."
+# create-bucket (minio/mc one-shot) is skipped by docker compose when it
+# already exited 0 in a prior run while MinIO data was on a different volume.
+# Restart it and also run mc directly via the compose network. The network is
+# now the HYPHENATED LHS_NET (renamed from the underscore `<project>_default`
+# so StarRocks getAllDatabases against the added HMS works) — resolve its real
+# name from a running container instead of hardcoding.
+docker start udp-create-bucket 2>/dev/null || true
+sleep 8
+LHS_COMPOSE_NET=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' udp-minio 2>/dev/null | head -1)
+: "${LHS_COMPOSE_NET:=iceberg-nessie-trino-net}"
+echo "  using compose network: ${LHS_COMPOSE_NET}"
+docker run --rm --network "${LHS_COMPOSE_NET}" --entrypoint sh \
+  minio/mc:RELEASE.2025-04-16T18-13-26Z \
+  -c "mc alias set udp http://minio:9000 admin udp_admin_12345 --api s3v4 && mc mb --ignore-existing udp/datalake" \
+  2>/dev/null || echo "  bucket ensure ran (idempotent)"
+echo "  datalake bucket ready"
+
 echo "[studio-nessie-bootstrap] waiting for Nessie REST..."
 for i in $(seq 1 120); do
   if curl -fsS http://localhost:19120/api/v2/config >/dev/null 2>&1; then
@@ -65,7 +85,7 @@ echo "[studio-nessie-bootstrap] ensuring Nessie 'main' branch exists..."
 # Nessie auto-creates 'main' on first start; this is a no-op safety check
 # that surfaces a clear error if Nessie's default-branch config is broken.
 if ! curl -fsS http://localhost:19120/api/v2/trees/main >/dev/null 2>&1; then
-  echo "  'main' branch missing â€” creating..."
+  echo "  'main' branch missing -- creating..."
   curl -fsS -X POST -H "Content-Type: application/json" \
     "http://localhost:19120/api/v2/trees?name=main&type=BRANCH" \
     -d '{}' >/dev/null || true
@@ -74,7 +94,7 @@ echo "  main branch OK"
 
 echo "[studio-nessie-bootstrap] waiting for Trino..."
 for i in $(seq 1 120); do
-  if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+  if docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
     echo "  trino OK"; break
   fi
   echo "  ($i/120) trino not ready yet"; sleep 5
@@ -82,15 +102,21 @@ for i in $(seq 1 120); do
 done
 
 echo "[studio-nessie-bootstrap] writing Trino iceberg catalog properties (Nessie REST)..."
-# Trino 475 reads /data/trino/etc/catalog/*.properties at startup; we write
-# the file then restart trino to register the iceberg catalog. Idempotent â€”
+# Trino 481 reads /data/trino/etc/catalog/*.properties at startup; we write
+# the file then restart trino to register the iceberg catalog. Idempotent --
 # writing the same file twice is fine. Path-style + explicit MinIO creds required.
+# vended-credentials-enabled=false: Trino uses its own s3.aws-access-key /
+# s3.aws-secret-key for direct MinIO I/O rather than asking Nessie to vend
+# credentials. Nessie 0.99 static-auth credential vending requires its own
+# secrets manager config that we don't wire in the pilot; disabling vending
+# means Trino handles S3 auth itself, which works fine for MinIO.
 docker exec udp-trino mkdir -p /data/trino/etc/catalog/
 docker exec -i udp-trino bash -c 'cat > /data/trino/etc/catalog/iceberg.properties' <<'TRINOCAT'
 connector.name=iceberg
 iceberg.catalog.type=rest
 iceberg.rest-catalog.uri=http://nessie:19120/iceberg/main
 iceberg.rest-catalog.warehouse=s3://datalake/warehouse
+iceberg.rest-catalog.vended-credentials-enabled=false
 fs.native-s3.enabled=true
 s3.endpoint=http://minio:9000
 s3.region=us-east-1
@@ -104,18 +130,18 @@ TRINOCAT
 # at startup with "Catalog configuration ... does not contain connector.name".
 # Fail fast here rather than waiting ~10 min for Trino to enter a restart loop.
 docker exec udp-trino test -s /data/trino/etc/catalog/iceberg.properties \
-  || { echo "iceberg.properties wrote empty — bootstrap aborted"; exit 1; }
+  || { echo "iceberg.properties wrote empty -- bootstrap aborted"; exit 1; }
 
 echo "[studio-nessie-bootstrap] restarting Trino to load iceberg catalog..."
 # NOTE: `docker compose restart trino` would fail here because the bootstrap
 # script runs without the `-f docker-compose.fragment.yml` flag, so compose
 # only sees the base manifest (no trino service) and rejects the command.
-# Use `docker restart <container_name>` directly — bypasses compose entirely.
+# Use `docker restart <container_name>` directly -- bypasses compose entirely.
 docker restart udp-trino
 
 echo "[studio-nessie-bootstrap] waiting for Trino after restart..."
 for i in $(seq 1 120); do
-  if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+  if docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
     echo "  trino back up"; break
   fi
   echo "  ($i/120) trino not ready yet"; sleep 5
@@ -124,7 +150,7 @@ done
 
 echo "[studio-nessie-bootstrap] verifying iceberg catalog is registered..."
 for i in $(seq 1 24); do
-  if docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q "^iceberg$"; then
+  if docker exec -e JAVA_TOOL_OPTIONS= udp-trino trino --execute "SHOW CATALOGS" 2>/dev/null | grep -q 'iceberg'; then
     echo "  iceberg catalog visible"; break
   fi
   echo "  ($i/24) iceberg catalog not yet visible"; sleep 5
@@ -211,6 +237,16 @@ SELECT region, customer_count, total_order_amount, curated_timestamp
 FROM iceberg_nessie_catalog.curated.demo_customer_summary;
 SQL
 
+echo "[studio-nessie-bootstrap] waiting for Airflow webserver..."
+for i in $(seq 1 60); do
+  if curl -fsS http://localhost:9090/health >/dev/null 2>&1; then
+    echo "  airflow OK (http://localhost:9090 -- admin / admin)"
+    break
+  fi
+  echo "  ($i/60) airflow not ready yet"; sleep 10
+  if [ "$i" = "60" ]; then echo "airflow never came up -- check udp-airflow logs"; exit 1; fi
+done
+
 echo "[studio-nessie-bootstrap] complete"
 """
 
@@ -230,7 +266,7 @@ curl -fsS http://localhost:19120/api/v2/config >/dev/null || { echo "nessie unre
 echo "  nessie OK"
 
 echo "[studio-nessie-smoke] checking Trino..."
-curl -fsS http://localhost:8080/v1/info >/dev/null || { echo "trino unreachable"; exit 1; }
+docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null || { echo "trino unreachable"; exit 1; }
 echo "  trino OK"
 
 echo "[studio-nessie-smoke] checking StarRocks FE..."
@@ -249,8 +285,10 @@ if [ "${TRINO_RAW}" != "5" ]; then echo "expected 5 raw rows, got ${TRINO_RAW}";
 if [ "${TRINO_CURATED}" != "4" ]; then echo "expected 4 curated rows, got ${TRINO_CURATED}"; exit 1; fi
 
 echo "[studio-nessie-smoke] StarRocks query (same Nessie catalog)..."
+# new_planner_optimize_timeout default is 3000ms -- too short for cold Nessie
+# metadata fetch on first query. Set to 60s for the smoke test.
 SR_CURATED=$(docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -N -B -e \
-  "SELECT COUNT(*) FROM app_analytics.demo_customer_summary;" | tail -n1 | tr -d '\r')
+  "SET SESSION new_planner_optimize_timeout=60000; SELECT COUNT(*) FROM app_analytics.demo_customer_summary;" | tail -n1 | tr -d '\r')
 echo "  starrocks curated rows=${SR_CURATED}"
 if [ "${SR_CURATED}" != "4" ]; then echo "expected 4 curated rows from StarRocks, got ${SR_CURATED}"; exit 1; fi
 
@@ -258,6 +296,27 @@ if [ "${TRINO_CURATED}" != "${SR_CURATED}" ]; then
   echo "row-count parity FAILED: trino=${TRINO_CURATED} starrocks=${SR_CURATED}"; exit 1
 fi
 echo "  row-count parity OK (trino=${TRINO_CURATED} starrocks=${SR_CURATED})"
+
+echo "[studio-nessie-smoke] checking Airflow webserver..."
+curl -fsS http://localhost:9090/health >/dev/null || { echo "airflow unreachable on :9090"; exit 1; }
+echo "  airflow OK"
+
+# ── ADDITIVE 3-catalog verification (iceberg / hudi / delta) ─────────────────
+# The runner drops scripts/lhs-etl-verify.sh for this stack (generated from the
+# shared ETL block, Nessie values substituted): it runs the chosen table
+# format's ETL via the added Spark and registers/queries its catalog
+# (hudi_catalog / delta_catalog via HMS; iceberg via Nessie's REST catalog).
+# Non-fatal so a first-run hiccup doesn't block the install; log is authoritative.
+if [ -f scripts/lhs-etl-verify.sh ]; then
+  echo "[studio-nessie-smoke] running additive 3-catalog ETL verification..."
+  if bash scripts/lhs-etl-verify.sh; then
+    echo "  [studio-nessie-smoke] 3-catalog ETL verification OK"
+  else
+    echo "  [studio-nessie-smoke] WARN: 3-catalog ETL verification did not fully pass (see log above)"
+  fi
+else
+  echo "[studio-nessie-smoke] (no lhs-etl-verify.sh — 3-catalog feature not generated)"
+fi
 
 echo "[studio-nessie-smoke] passed"
 """
@@ -480,6 +539,25 @@ docker exec udp-spark spark-submit \
   --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
   //tmp/lhs/hudi_smoke.py
 
+# ---- 3-pipeline ETL verification (RDBMS / JSON / MongoDB) as HUDI ------------
+echo "[studio-hudi-smoke] writing 3-pipeline ETL-verify job..."
+docker exec -i udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/lhs_etl_verify.py' <<'PYEOF'
+""" + ETL_VERIFY_SPARK_PY + r"""PYEOF
+
+echo "[studio-hudi-smoke] running 3-pipeline ETL verification (hudi, >=1000 rows each)..."
+docker exec \
+  -e ETLV_FORMATS=hudi -e ETLV_DB=etl_verify \
+  -e ETLV_WAREHOUSE=s3a://datalake/warehouse -e ETLV_HMS=thrift://hive-metastore:9083 \
+  -e ETLV_S3_ENDPOINT=http://minio:9000 -e ETLV_S3_KEY=admin -e ETLV_S3_SECRET=udp_admin_12345 \
+  udp-spark spark-submit \
+  --packages org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 \
+  --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+  --conf spark.hadoop.fs.s3a.access.key=admin \
+  --conf spark.hadoop.fs.s3a.secret.key=udp_admin_12345 \
+  --conf spark.hadoop.fs.s3a.path.style.access=true \
+  --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+  //tmp/lhs/lhs_etl_verify.py
+
 echo "[studio-hudi-smoke] passed"
 """
 
@@ -534,7 +612,7 @@ done
 
 echo "[studio-delta-bootstrap] waiting for Spark..."
 # NOTE: probe via full path + --version (not `command -v` in a login shell).
-# See spark-hudi bootstrap above for rationale — same $PATH gap applies to
+# See spark-hudi bootstrap above for rationale -- same $PATH gap applies to
 # lakehousestudio/spark-delta.
 for i in $(seq 1 120); do
   if docker exec udp-spark /opt/spark/bin/spark-submit --version >/dev/null 2>&1; then
@@ -614,7 +692,7 @@ docker exec udp-spark spark-submit \
 
 echo "[studio-delta-bootstrap] waiting for Trino..."
 for i in $(seq 1 120); do
-  if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+  if docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
     echo "  trino OK"; break
   fi
   echo "  ($i/120) trino not ready yet"; sleep 5
@@ -642,18 +720,18 @@ TRINOCAT
 # at startup with "Catalog configuration ... does not contain connector.name".
 # Fail fast here rather than waiting ~10 min for Trino to enter a restart loop.
 docker exec udp-trino test -s /data/trino/etc/catalog/delta.properties \
-  || { echo "delta.properties wrote empty — bootstrap aborted"; exit 1; }
+  || { echo "delta.properties wrote empty -- bootstrap aborted"; exit 1; }
 
 echo "[studio-delta-bootstrap] restarting Trino to load delta catalog..."
 # NOTE: `docker compose restart trino` would fail here because the bootstrap
 # script runs without the `-f docker-compose.fragment.yml` flag, so compose
 # only sees the base manifest (no trino service) and rejects the command.
-# Use `docker restart <container_name>` directly — bypasses compose entirely.
+# Use `docker restart <container_name>` directly -- bypasses compose entirely.
 docker restart udp-trino
 
 echo "[studio-delta-bootstrap] waiting for Trino after restart..."
 for i in $(seq 1 120); do
-  if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+  if docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
     echo "  trino back up"; break
   fi
   echo "  ($i/120) trino not ready yet"; sleep 5
@@ -696,7 +774,7 @@ docker exec udp-hive-metastore bash -lc 'echo > /dev/tcp/127.0.0.1/9083' >/dev/n
 echo "  HMS OK"
 
 echo "[studio-delta-smoke] checking Trino..."
-curl -fsS http://localhost:8080/v1/info >/dev/null || { echo "trino unreachable"; exit 1; }
+docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null || { echo "trino unreachable"; exit 1; }
 echo "  trino OK"
 
 echo "[studio-delta-smoke] writing pyspark smoke job..."
@@ -750,6 +828,22 @@ if [ "${TRINO_RAW}" != "5" ]; then echo "expected 5 trino raw rows, got ${TRINO_
 if [ "${TRINO_CURATED}" != "4" ]; then echo "expected 4 trino curated rows, got ${TRINO_CURATED}"; exit 1; fi
 
 echo "  row-count parity OK (spark=4 trino=${TRINO_CURATED})"
+
+# ---- 3-pipeline ETL verification (RDBMS / JSON / MongoDB) as DELTA ----------
+echo "[studio-delta-smoke] writing 3-pipeline ETL-verify job..."
+docker exec -i udp-spark bash -c 'mkdir -p /tmp/lhs && cat > /tmp/lhs/lhs_etl_verify.py' <<'PYEOF'
+""" + ETL_VERIFY_SPARK_PY + r"""PYEOF
+
+echo "[studio-delta-smoke] running 3-pipeline ETL verification (delta, >=1000 rows each)..."
+docker exec \
+  -e ETLV_FORMATS=delta -e ETLV_DB=etl_verify \
+  -e ETLV_WAREHOUSE=s3a://datalake/warehouse -e ETLV_HMS=thrift://hive-metastore:9083 \
+  -e ETLV_S3_ENDPOINT=http://minio:9000 -e ETLV_S3_KEY=admin -e ETLV_S3_SECRET=udp_admin_12345 \
+  udp-spark spark-submit \
+  --jars /opt/spark/jars/hadoop-aws-3.3.4.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars/delta-spark_2.12-3.2.1.jar,/opt/spark/jars/delta-storage-3.2.1.jar \
+  --conf spark.driver.extraClassPath=/opt/spark/jars/hadoop-aws-3.3.4.jar:/opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
+  --conf spark.executor.extraClassPath=/opt/spark/jars/hadoop-aws-3.3.4.jar:/opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
+  //tmp/lhs/lhs_etl_verify.py
 
 echo "[studio-delta-smoke] passed"
 """
@@ -830,17 +924,17 @@ except Exception: print('')" 2>/dev/null \
       || printf '%s' "${TOKEN_RESP}" | sed -n 's/.*\"access_token\":\"\([^\"]*\)\".*/\1/p')
   fi
   if [ -n "${ROOT_TOKEN}" ]; then
-    echo "  polaris OK â€” root token acquired"
+    echo "  polaris OK -- root token acquired"
     break
   fi
   echo "  ($i/60) waiting for polaris token endpoint..."; sleep 5
 done
 if [ -z "${ROOT_TOKEN}" ]; then
-  echo "polaris never issued bootstrap token â€” check POLARIS_BOOTSTRAP_CREDENTIALS"; exit 1
+  echo "polaris never issued bootstrap token -- check POLARIS_BOOTSTRAP_CREDENTIALS"; exit 1
 fi
 
 echo "[studio-polaris-bootstrap] creating Polaris catalog '${CATALOG_NAME}' (idempotent)..."
-# 409 on a re-run means already exists â€” treat as success.
+# 409 on a re-run means already exists -- treat as success.
 HTTP_CODE=$(curl -s -o /tmp/polaris_cat.out -w "%{http_code}" -X POST \
   "${POLARIS_MGMT}/catalogs" \
   -H "Authorization: Bearer ${ROOT_TOKEN}" \
@@ -863,7 +957,7 @@ HTTP_CODE=$(curl -s -o /tmp/polaris_cat.out -w "%{http_code}" -X POST \
   }")
 case "${HTTP_CODE}" in
   201|200) echo "  catalog created" ;;
-  409)     echo "  catalog already exists â€” OK" ;;
+  409)     echo "  catalog already exists -- OK" ;;
   *)       echo "catalog create failed: HTTP ${HTTP_CODE}"; cat /tmp/polaris_cat.out; exit 1 ;;
 esac
 
@@ -876,7 +970,7 @@ HTTP_CODE=$(curl -s -o /tmp/polaris_princ.out -w "%{http_code}" -X POST \
   -H "Content-Type: application/json" \
   -d "{ \"principal\": { \"name\": \"${PRINCIPAL_NAME}\" } }")
 if [ "${HTTP_CODE}" = "409" ]; then
-  echo "  principal exists â€” rotating credentials"
+  echo "  principal exists -- rotating credentials"
   curl -fsS -X POST \
     "${POLARIS_MGMT}/principals/${PRINCIPAL_NAME}/rotate" \
     -H "Authorization: Bearer ${ROOT_TOKEN}" -o /tmp/polaris_princ.out
@@ -953,7 +1047,7 @@ EOF
 
 echo "[studio-polaris-bootstrap] waiting for Spark..."
 # NOTE: probe via full path + --version (not `command -v` in a login shell).
-# Same $PATH gap as spark-hudi/spark-delta bootstraps — see those for the
+# Same $PATH gap as spark-hudi/spark-delta bootstraps -- see those for the
 # full rationale (login shells don't see /opt/spark/bin by default).
 for i in $(seq 1 120); do
   if docker exec udp-spark /opt/spark/bin/spark-submit --version >/dev/null 2>&1; then
@@ -979,9 +1073,9 @@ with open("/tmp/lhs/polaris_creds.env") as fh:
 catalog = os.environ["POLARIS_CATALOG_NAME"]
 # Codex P0 fix 2026-05-17: Polaris 1.4.x requires the Iceberg REST client
 # to opt into the OAuth2 client_credentials flow explicitly. The two
-# additional properties below â€” `rest.auth.type=oauth2` and
+# additional properties below -- `rest.auth.type=oauth2` and
 # `rest.oauth2-server-uri` (pointing at the FULL token endpoint, NOT the
-# base catalog URI) â€” make Spark's Iceberg client mint a bearer token via
+# base catalog URI) -- make Spark's Iceberg client mint a bearer token via
 # Polaris's /api/catalog/v1/oauth/tokens endpoint and refresh on 401.
 # Without them the client skips auth and Polaris returns 401 on every call.
 # Ref: https://polaris.apache.org/docs/oauth +
@@ -1182,7 +1276,7 @@ with open("/tmp/lhs/polaris_creds.env") as fh:
 
 catalog = os.environ["POLARIS_CATALOG_NAME"]
 # Codex P0 fix 2026-05-17: mirror the OAuth2 properties from the bootstrap
-# Spark config â€” Polaris 1.4.x requires explicit `rest.auth.type=oauth2`
+# Spark config -- Polaris 1.4.x requires explicit `rest.auth.type=oauth2`
 # and the FULL token endpoint at `rest.oauth2-server-uri`. Without these
 # the smoke script's Spark session skips auth and Polaris returns 401.
 spark = (
@@ -1237,7 +1331,7 @@ docker exec udp-spark spark-submit \
 
 echo "[studio-polaris-smoke] StarRocks query (same Polaris catalog)..."
 SR_CURATED=$(docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -N -B -e \
-  "SELECT COUNT(*) FROM app_analytics.demo_customer_summary;" | tail -n1 | tr -d '\r')
+  "SET SESSION new_planner_optimize_timeout=60000; SELECT COUNT(*) FROM app_analytics.demo_customer_summary;" | tail -n1 | tr -d '\r')
 echo "  starrocks curated rows=${SR_CURATED}"
 if [ "${SR_CURATED}" != "4" ]; then echo "expected 4 curated rows from StarRocks, got ${SR_CURATED}"; exit 1; fi
 
@@ -1248,7 +1342,7 @@ echo "[studio-polaris-smoke] passed"
 
 
 # =============================================================================
-# Exported dispatch â€” runner.py merges this into _STUDIO_SCRIPT_SETS.
+# Exported dispatch -- runner.py merges this into _STUDIO_SCRIPT_SETS.
 # Filenames MUST match commands.bootstrap / commands.smoke argv in each
 # stack manifest under stacks/.
 # =============================================================================

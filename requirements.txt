@@ -5,9 +5,12 @@ pyyaml==6.0.2
 psutil==6.1.0
 jinja2==3.1.4
 python-multipart==0.0.20
+cryptography>=42.0.0
 psycopg[binary]==3.3.4
 pymysql==1.1.1
 anthropic>=0.40.0
 click==8.3.3
 rich==13.9.4
 typing_extensions>=4.12.0  # NotRequired backport for py3.10 compat (Finalert VPS)
+litellm>=1.52.0
+python-dotenv>=1.0.1

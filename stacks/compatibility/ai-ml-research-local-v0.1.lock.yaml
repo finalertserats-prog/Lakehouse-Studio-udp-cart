@@ -1,0 +1,140 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK
+# =====================================
+# AI / ML Research = the udp-trino-local-v0.1 runtime (MinIO + Iceberg REST +
+# Spark + Trino + StarRocks) with JupyterLab layered on for notebooks. The
+# lakehouse core is pinned to the SAME tags as the udp stacks; JupyterLab is
+# the only NEW surface, so the stack as a whole is `candidate` until a full
+# bootstrap+smoke run is captured below.
+
+schema_version: "1.0"
+stack_id: ai-ml-research-local-v0.1
+version_id: "0.1.0"
+certified_at: "2026-07-08T15:45:00+05:30"
+certified_by: gundimedamanaskiran@gmail.com
+certified_on:
+  os: "Windows 11 + Docker Desktop"
+  docker: "29.5.2"
+  docker_compose: "v2"
+status: "candidate"
+
+status_notes: |
+  candidate: the lakehouse core (MinIO + Iceberg REST + Spark + Trino +
+  StarRocks) is byte-identical to the udp reference stacks and inherits their
+  dual-S3-property bootstrap fix and PR #55416 StarRocks requirement. Spark
+  already runs in udp-trino (as an extra service); here it is a declared
+  component so the cart is honest. JupyterLab 3.5 (jupyter/all-spark-notebook)
+  is added via backend/stack_compose_fragments.py on host port 8889. Neither
+  Jupyter nor the Spark+Trino+Jupyter combination has an end-to-end evidence
+  run yet — flip to pilot-stable only after a fresh install reaches READY with
+  the Jupyter health check green and a notebook reading an Iceberg table.
+
+components:
+  - id: minio
+    name: MinIO
+    role: object_storage
+    image: minio/minio
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+    registry_url: https://hub.docker.com/r/minio/minio/tags
+    upstream_url: https://github.com/minio/minio
+    notes: Inherited from udp reference stacks.
+
+  - id: minio-client
+    name: MinIO Client (mc)
+    role: object_storage_bootstrap
+    image: minio/mc
+    tag: "RELEASE.2025-04-16T18-13-26Z"
+    registry_url: https://hub.docker.com/r/minio/mc/tags
+    upstream_url: https://github.com/minio/mc
+    notes: One-shot bucket init. Inherited.
+
+  - id: iceberg-rest
+    name: Iceberg REST Catalog
+    role: catalog
+    image: tabulario/iceberg-rest
+    tag: "1.6.0"
+    registry_url: https://hub.docker.com/r/tabulario/iceberg-rest/tags
+    upstream_url: https://github.com/apache/iceberg
+    notes: Inherited. Shared warehouse read by Spark, Trino, StarRocks and Jupyter.
+
+  - id: spark
+    name: Apache Spark + Iceberg
+    role: processing
+    image: tabulario/spark-iceberg
+    tag: "3.5.5_1.8.1"
+    registry_url: https://hub.docker.com/r/tabulario/spark-iceberg/tags
+    upstream_url: https://iceberg.apache.org/spark-quickstart
+    notes: Inherited. DO NOT bump to 3.5.1_1.5.2 (removed upstream).
+
+  - id: trino
+    name: Trino
+    role: processing
+    image: trinodb/trino
+    tag: "481"
+    registry_url: https://hub.docker.com/r/trinodb/trino/tags
+    upstream_url: https://github.com/trinodb/trino
+    notes: Inherited from udp-trino-local-v0.1. RAM-hungry — see host_requirements.
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    image: starrocks/fe-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/fe-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: Inherited. Requires PR #55416 (>= 3.3.12).
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    image: starrocks/be-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/be-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: Same version as FE. Inherited.
+
+  - id: jupyter
+    name: JupyterLab (PySpark + Iceberg)
+    role: ai_ml_notebook
+    image: jupyter/all-spark-notebook
+    tag: "spark-3.5.0"
+    registry_url: https://hub.docker.com/r/jupyter/all-spark-notebook/tags
+    upstream_url: https://github.com/jupyter/docker-stacks
+    notes: |
+      NEW surface for this stack. PySpark 3.5 pre-installed; token auth
+      (JUPYTER_TOKEN). Host port 8889 -> container 8888 to avoid colliding
+      with the base Spark notebook on 8888. AWS creds point at MinIO so
+      s3a:// reads work; operator points Spark at iceberg-rest for Iceberg.
+      No end-to-end evidence yet.
+
+constraints:
+  - between: [jupyter, spark]
+    rule: "jupyter/all-spark-notebook bundles PySpark 3.5.x — must match the Spark 3.5 line the iceberg-rest catalog + tables were written with"
+    verified: "spark image is 3.5.5; jupyter image is spark-3.5.0 — same 3.5 minor line"
+
+  - between: [jupyter, spark]
+    rule: "Jupyter host port must NOT collide with the base Spark notebook (8888). Jupyter maps 8889:8888"
+    verified: "manifest + fragment both pin jupyter to host 8889"
+
+host_requirements:
+  docker_min: "28.0"
+  docker_compose_min: "v2.30"
+  bash_min: "5.0"
+  os_verified:
+    - "Windows 11 + Docker Desktop (core inherited; Jupyter pending evidence)"
+  os_unverified_but_likely_works:
+    - "Ubuntu 22.04+"
+    - "macOS + Docker Desktop"
+  # Spark + Trino JVMs + StarRocks + Jupyter — the heaviest local stack.
+  ram_min_gb: 16
+  ram_recommended_gb: 24
+  disk_min_gb: 60
+  ports_required: [9000, 9001, 8181, 8888, 8080, 8030, 9030, 8889]
+
+# Append the first end-to-end run here, then flip status to pilot-stable.
+evidence: []
+
+incompatible:
+  - combination: [spark:3.5.1_1.5.2]
+    reason: "Tag removed from Docker Hub after UDP shipped — fresh install fails at compose up."
+    discovered: "2026-05-16"
+    workaround: "Use 3.5.5_1.8.1 (current certified)."

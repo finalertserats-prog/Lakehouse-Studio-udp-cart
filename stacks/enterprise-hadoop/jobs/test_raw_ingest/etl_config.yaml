@@ -1,0 +1,30 @@
+# Test raw-ingest pipeline config
+# Mirrors production pattern (gayatri2datalake S3 + biometric postgres)
+# HDFS/Spark point to local Docker stack — production server IPs not used.
+#
+# Stage 1 (01_s3_to_hdfs.py):  S3 staging → local HDFS  (read-only on S3, no ACK deletes)
+# Stage 2 (02_ingest_to_hudi.py): local HDFS CSV → Hudi CoW via spark-submit in ehd-spark
+
+table_names: biometric_table   # comma-separated, or * for all
+file_type: csv
+
+aws:
+  access_key_id: YOUR_AWS_ACCESS_KEY_ID
+  secret_access_key: YOUR_AWS_SECRET_ACCESS_KEY
+  region_name: ap-south-2
+  bucket_name: gayatri2datalake
+  # Read from the production staging path (read-only — we never write/delete here)
+  csv_s3_path: pms/dl_staging/techsophy/biometric/postgres/csvs/
+  yaml_s3_path: pms/dl_staging/techsophy/biometric/postgres/yamls/
+
+hdfs:
+  # Local Docker HDFS — WebHDFS REST endpoint
+  url: http://namenode:9870
+  user: hadoop
+  csv_path: /techsophy/raw/test/biometric/csvs/
+  yaml_path: /techsophy/raw/test/biometric/yamls/
+
+hudi:
+  hdfs_uri: hdfs://namenode:9820
+  warehouse_dir: /tmp/hive/warehouse
+  yarn_hostname: resourcemanager

@@ -80,7 +80,9 @@ async def _check_docker_daemon() -> dict:
 async def _check_container_running(container: str) -> dict:
     t0 = time.monotonic()
     rc, out, err = await _run(
-        ["docker", "inspect", "-f", "{{.State.Status}} {{.State.Health.Status}}", container], timeout=10
+        ["docker", "inspect", "-f",
+         "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}",
+         container], timeout=10
     )
     dt = int((time.monotonic() - t0) * 1000)
     if rc != 0:
@@ -102,7 +104,7 @@ async def _check_container_running(container: str) -> dict:
 async def _check_iceberg_rest() -> dict:
     t0 = time.monotonic()
     rc, out, err = await _run(
-        ["docker", "exec", "-i", "udp-iceberg-rest", "wget", "-qO-", "http://localhost:8181/v1/config"],
+        ["curl", "-sf", "--max-time", "8", "http://localhost:8181/v1/config"],
         timeout=10,
     )
     dt = int((time.monotonic() - t0) * 1000)

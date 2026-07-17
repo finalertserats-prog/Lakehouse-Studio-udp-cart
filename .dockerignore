@@ -1,0 +1,15 @@
+# Exclude large/unreadable directories from the Docker build context.
+# The custom Spark Dockerfiles only ADD jars from Maven Central URLs —
+# they don't COPY any local files — so only the Dockerfiles themselves
+# need to be in the context.
+work/
+evidence/
+stacks/
+frontend/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+.git/
+node_modules/
+*.log

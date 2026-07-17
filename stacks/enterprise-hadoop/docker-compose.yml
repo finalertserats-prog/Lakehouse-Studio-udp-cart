@@ -1,0 +1,674 @@
+version: "3.8"
+
+# Enterprise On-Prem Datalake — Lakehouse Studio single-host replica
+# Mirrors the live techsophy.com cluster (sdpdevnn01 / sdpdevstg01 / sdpdevdn01 / sdpdevafw01)
+# as of the 2026-05-21 scan. Versions and port numbers below are the ones found on the
+# production hosts; host-side port mappings preserve live numbers wherever a single host
+# allows it (host:8080 is held by Trino since live stg01 binds 8080; Airflow externally
+# shifts to 8081 to avoid the collision on a single Docker host).
+#
+# Container prefix: ehd-
+# Pinned versions (verified live):
+#   Hadoop 3.4.1, Hive 4.0.1 + Tez 0.10.4, Spark 3.4.4 + Hudi 1.0.1,
+#   PostgreSQL 14 + PgBouncer v1.23.1-p3, StarRocks 4.0.0-rc01, Trino 480,
+#   Ranger 3.0.0-SNAPSHOT (built from Apache master), Solr 8.11.4,
+#   Airflow 2.10.5, Prometheus 3.4.1, Grafana 12.0.1, Loki 3.0.0, Promtail 3.0.0
+#
+# NOTE: Custom Hadoop/Hive/Ranger images are built on first `docker compose up --build`.
+#       Run scripts/lhs-prefetch.sh first to cache Tez/Hudi JARs.
+
+networks:
+  ehd-net:
+    driver: bridge
+    name: ehd-net
+
+volumes:
+  ehd_namenode_data:
+  ehd_datanode_data:
+  ehd_postgres_data:
+  ehd_starrocks_fe_meta:
+  ehd_starrocks_be_storage:
+  ehd_hive_warehouse:
+  ehd_prometheus_data:
+  ehd_grafana_data:
+  ehd_loki_data:
+  ehd_solr_data:
+  ehd_ranger_data:
+
+services:
+
+  # ─── HDFS NameNode (Hadoop 3.4.1) ─────────────────────────────────────────
+
+  namenode:
+    build:
+      context: ./docker/hadoop
+      dockerfile: Dockerfile
+    image: ehd-hadoop:3.4.1
+    container_name: ehd-namenode
+    restart: unless-stopped
+    env_file:
+      - ./hadoop.env
+    environment:
+      HADOOP_ROLE: namenode
+      HDFS_CONF_dfs_namenode_name_dir: "file:///hadoop/dfs/name"
+    ports:
+      - "${EHD_NAMENODE_RPC_PORT:-9820}:9820"    # NameNode RPC (live: sdpdevnn01:9820)
+      - "${EHD_NAMENODE_UI_PORT:-9870}:9870"    # NameNode HTTP UI (docker stack uses HTTP_ONLY; live uses HTTPS_ONLY on 9871)
+    volumes:
+      - ehd_namenode_data:/hadoop/dfs/name
+      - ./jars/tez/:/opt/tez/:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9870/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - ehd-net
+
+  # ─── HDFS DataNode (Hadoop 3.4.1) ─────────────────────────────────────────
+
+  datanode:
+    image: ehd-hadoop:3.4.1
+    container_name: ehd-datanode
+    restart: unless-stopped
+    env_file:
+      - ./hadoop.env
+    environment:
+      HADOOP_ROLE: datanode
+      HDFS_CONF_dfs_datanode_data_dir: "file:///hadoop/dfs/data"
+    depends_on:
+      namenode:
+        condition: service_started
+    ports:
+      - "${EHD_DATANODE_DATA_PORT:-9866}:9866"   # DataNode data transfer (live: sdpdevdn01:9866)
+      - "${EHD_DATANODE_IPC_PORT:-9867}:9867"   # DataNode IPC (live: sdpdevdn01:9867)
+      - "${EHD_DATANODE_UI_PORT:-9864}:9864"   # DataNode HTTP UI (docker uses HTTP_ONLY; live uses HTTPS on 9865)
+    volumes:
+      - ehd_datanode_data:/hadoop/dfs/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9864/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - ehd-net
+
+  # ─── YARN ResourceManager (Hadoop 3.4.1) ──────────────────────────────────
+
+  resourcemanager:
+    image: ehd-hadoop:3.4.1
+    container_name: ehd-resourcemanager
+    restart: unless-stopped
+    env_file:
+      - ./hadoop.env
+    environment:
+      HADOOP_ROLE: resourcemanager
+    depends_on:
+      namenode:
+        condition: service_started
+    ports:
+      - "${EHD_YARN_RM_UI_PORT:-8088}:8088"   # YARN ResourceManager Web UI (default port; live uses custom 8090)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/ws/v1/cluster/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - ehd-net
+
+  # ─── YARN NodeManager (Hadoop 3.4.1) ──────────────────────────────────────
+
+  nodemanager:
+    image: ehd-hadoop:3.4.1
+    container_name: ehd-nodemanager
+    restart: unless-stopped
+    env_file:
+      - ./hadoop.env
+    environment:
+      HADOOP_ROLE: nodemanager
+    depends_on:
+      resourcemanager:
+        condition: service_started
+    ports:
+      - "${EHD_YARN_NM_UI_PORT:-8042}:8042"   # NodeManager Web UI (default port; live uses custom 8044)
+    volumes:
+      - ./jars/tez/:/opt/tez/:ro
+    networks:
+      - ehd-net
+
+  # ─── MapReduce History Server (Hadoop 3.4.1) ──────────────────────────────
+
+  historyserver:
+    image: ehd-hadoop:3.4.1
+    container_name: ehd-historyserver
+    restart: unless-stopped
+    env_file:
+      - ./hadoop.env
+    environment:
+      HADOOP_ROLE: historyserver
+    depends_on:
+      resourcemanager:
+        condition: service_started
+    ports:
+      - "${EHD_MR_HISTORY_UI_PORT:-19888}:19888"  # MR History Server Web UI (default port; live uses 19890)
+      - "${EHD_MR_HISTORY_IPC_PORT:-10020}:10020"  # MR History IPC
+    networks:
+      - ehd-net
+
+  # ─── PostgreSQL + PgBouncer ────────────────────────────────────────────────
+
+  postgres:
+    # Live: PostgreSQL 14 (apt) on stg01 backs Hive Metastore + Ranger;
+    # PostgreSQL 14 on afw01 backs Airflow. Docker collapses both to one instance
+    # with three databases (metastore, ranger, airflow) provisioned by init.sql.
+    image: postgres:14-alpine
+    container_name: ehd-postgres
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ROOT_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+    ports:
+      # Host 5432 is commonly held by an OS-installed PostgreSQL. Map docker
+      # postgres to host 5433 so the install works out of the box; internal
+      # docker-network clients still reach it as postgres:5432.
+      - "${EHD_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - ehd_postgres_data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - ehd-net
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p3
+    container_name: ehd-pgbouncer
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      DATABASE_URL: "postgres://${HMS_DB_USER:-hive}:${HMS_DB_PASSWORD:-hive}@postgres:5432/${HMS_DB_NAME:-metastore}"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "100"
+      DEFAULT_POOL_SIZE: "20"
+    volumes:
+      - ./config/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./config/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    ports:
+      - "${EHD_PGBOUNCER_PORT:-6432}:6432"    # PgBouncer → Hive Metastore DB
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "hive"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - ehd-net
+
+  # ─── Hive Metastore (Hive 4.0.1 + Tez 0.10.4 + Ranger Hive plugin) ───────
+
+  hive-metastore:
+    build:
+      context: ./docker/hive
+      dockerfile: Dockerfile
+    image: ehd-hive:4.0.1-ranger
+    container_name: ehd-hive-metastore
+    restart: unless-stopped
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      namenode:
+        condition: service_started
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      IS_RESUME: "false"
+      HIVE_CUSTOM_CONF_DIR: /hive-custom-conf
+      HADOOP_CLASSPATH: "/opt/tez/*:/opt/tez/lib/*:/opt/hive/extra-lib/*"
+      # Hive Ranger plugin binaries are not bundled by default (Apache doesn't ship
+      # them). To enable enforcement, build from source via docker/ranger-build/
+      # and layer the plugin in, then flip this to "true".
+      RANGER_HIVE_PLUGIN_ENABLED: "false"
+      RANGER_ADMIN_URL: "http://ranger-admin:6080"
+      RANGER_HIVE_SERVICE_NAME: "ehd-hive"
+    volumes:
+      - ehd_hive_warehouse:/opt/hive/data/warehouse
+      - ./config/hive/hive-site.xml:/hive-custom-conf/hive-site.xml:ro
+      - ./config/hive/tez-site.xml:/hive-custom-conf/tez-site.xml:ro
+      - ./jars/postgresql-42.7.3.jar:/opt/hive/lib/postgresql-42.7.3.jar:ro
+      - ./jars/hudi/:/opt/hive/extra-lib/:ro
+      - ./jars/tez/:/opt/tez/:ro
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q '237B' /proc/net/tcp6 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    networks:
+      - ehd-net
+
+  # ─── HiveServer2 (Hive 4.0.1 + Ranger plugin) ─────────────────────────────
+
+  hiveserver2:
+    image: ehd-hive:4.0.1-ranger
+    container_name: ehd-hiveserver2
+    restart: unless-stopped
+    depends_on:
+      hive-metastore:
+        condition: service_started
+    environment:
+      SERVICE_NAME: hiveserver2
+      HIVE_SERVER2_THRIFT_PORT: "10000"
+      IS_RESUME: "true"
+      HIVE_CUSTOM_CONF_DIR: /hive-custom-conf
+      HADOOP_CLASSPATH: "/opt/tez/*:/opt/tez/lib/*:/opt/hive/extra-lib/*"
+      # Hive Ranger plugin binaries are not bundled by default (Apache doesn't ship
+      # them). To enable enforcement, build from source via docker/ranger-build/
+      # and layer the plugin in, then flip this to "true".
+      RANGER_HIVE_PLUGIN_ENABLED: "false"
+      RANGER_ADMIN_URL: "http://ranger-admin:6080"
+      RANGER_HIVE_SERVICE_NAME: "ehd-hive"
+    volumes:
+      - ./config/hive/hive-site.xml:/hive-custom-conf/hive-site.xml:ro
+      - ./config/hive/hiveserver2-site.xml:/hive-custom-conf/hiveserver2-site.xml:ro
+      - ./config/hive/tez-site.xml:/hive-custom-conf/tez-site.xml:ro
+      - ./jars/postgresql-42.7.3.jar:/opt/hive/lib/postgresql-42.7.3.jar:ro
+      - ./jars/hudi/:/opt/hive/extra-lib/:ro
+      - ./jars/tez/:/opt/tez/:ro
+    ports:
+      - "${EHD_HIVESERVER2_JDBC_PORT:-10000}:10000"  # HiveServer2 JDBC (live binds 127.0.0.1 only; docker exposes externally)
+      - "${EHD_HIVESERVER2_UI_PORT:-10002}:10002"  # HiveServer2 Web UI (live binds 127.0.0.1 only; docker exposes externally)
+    networks:
+      - ehd-net
+
+  # ─── Apache Spark 3.4.4 ───────────────────────────────────────────────────
+
+  spark:
+    image: apache/spark:3.4.4-scala2.12-java11-python3-ubuntu
+    container_name: ehd-spark
+    restart: unless-stopped
+    depends_on:
+      hive-metastore:
+        condition: service_started
+      namenode:
+        condition: service_started
+    environment:
+      SPARK_MODE: master
+      SPARK_NO_DAEMONIZE: "true"
+    command: tail -f /dev/null
+    volumes:
+      - ./config/spark/:/opt/spark/conf/:ro
+      - ./jobs/:/home/spark/jobs/
+      - ./jars/:/opt/spark/extra-jars/
+    networks:
+      - ehd-net
+
+  # ─── StarRocks 4.0.0 ──────────────────────────────────────────────────────
+
+  starrocks-fe:
+    image: starrocks/fe-ubuntu:4.0.0-rc01
+    container_name: ehd-starrocks-fe
+    restart: unless-stopped
+    command: >
+      bash -c "
+        echo 'priority_networks = 172.16.0.0/12' >> /opt/starrocks/fe/conf/fe.conf &&
+        echo 'default_replication_num = 1'             >> /opt/starrocks/fe/conf/fe.conf &&
+        echo 'enable_hms_catalog = true'               >> /opt/starrocks/fe/conf/fe.conf &&
+        echo 'enable_external_catalog = true'          >> /opt/starrocks/fe/conf/fe.conf &&
+        echo 'enable_hms_events_incremental_sync = true' >> /opt/starrocks/fe/conf/fe.conf &&
+        echo 'hive_metastore_timeout_s = 120'          >> /opt/starrocks/fe/conf/fe.conf &&
+        /opt/starrocks/fe/bin/start_fe.sh --host_type FQDN
+      "
+    ports:
+      - "${EHD_STARROCKS_FE_UI_PORT:-8030}:8030"   # StarRocks FE HTTP UI (live: sdpdevstg01:8030)
+      - "${EHD_STARROCKS_FE_EDIT_PORT:-9010}:9010"   # StarRocks FE edit log port
+      - "${EHD_STARROCKS_FE_RPC_PORT:-9020}:9020"   # StarRocks FE RPC (live: sdpdevstg01:9020)
+      - "${EHD_STARROCKS_FE_MYSQL_PORT:-9030}:9030"   # StarRocks FE MySQL port (live: sdpdevstg01:9030)
+    volumes:
+      - ehd_starrocks_fe_meta:/opt/starrocks/fe/meta
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -P 9030 -u root -e 'SELECT 1' >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 120s
+    networks:
+      - ehd-net
+
+  starrocks-be:
+    image: starrocks/be-ubuntu:4.0.0-rc01
+    container_name: ehd-starrocks-be
+    restart: unless-stopped
+    command: >
+      bash -c "
+        echo 'priority_networks = 172.16.0.0/12' >> /opt/starrocks/be/conf/be.conf &&
+        /opt/starrocks/be/bin/start_be.sh
+      "
+    depends_on:
+      starrocks-fe:
+        condition: service_started
+    ports:
+      - "${EHD_STARROCKS_BE_HEARTBEAT_PORT:-9050}:9050"   # BE heartbeat (live: 9050)
+      - "${EHD_STARROCKS_BE_THRIFT_PORT:-9060}:9060"   # BE thrift (live: 9060)
+      - "${EHD_STARROCKS_BE_WEB_PORT:-8050}:8050"   # BE web (live: 8050)
+      - "${EHD_STARROCKS_BE_BRPC_PORT:-8060}:8060"   # BE brpc (live: 8060)
+      - "${EHD_STARROCKS_BE_PORT:-9070}:9070"   # BE be_port (live: 9070)
+    volumes:
+      - ehd_starrocks_be_storage:/opt/starrocks/be/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8040/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    networks:
+      - ehd-net
+
+  # ─── Trino 480 ────────────────────────────────────────────────────────────
+
+  trino:
+    image: trinodb/trino:480
+    container_name: ehd-trino
+    restart: unless-stopped
+    depends_on:
+      hive-metastore:
+        condition: service_started
+    ports:
+      - "${EHD_TRINO_HTTP_PORT:-28080}:8080"   # Trino Coordinator Web UI (live: sdpdevstg01:8080)
+    volumes:
+      - ./config/trino/:/etc/trino/:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    networks:
+      - ehd-net
+
+  # ─── Apache Ranger + Solr — DISABLED by default ─────────────────────────
+  # Ranger Admin builds from Apache source via Maven (docker/ranger-build/) and
+  # needs ~4-6 GB of heap during the build. On smaller hosts the Maven build
+  # silently OOMs and Docker caches the broken layer, causing tarball-missing
+  # errors downstream. To keep the default install reliable on modest hardware,
+  # the Ranger + Solr services are commented out below.
+  #
+  # To enable: uncomment all three services (solr, ranger-admin, ranger-usersync)
+  # AND prune the buildkit cache first with:
+  #     docker builder prune -af
+  # to avoid reusing a broken cached Ranger build.
+  #
+  # solr:
+  #   image: solr:8.11.4
+  #   container_name: ehd-solr
+  #   ...
+  #
+  # ranger-admin:
+  #   build:
+  #     context: ./docker/ranger-build
+  #     dockerfile: Dockerfile
+  #     target: ranger-admin
+  #   image: ehd-ranger-admin:3.0.0-SNAPSHOT
+  #   ...
+  #
+  # ranger-usersync:
+  #   build:
+  #     context: ./docker/ranger-build
+  #     dockerfile: Dockerfile
+  #     target: ranger-usersync
+  #   image: ehd-ranger-usersync:3.0.0-SNAPSHOT
+  #   ...
+
+  # ─── Airflow 2.10.5 (Celery executor, matching live) ────────────────────
+  # Live: sdpdevafw01 runs Airflow 2.10.5 (pip-installed) with CeleryExecutor +
+  # RabbitMQ broker + PostgreSQL 14 metadata DB + many ForkPoolWorkers. Docker
+  # replica uses the same executor model. RabbitMQ is added as the broker service.
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: ehd-rabbitmq
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-airflow}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-airflow}
+    ports:
+      # AMQP is NOT published to the host — Airflow's Celery workers reach the
+      # broker over the compose network via `rabbitmq:5672` (service DNS, see
+      # AIRFLOW__CELERY__BROKER_URL below), so a host binding is unnecessary and
+      # only invites collisions on boxes already running RabbitMQ (5672 + the
+      # 25672 clustering port). Management UI stays published for debugging.
+      - "${EHD_RABBITMQ_MGMT_PORT:-25673}:15672"  # Management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - ehd-net
+
+  airflow-init:
+    image: apache/airflow:2.10.5
+    container_name: ehd-airflow-init
+    restart: "no"
+    # Run as root like the other airflow services (webserver/scheduler/worker):
+    # airflow-init bind-mounts ./config/airflow -> /opt/airflow and must create
+    # /opt/airflow/logs, which UID 50000 (the image default) can't write in the
+    # host-owned bind mount. Without this, `airflow db migrate` dies with
+    # PermissionError: '/opt/airflow/logs' and the whole `up` fails.
+    user: root
+    env_file:
+      - ./.env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:${POSTGRES_ROOT_PASSWORD:-postgres}@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: amqp://${RABBITMQ_USER:-airflow}:${RABBITMQ_PASSWORD:-airflow}@rabbitmq:5672/
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://postgres:${POSTGRES_ROOT_PASSWORD:-postgres}@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY}
+    # NON-BLOCKING: Airflow is orchestration only — it is NOT required by the
+    # core datalake (HDFS/Hive/Spark/StarRocks/Trino) or by the 3-catalog
+    # verification. A flaky `airflow db migrate` / `users create` must not fail
+    # the whole `docker compose up` and block the rest of the stack, so each
+    # step is tolerated and the container always exits 0. WARNs surface in the
+    # log if Airflow itself is degraded (diagnose separately via
+    # `docker logs ehd-airflow-init`).
+    command: >
+      bash -c "
+        airflow db migrate || echo 'WARN: airflow db migrate failed - Airflow degraded but non-fatal to the datalake and 3-catalog verification';
+        airflow users create --username admin --password ${AIRFLOW_ADMIN_PASSWORD:-admin} --firstname Admin --lastname User --role Admin --email admin@example.com || echo 'WARN: airflow users create failed (admin may already exist)';
+        echo 'Airflow init complete (non-blocking)';
+        exit 0
+      "
+    volumes:
+      - ./config/airflow/:/opt/airflow/:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ehd-net
+
+  airflow-webserver:
+    image: apache/airflow:2.10.5
+    container_name: ehd-airflow-webserver
+    restart: unless-stopped
+    user: root
+    env_file:
+      - ./.env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:${POSTGRES_ROOT_PASSWORD:-postgres}@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: amqp://${RABBITMQ_USER:-airflow}:${RABBITMQ_PASSWORD:-airflow}@rabbitmq:5672/
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://postgres:${POSTGRES_ROOT_PASSWORD:-postgres}@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY}
+    # Must wait for airflow-init to run `airflow db migrate` + create the admin
+    # user; otherwise the webserver crash-loops on "you need to initialize the
+    # database" and docker compose up exits 1.
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: airflow webserver
+    ports:
+      # Container binds 8080 internally (same as live). Host 8081 because Trino owns 8080.
+      - "${EHD_AIRFLOW_HTTP_PORT:-28081}:8080"
+    volumes:
+      - ./config/airflow/:/opt/airflow/:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - ehd-net
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.5
+    container_name: ehd-airflow-scheduler
+    restart: unless-stopped
+    user: root
+    env_file:
+      - ./.env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:${POSTGRES_ROOT_PASSWORD:-postgres}@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: amqp://${RABBITMQ_USER:-airflow}:${RABBITMQ_PASSWORD:-airflow}@rabbitmq:5672/
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://postgres:${POSTGRES_ROOT_PASSWORD:-postgres}@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY}
+    # Same DB-init dependency as the webserver — the scheduler also needs the
+    # migrated Airflow metadata DB before it can start.
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: airflow scheduler
+    volumes:
+      - ./config/airflow/:/opt/airflow/:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - ehd-net
+
+  airflow-worker:
+    image: apache/airflow:2.10.5
+    container_name: ehd-airflow-worker
+    restart: unless-stopped
+    user: root
+    env_file:
+      - ./.env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:${POSTGRES_ROOT_PASSWORD:-postgres}@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: amqp://${RABBITMQ_USER:-airflow}:${RABBITMQ_PASSWORD:-airflow}@rabbitmq:5672/
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://postgres:${POSTGRES_ROOT_PASSWORD:-postgres}@postgres/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY}
+    command: airflow celery worker
+    depends_on:
+      airflow-scheduler:
+        condition: service_started
+    volumes:
+      - ./config/airflow/:/opt/airflow/:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./jobs/:/opt/airflow/jobs/:ro
+    networks:
+      - ehd-net
+
+  # ─── Prometheus ────────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v3.4.1
+    container_name: ehd-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+    ports:
+      - "${EHD_PROMETHEUS_PORT:-29090}:9090"   # Prometheus Web UI (live: sdpdevnn01:9090 — installed, not running at scan time)
+    volumes:
+      - ./config/prometheus/:/etc/prometheus/:ro
+      - ehd_prometheus_data:/prometheus
+    networks:
+      - ehd-net
+
+  # ─── Grafana 12.0.1 ───────────────────────────────────────────────────────
+
+  grafana:
+    image: grafana/grafana:12.0.1
+    container_name: ehd-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+    env_file:
+      - ./.env
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${EHD_GRAFANA_PORT:-23000}:3000"   # Grafana Web UI (live: sdpdevnn01:3000 — installed, not running at scan time)
+    volumes:
+      - ehd_grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning/:/etc/grafana/provisioning/:ro
+    networks:
+      - ehd-net
+
+  # ─── Loki 3.0.0 ───────────────────────────────────────────────────────────
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: ehd-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yaml
+    ports:
+      - "${EHD_LOKI_PORT:-23100}:3100"   # Loki HTTP API (live: sdpdevnn01:3100 — installed, not running at scan time)
+    volumes:
+      - ./config/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - ehd_loki_data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ehd-net
+
+  # ─── Promtail 3.0.0 ───────────────────────────────────────────────────────
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: ehd-promtail
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_started
+    command: -config.file=/etc/promtail/promtail.yaml
+    volumes:
+      - ./config/promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - ehd-net

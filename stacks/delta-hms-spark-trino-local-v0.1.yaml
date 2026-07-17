@@ -16,7 +16,7 @@ version: "0.1"
 mode: docker-compose
 maturity: candidate
 description: >
-  CANDIDATE stack — Delta Lake tables registered in a Postgres-backed
+  CANDIDATE stack — Delta Lake tables registered in a MySQL-backed
   Hive Metastore, written by Spark, and queried via Trino's
   delta-lake connector. MinIO provides S3-compatible object storage.
   Aimed at teams already invested in the Databricks/Delta ecosystem
@@ -52,9 +52,9 @@ components:
   - id: mysql-hms
     name: MySQL 8 (Hive Metastore backing DB)
     category: metastore_db
-    # mysql:8.0 — see hudi-hms-spark-local-v0.1 for sizing rationale (MySQL backing per HMS image requirements)
-    # and version rationale (identical here).
-    version: "15-alpine"
+    # mysql:8.0 — see hudi-hms-spark-local-v0.1 for rationale (MySQL
+    # required by bitsondatadev HMS image's bundled JDBC driver).
+    version: "8.0"
     image: mysql:8.0
     service_name: mysql-hms
     ports: [3306]
@@ -85,8 +85,8 @@ components:
     # Delta 3.3+ requires Spark 3.5.3+. lakehousestudio/spark-delta is
     # Studio's own image because no community image bundles this combo
     # with the S3A + Hive bindings pre-wired.
-    version: 3.5.0_3.2.1
-    image: lakehousestudio/spark-delta:3.5.0_3.2.1
+    version: 3.5.5_3.3.2
+    image: lakehousestudio/spark-delta:3.5.5_3.3.2
     service_name: spark
     ports: [8888, 4040]
     resource_profiles:
@@ -98,11 +98,10 @@ components:
   - id: trino
     name: Trino
     category: serving
-    # Same Trino 475 pin as the other Trino-bearing Studio stacks.
-    # Trino's delta-lake connector reads Delta tables registered in
-    # Hive Metastore — no separate Delta REST endpoint exists.
-    version: "475"
-    image: trinodb/trino:475
+    # Trino 481 — bumped from 475 on 2026-05-27. Delta connector reads
+    # tables via HMS Thrift; no REST endpoint change involved in bump.
+    version: "481"
+    image: trinodb/trino:481
     service_name: trino
     ports: [8080]
     resource_profiles:
@@ -117,7 +116,7 @@ requirements:
   docker_compose: required
   bash: required
   # Floor = Trino 10 GB (recommended) + Spark 4 GB + HMS 1 GB +
-  # Postgres 1 GB + MinIO + OS headroom. Below 14 GB Trino planning
+  # MySQL 1 GB + MinIO + OS headroom. Below 14 GB Trino planning
   # OOMs on Delta scans of even small fact tables.
   minimum_ram_gb: 14
   recommended_ram_gb: 22
@@ -179,7 +178,10 @@ commands:
   start:
     type: docker_compose_up
     extra_services: [create-bucket]
-    timeout: 600
+    # 1800s, not 600s — cold image pulls (Spark+Delta + Trino + Hive
+    # Metastore + Postgres) routinely exceed 10 minutes on a non-trivial
+    # connection.
+    timeout: 1800
   bootstrap: { argv: ["bash", "scripts/lhs-delta-bootstrap.sh"], timeout: 900 }
   smoke:     { argv: ["bash", "scripts/lhs-delta-smoke.sh"],     timeout: 600 }
   status:    { argv: ["./udp", "status"],     timeout: 30 }
@@ -194,7 +196,7 @@ outputs:
     trino_ui:       { url: "http://{host}:8080", label: "Trino UI" }
   connections:
     hms_thrift:      "thrift://{host}:9083"
-    postgres_hms:    "psql -h {host} -p 5432 -U hive -d metastore"
+    mysql_hms:       "mysql -h {host} -P 3306 -u hive -p metastore"
     trino_cli:       "trino --server http://{host}:8080 --catalog delta"
 
 certification:

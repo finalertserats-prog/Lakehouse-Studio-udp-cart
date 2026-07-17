@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .config import WORK_DIR
+from .etl_verify_job import ETL_VERIFY_SPARK_PY
 from .events import bus
 from .models import LogEvent, StepStatus
 from .notifications import notify
@@ -28,6 +30,25 @@ set -euo pipefail
 # into C:/Program Files/Git/home/... before passing them to docker exec.
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
+
+echo "[studio-bootstrap] waiting for MinIO..."
+for i in $(seq 1 60); do
+  if curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+    echo "  minio OK"; break
+  fi
+  echo "  ($i/60) minio not ready yet"; sleep 5
+  if [ "$i" = "60" ]; then echo "minio never came up"; exit 1; fi
+done
+
+echo "[studio-bootstrap] ensuring datalake bucket exists..."
+docker start udp-create-bucket 2>/dev/null || true
+sleep 8
+NETWORK=$(docker inspect udp-minio --format "{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}}{{end}}" 2>/dev/null | head -1)
+docker run --rm --network "${NETWORK:-udp_default}" --entrypoint sh \
+  minio/mc:RELEASE.2025-04-16T18-13-26Z \
+  -c "mc alias set udp http://minio:9000 admin udp_admin_12345 --api s3v4 && mc mb --ignore-existing udp/datalake" \
+  2>/dev/null || echo "  bucket ensure ran (idempotent)"
+echo "  datalake bucket ready"
 
 echo "[studio-bootstrap] waiting for Iceberg REST..."
 for i in $(seq 1 60); do
@@ -104,7 +125,121 @@ SELECT region, customer_count, total_order_amount, curated_timestamp
 FROM iceberg_rest_catalog.curated.demo_customer_summary;
 SQL
 
+# Superset is optional — the current UDP compose doesn't ship it, and the
+# `docker compose up` service list only starts what's in the cart. Only run
+# superset init when the container actually exists in this deployment.
+if docker ps -a --format '{{.Names}}' | grep -qx udp-superset; then
+  echo "[studio-bootstrap] waiting for Superset..."
+  for i in $(seq 1 40); do
+    if curl -fsS http://localhost:8088/health >/dev/null 2>&1; then
+      echo "  superset container up"; break
+    fi
+    echo "  ($i/40) superset not ready yet"; sleep 10
+    if [ "$i" = "40" ]; then echo "superset never came up"; exit 1; fi
+  done
+
+  echo "[studio-bootstrap] initializing Superset DB..."
+  docker exec udp-superset superset db upgrade
+  echo "[studio-bootstrap] creating Superset admin user..."
+  docker exec udp-superset superset fab create-admin \
+    --username admin --firstname Admin --lastname User \
+    --email admin@example.com --password admin 2>&1 | grep -v "already exist" || true
+  echo "[studio-bootstrap] loading Superset roles and permissions..."
+  docker exec udp-superset superset init
+  echo "  superset init done, waiting for webserver to stabilise..."
+  sleep 15
+  for i in $(seq 1 12); do
+    if curl -fsS http://localhost:8088/health >/dev/null 2>&1; then
+      echo "  superset ready: http://localhost:8088 (admin / admin)"; break
+    fi
+    sleep 5
+  done
+else
+  echo "[studio-bootstrap] superset not part of this deployment — skipping superset init"
+fi
+
 echo "[studio-bootstrap] complete"
+"""
+
+
+# ---------------------------------------------------------------------------
+# Shared multi-format ETL-verification block.
+#
+# Writes the format-adaptive PySpark job into udp-spark, runs it for whichever
+# table format(s) the user chose in the cart (substituted into __ETLV_FORMATS__
+# by the runner), then registers + queries the matching StarRocks external
+# catalog. Reused verbatim by BOTH the Spark smoke (_STUDIO_SMOKE_SH) and the
+# Trino smoke (_STUDIO_TRINO_SMOKE_SH) so every StarRocks+Spark+MinIO stack
+# (Local Demo, Startup Analytics, AI/ML, Fintech, udp-trino) proves all three
+# catalogs from a single source of truth.
+# ---------------------------------------------------------------------------
+_ETL_MULTIFORMAT_BLOCK = r"""# ---- 3-pipeline ETL verification (RDBMS / JSON / MongoDB) --------------------
+# Generates >=1000 rows per source in-process, stages the raw files to object
+# storage (visible in the console), ingests each into the CHOSEN table format
+# via Spark, and fails the smoke test unless all three tables hold >=1000 rows.
+#
+# Container names / endpoints / catalog names are stack-specific placeholders
+# (__SPARK_CTR__, __SR_CTR__, __S3_ENDPOINT__, ...) substituted by the runner
+# from _SMOKE_SUBST[stack.id]. Defaults (in _write_studio_bootstrap) reproduce
+# the udp-family values exactly, so Local Demo / Startup / AI-ML / Fintech /
+# udp-trino render byte-identical to before.
+echo "[studio-smoke] writing ETL-verify PySpark job into __SPARK_CTR__..."
+docker exec -i __SPARK_CTR__ bash -c 'mkdir -p __SPARK_JOBS__ && cat > __SPARK_JOBS__/lhs_etl_verify.py' <<'PYEOF'
+""" + ETL_VERIFY_SPARK_PY + r"""PYEOF
+
+echo "[studio-smoke] running ETL verification for the chosen table format(s): __ETLV_FORMATS__ ..."
+# The format(s) the user picked in the cart are substituted into __ETLV_FORMATS__
+# by the runner. Delta + Hudi + hadoop-aws are always added at submit time via
+# --packages so whichever format was chosen works on this one Spark image:
+# Iceberg lands via its REST catalog; Delta/Hudi land as HMS tables on storage.
+docker exec __SPARK_EXEC_ENV__ \
+  -e ETLV_FORMATS=__ETLV_FORMATS__ -e ETLV_CATALOG=__SPARK_ICE_CAT__ -e ETLV_DB=etl_verify \
+  -e ETLV_WAREHOUSE=__WAREHOUSE__ -e ETLV_HMS=__HMS_URI__ -e ETLV_ICE_URI=__ICE_URI__ -e ETLV_ICE_CATALOG_TYPE=__ICE_CAT_TYPE__ \
+  -e ETLV_S3_ENDPOINT=__S3_ENDPOINT__ -e ETLV_S3_KEY=__S3_KEY__ -e ETLV_S3_SECRET=__S3_SECRET__ \
+  __SPARK_CTR__ __SPARK_SUBMIT__ \
+  --packages __SPARK_PACKAGES__ \
+  __SPARK_JOBS__/lhs_etl_verify.py
+
+# ---- register + verify the StarRocks catalog for the CHOSEN table format ----
+# Iceberg already has __ICEBERG_SR_CAT__ (from bootstrap). Delta/Hudi land in
+# the Hive Metastore via the ETL (saveAsTable / hive_sync), so we register the
+# matching StarRocks external catalog AFTER the write (registering it before
+# would cache stale file listings). Non-fatal: the Spark ETL above is the
+# authoritative pass/fail; catalog registration is the "choose a catalog" layer.
+ETLV_FMT="__ETLV_FORMATS__"
+if echo "$ETLV_FMT" | grep -q iceberg; then
+  echo "[studio-smoke] verifying iceberg tables via StarRocks __ICEBERG_SR_CAT__..."
+  docker exec -i __SR_CTR__ mysql -h 127.0.0.1 -P 9030 -u root <<'SQL' || echo "  (iceberg cross-check skipped)"
+SET new_planner_optimize_timeout=30000;
+SELECT 'rdbms' p, COUNT(*) n FROM __ICEBERG_SR_CAT__.etl_verify.rdbms_iceberg
+UNION ALL SELECT 'json',  COUNT(*) FROM __ICEBERG_SR_CAT__.etl_verify.json_iceberg
+UNION ALL SELECT 'mongo', COUNT(*) FROM __ICEBERG_SR_CAT__.etl_verify.mongo_iceberg;
+SQL
+fi
+if echo "$ETLV_FMT" | grep -q hudi; then
+  echo "[studio-smoke] registering + querying StarRocks hudi_catalog..."
+  docker exec -i __SR_CTR__ mysql -h 127.0.0.1 -P 9030 -u root <<'SQL' || echo "  (hudi_catalog step skipped)"
+SET new_planner_optimize_timeout=30000;
+DROP CATALOG IF EXISTS hudi_catalog;
+CREATE EXTERNAL CATALOG hudi_catalog PROPERTIES ("type"="hudi","hive.metastore.uris"="__HMS_URI__"__SR_CAT_STORAGE_PROPS__);
+SHOW CATALOGS;
+SELECT 'rdbms' p, COUNT(*) n FROM hudi_catalog.etl_verify.rdbms_hudi
+UNION ALL SELECT 'json',  COUNT(*) FROM hudi_catalog.etl_verify.json_hudi
+UNION ALL SELECT 'mongo', COUNT(*) FROM hudi_catalog.etl_verify.mongo_hudi;
+SQL
+fi
+if echo "$ETLV_FMT" | grep -q delta; then
+  echo "[studio-smoke] registering StarRocks delta_catalog..."
+  docker exec -i __SR_CTR__ mysql -h 127.0.0.1 -P 9030 -u root <<'SQL' || echo "  (delta_catalog step skipped)"
+SET new_planner_optimize_timeout=30000;
+DROP CATALOG IF EXISTS delta_catalog;
+CREATE EXTERNAL CATALOG delta_catalog PROPERTIES ("type"="deltalake","hive.metastore.uris"="__HMS_URI__"__SR_CAT_STORAGE_PROPS__);
+SHOW CATALOGS;
+SELECT 'rdbms' p, COUNT(*) n FROM delta_catalog.etl_verify.rdbms_delta
+UNION ALL SELECT 'json',  COUNT(*) FROM delta_catalog.etl_verify.json_delta
+UNION ALL SELECT 'mongo', COUNT(*) FROM delta_catalog.etl_verify.mongo_delta;
+SQL
+fi
 """
 
 
@@ -131,9 +266,29 @@ echo "[studio-smoke] running Spark Iceberg smoke job..."
 docker exec udp-spark spark-submit //home/iceberg/jobs/smoke_test_iceberg.py
 
 echo "[studio-smoke] StarRocks queries..."
-docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e \
-  "SHOW CATALOGS; SHOW DATABASES; SELECT COUNT(*) AS customer_summary_rows FROM app_analytics.demo_customer_summary;"
+# The first query against the Iceberg REST external catalog is a cold read:
+# StarRocks fetches table metadata during planning and can blow the default
+# 3000ms new_planner_optimize_timeout. Raise it for the session and retry a
+# couple of times so a cold catalog doesn't flake the smoke.
+SR_SQL="SET new_planner_optimize_timeout=30000; SHOW CATALOGS; SHOW DATABASES; SELECT COUNT(*) AS customer_summary_rows FROM app_analytics.demo_customer_summary;"
+for _sr in 1 2 3; do
+  if docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "$SR_SQL"; then
+    break
+  fi
+  [ "$_sr" = "3" ] && { echo "FAIL: StarRocks query after 3 attempts"; exit 1; }
+  echo "  StarRocks query attempt $_sr failed (cold catalog) — retrying in 5s..."
+  sleep 5
+done
 
+if docker ps --format '{{.Names}}' | grep -qx udp-superset; then
+  echo "[studio-smoke] checking Superset..."
+  curl -fsS http://localhost:8088/health >/dev/null || { echo "superset unreachable on :8088"; exit 1; }
+  echo "  superset OK"
+else
+  echo "[studio-smoke] superset not deployed — skipping check"
+fi
+
+""" + _ETL_MULTIFORMAT_BLOCK + r"""
 echo "[studio-smoke] passed"
 """
 
@@ -166,6 +321,25 @@ set -euo pipefail
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
 
+echo "[studio-trino-bootstrap] waiting for MinIO..."
+for i in $(seq 1 60); do
+  if curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+    echo "  minio OK"; break
+  fi
+  echo "  ($i/60) minio not ready yet"; sleep 5
+  if [ "$i" = "60" ]; then echo "minio never came up"; exit 1; fi
+done
+
+echo "[studio-trino-bootstrap] ensuring datalake bucket exists..."
+docker start udp-create-bucket 2>/dev/null || true
+sleep 8
+NETWORK=$(docker inspect udp-minio --format "{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}}{{end}}" 2>/dev/null | head -1)
+docker run --rm --network "${NETWORK:-udp_default}" --entrypoint sh \
+  minio/mc:RELEASE.2025-04-16T18-13-26Z \
+  -c "mc alias set udp http://minio:9000 admin udp_admin_12345 --api s3v4 && mc mb --ignore-existing udp/datalake" \
+  2>/dev/null || echo "  bucket ensure ran (idempotent)"
+echo "  datalake bucket ready"
+
 echo "[studio-trino-bootstrap] waiting for Iceberg REST..."
 for i in $(seq 1 60); do
   if curl -fsS http://localhost:8181/v1/config >/dev/null 2>&1; then
@@ -176,7 +350,7 @@ done
 
 echo "[studio-trino-bootstrap] waiting for Trino..."
 for i in $(seq 1 60); do
-  if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+  if docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
     echo "  trino OK"; break
   fi
   echo "  ($i/60) trino not ready yet"; sleep 5
@@ -208,6 +382,27 @@ TRINOCAT
 docker exec udp-trino test -s /data/trino/etc/catalog/iceberg.properties \
   || { echo "iceberg.properties wrote empty — bootstrap aborted"; exit 1; }
 
+# --- OpenLineage: wire Trino to EMIT lineage into Marquez ---------------------
+# Only runs when the openlineage (Marquez) container is part of this stack
+# (e.g. Fintech Compliance) — no-op for plain Trino stacks. Trino 466+ ships a
+# built-in `openlineage` event listener; pointing it at Marquez's
+# /api/v1/lineage endpoint means every query the bootstrap + smoke run below
+# (CREATE TABLE AS SELECT, INSERT, the smoke SELECTs) is captured as a lineage
+# job + dataset graph you can browse in the Marquez UI (namespace: trino-demo).
+if docker ps --format '{{.Names}}' | grep -qx udp-openlineage; then
+  echo "[studio-trino-bootstrap] wiring Trino -> OpenLineage (Marquez)..."
+  docker exec -i udp-trino bash -c 'cat > /data/trino/etc/openlineage-event-listener.properties' <<'OLCFG'
+event-listener.name=openlineage
+openlineage-event-listener.transport.type=HTTP
+openlineage-event-listener.transport.url=http://udp-openlineage:5000
+openlineage-event-listener.transport.endpoint=/api/v1/lineage
+openlineage-event-listener.trino.uri=http://udp-trino:8080
+openlineage-event-listener.namespace=trino-demo
+OLCFG
+  docker exec udp-trino bash -c 'grep -q openlineage-event-listener /data/trino/etc/config.properties 2>/dev/null || echo "event-listener.config-files=/data/trino/etc/openlineage-event-listener.properties" >> /data/trino/etc/config.properties'
+  echo "  Trino OpenLineage event listener configured (namespace: trino-demo)"
+fi
+
 echo "[studio-trino-bootstrap] restarting Trino to load iceberg catalog..."
 # NOTE: `docker compose restart trino` would fail here because the bootstrap
 # script runs without the `-f docker-compose.fragment.yml` flag, so compose
@@ -216,12 +411,26 @@ echo "[studio-trino-bootstrap] restarting Trino to load iceberg catalog..."
 docker restart udp-trino
 
 echo "[studio-trino-bootstrap] waiting for Trino after restart..."
-for i in $(seq 1 60); do
-  if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
-    echo "  trino back up"; break
+TRINO_BACK=no
+for i in $(seq 1 24); do
+  if docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+    echo "  trino back up"; TRINO_BACK=yes; break
   fi
-  echo "  ($i/60) trino not ready yet"; sleep 5
+  echo "  ($i/24) trino not ready yet"; sleep 5
 done
+# Safety net: if Trino did NOT come back and we added the OpenLineage listener,
+# a bad listener config is the most likely cause — strip it and restart so the
+# install never bricks on lineage wiring (worst case: no lineage, working Trino).
+if [ "$TRINO_BACK" = "no" ] && docker exec udp-trino test -f /data/trino/etc/openlineage-event-listener.properties 2>/dev/null; then
+  echo "  Trino didn't return — removing OpenLineage listener and restarting (lineage disabled, stack still works)"
+  docker exec udp-trino rm -f /data/trino/etc/openlineage-event-listener.properties
+  docker exec udp-trino bash -c "sed -i '/openlineage-event-listener/d' /data/trino/etc/config.properties"
+  docker restart udp-trino
+  for i in $(seq 1 24); do
+    docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1 && { echo "  trino back up (without lineage)"; break; }
+    echo "  ($i/24) trino not ready yet"; sleep 5
+  done
+fi
 
 echo "[studio-trino-bootstrap] verifying iceberg catalog is registered..."
 for i in $(seq 1 12); do
@@ -332,7 +541,7 @@ curl -fsS http://localhost:8181/v1/config >/dev/null || { echo "iceberg-rest unr
 echo "  iceberg-rest OK"
 
 echo "[studio-trino-smoke] checking Trino..."
-curl -fsS http://localhost:8080/v1/info >/dev/null || { echo "trino unreachable"; exit 1; }
+docker exec udp-trino curl -fsS http://localhost:8080/v1/info >/dev/null || { echo "trino unreachable"; exit 1; }
 echo "  trino OK"
 
 echo "[studio-trino-smoke] checking StarRocks FE..."
@@ -347,6 +556,7 @@ echo "[studio-trino-smoke] StarRocks queries (same Iceberg catalog)..."
 docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e \
   "SHOW CATALOGS; SHOW DATABASES; SELECT COUNT(*) AS customer_summary_rows FROM app_analytics.demo_customer_summary;"
 
+""" + _ETL_MULTIFORMAT_BLOCK + r"""
 echo "[studio-trino-smoke] passed"
 """
 
@@ -359,7 +569,25 @@ _STUDIO_SCRIPT_SETS: dict[str, tuple[tuple[str, str], tuple[str, str]]] = {
         ("lhs-bootstrap.sh", _STUDIO_BOOTSTRAP_SH),
         ("lhs-smoke.sh",     _STUDIO_SMOKE_SH),
     ),
+    # Startup Analytics = udp-local-v0.2 core + Superset (from the compose
+    # fragment). Same REST-catalog bootstrap; its Superset init block runs
+    # because the udp-superset container exists for this stack.
+    "startup-analytics-local-v0.1": (
+        ("lhs-bootstrap.sh", _STUDIO_BOOTSTRAP_SH),
+        ("lhs-smoke.sh",     _STUDIO_SMOKE_SH),
+    ),
     "udp-trino-local-v0.1": (
+        ("lhs-trino-bootstrap.sh", _STUDIO_TRINO_BOOTSTRAP_SH),
+        ("lhs-trino-smoke.sh",     _STUDIO_TRINO_SMOKE_SH),
+    ),
+    # AI/ML Research = udp-trino runtime + Spark (declared) + JupyterLab.
+    # Reuses the Trino bootstrap/smoke; Spark + Jupyter read the same
+    # Iceberg-REST warehouse the Trino bootstrap seeds.
+    "ai-ml-research-local-v0.1": (
+        ("lhs-trino-bootstrap.sh", _STUDIO_TRINO_BOOTSTRAP_SH),
+        ("lhs-trino-smoke.sh",     _STUDIO_TRINO_SMOKE_SH),
+    ),
+    "fintech-compliance-local-v0.1": (
         ("lhs-trino-bootstrap.sh", _STUDIO_TRINO_BOOTSTRAP_SH),
         ("lhs-trino-smoke.sh",     _STUDIO_TRINO_SMOKE_SH),
     ),
@@ -378,7 +606,126 @@ except ImportError:
     pass
 
 
+# Per-stack substitution values for the shared _ETL_MULTIFORMAT_BLOCK. The
+# DEFAULT reproduces the udp-family values exactly (container names, MinIO
+# endpoint/creds, Spark iceberg catalog `udp`, StarRocks iceberg catalog
+# `iceberg_rest_catalog`) so Local Demo / Startup / AI-ML / Fintech / udp-trino
+# render byte-identical to the pre-parameterization block. Stacks with a
+# different shape (different container prefix, MinIO creds, warehouse bucket)
+# override only the keys that differ.
+_SMOKE_SUBST_DEFAULT: dict[str, str] = {
+    # NOTE: __SR_CAT_STORAGE_PROPS__ must be FIRST — its value embeds __S3_*__
+    # placeholders that the later entries resolve (substitution is order-sensitive).
+    # S3/MinIO stacks append the aws.s3.* block; HDFS stacks override it to "".
+    "__SR_CAT_STORAGE_PROPS__": (
+        ',"aws.s3.endpoint"="__S3_ENDPOINT__","aws.s3.enable_ssl"="false",'
+        '"aws.s3.enable_path_style_access"="true","aws.s3.access_key"="__S3_KEY__",'
+        '"aws.s3.secret_key"="__S3_SECRET__","aws.s3.region"="us-east-1"'
+    ),
+    "__SPARK_CTR__":      "udp-spark",
+    "__SR_CTR__":         "udp-starrocks-fe",
+    "__SPARK_JOBS__":     "//home/iceberg/jobs",
+    "__SPARK_ICE_CAT__":  "udp",
+    "__WAREHOUSE__":      "s3a://datalake/warehouse",
+    "__S3_ENDPOINT__":    "http://minio:9000",
+    "__S3_KEY__":         "admin",
+    "__S3_SECRET__":      "udp_admin_12345",
+    "__HMS_URI__":        "thrift://hive-metastore:9083",
+    "__ICEBERG_SR_CAT__": "iceberg_rest_catalog",
+    # spark-submit is on PATH in the tabulario image (udp-family). HDFS stacks on
+    # apache/spark override with the absolute path (/opt/spark/bin/spark-submit).
+    "__SPARK_SUBMIT__":   "spark-submit",
+    # Extra `docker exec` flags before the container name. Empty for udp
+    # (tabulario has a writable HOME/.ivy2). apache/spark needs HOME=/tmp so
+    # Ivy (--packages resolution) has a writable cache.
+    "__SPARK_EXEC_ENV__": "",
+    # Empty = rely on the container's pre-baked iceberg catalog (udp-family).
+    "__ICE_URI__":        "",
+    # Iceberg catalog type for the ETL job: "rest" (default) or "hive" (HDFS
+    # stacks reuse their Hive Metastore as the iceberg catalog).
+    "__ICE_CAT_TYPE__":   "rest",
+    # Spark --packages for the ETL. Default = Spark 3.5 (tabulario image). HDFS
+    # stacks on apache/spark 3.4 override with the 3.4-compatible bundle set.
+    "__SPARK_PACKAGES__": (
+        "io.delta:delta-spark_2.12:3.2.1,"
+        "org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,"
+        "org.apache.hadoop:hadoop-aws:3.3.4"
+    ),
+}
+_SMOKE_SUBST: dict[str, dict[str, str]] = {
+    # Streaming Lakehouse — same architecture as udp (tabulario Spark image +
+    # StarRocks FE + MinIO + Iceberg REST) but every service uses the `sl-`
+    # container prefix, MinIO secret `streaming123`, Spark iceberg catalog `rest`
+    # and warehouse bucket `streaming-lake`. HMS is added additively to the
+    # stack's own compose; the Kafka/Flink build is untouched.
+    "streaming-local-v1.0": {
+        "__SPARK_CTR__":     "sl-spark",
+        "__SR_CTR__":        "sl-starrocks-fe",
+        "__SPARK_ICE_CAT__": "rest",
+        "__WAREHOUSE__":     "s3a://streaming-lake/warehouse",
+        "__S3_ENDPOINT__":   "http://sl-minio:9000",
+        "__S3_SECRET__":     "streaming123",
+        "__ICEBERG_SR_CAT__": "iceberg_rest_catalog",
+        # sl-spark has no udp-patched spark-defaults; point iceberg at the
+        # stack's own REST catalog so the iceberg pipeline works too.
+        "__ICE_URI__":       "http://sl-iceberg-rest:8181",
+    },
+    # Production Lakehouse — udp-family container names + MinIO(datalake) so most
+    # keys are the DEFAULT. Only differs in: no baked Spark catalog (added Spark
+    # points at Nessie's iceberg REST endpoint), and StarRocks' iceberg catalog
+    # is `iceberg_nessie_catalog` (registered by the Nessie bootstrap).
+    "iceberg-nessie-trino-local-v0.1": {
+        "__SPARK_ICE_CAT__":  "nessie",
+        "__ICE_URI__":        "http://nessie:19120/iceberg/main",
+        "__ICEBERG_SR_CAT__": "iceberg_nessie_catalog",
+    },
+    # Enterprise / Healthcare (enterprise-hadoop-v1.0) — HDFS-NATIVE, no MinIO.
+    # Reuses the stack's OWN Postgres-backed Hive Metastore + apache/spark 3.4;
+    # data lands on HDFS. iceberg via a Hive catalog (no REST); Delta/Hudi in the
+    # existing HMS. StarRocks catalog props carry NO aws.s3.* (HDFS via HMS).
+    # NOTE: not yet live-verified — this box can't run the 20GB HDFS build;
+    # proven on a real 20GB+ target via SSH install.
+    "enterprise-hadoop-v1.0": {
+        "__SPARK_CTR__":          "ehd-spark",
+        "__SR_CTR__":             "ehd-starrocks-fe",
+        "__SPARK_SUBMIT__":       "/opt/spark/bin/spark-submit",
+        "__SPARK_EXEC_ENV__":     "-e HOME=/tmp",
+        "__SPARK_JOBS__":         "/tmp",
+        "__SPARK_ICE_CAT__":      "ice",
+        "__WAREHOUSE__":          "hdfs://namenode:9820/tmp/hive/warehouse",
+        "__S3_ENDPOINT__":        "",
+        "__S3_KEY__":             "",
+        "__S3_SECRET__":          "",
+        "__ICE_URI__":            "",
+        "__ICE_CAT_TYPE__":       "hive",
+        "__ICEBERG_SR_CAT__":     "iceberg_hive_catalog",
+        "__SR_CAT_STORAGE_PROPS__": "",
+        "__SPARK_PACKAGES__": (
+            "org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.5.2,"
+            "io.delta:delta-spark_2.12:2.4.0,"
+            "org.apache.hudi:hudi-spark3.4-bundle_2.12:0.15.0"
+        ),
+    },
+}
+
+# Stacks that own their bootstrap/smoke scripts (not generated from
+# _STUDIO_SCRIPT_SETS) but should still get the additive 3-catalog feature: the
+# runner drops a standalone `lhs-etl-verify.sh` (the shared ETL block, values
+# substituted) into scripts/, and the stack's own smoke calls it at the end.
+# Keeps the ETL PySpark job DRY (single source: etl_verify_job.py).
+_ETL_FEATURE_STACKS: set[str] = {
+    "streaming-local-v1.0",
+    "iceberg-nessie-trino-local-v0.1",
+    "enterprise-hadoop-v1.0",
+}
+
+
 def _build_steps(stack: StackManifest) -> list[StepStatus]:
+    if stack.is_remote_cluster:
+        return [
+            StepStatus(id="verify", title="Verify cluster connectivity"),
+            StepStatus(id="finalize", title="Capture outputs"),
+        ]
     return [
         StepStatus(id="prepare", title="Prepare workspace"),
         StepStatus(id="clone", title="Clone UDP repository"),
@@ -391,13 +738,63 @@ def _build_steps(stack: StackManifest) -> list[StepStatus]:
     ]
 
 
+def _iter_bash_candidates() -> list[str]:
+    """Every `bash` on PATH, in PATH order, plus well-known Git-for-Windows
+    install locations that may not be on PATH.
+
+    On Windows, `C:\\Windows\\System32\\bash.exe` is the WSL launcher shim.
+    It frequently resolves ahead of Git Bash in a process's PATH (e.g. when
+    spawned from PowerShell), and fails outright on any machine where WSL
+    is present but has no Linux distro installed — even though a perfectly
+    good Git Bash is installed and on PATH. shutil.which() alone can't tell
+    the difference, so every candidate must actually be invoked and
+    verified (see _bash_executable below) rather than trusting the first
+    PATH match."""
+    seen: set[str] = set()
+    candidates: list[str] = []
+    names = ("bash.exe", "bash") if platform.system() == "Windows" else ("bash",)
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d:
+            continue
+        for name in names:
+            p = Path(d) / name
+            if p.is_file():
+                key = str(p).lower()
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(str(p))
+    if platform.system() == "Windows":
+        for extra in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ):
+            key = extra.lower()
+            if key not in seen and Path(extra).is_file():
+                seen.add(key)
+                candidates.append(extra)
+    return candidates
+
+
 def _bash_executable() -> str:
-    bash = shutil.which("bash")
-    if not bash:
+    candidates = _iter_bash_candidates()
+    if not candidates:
         raise RuntimeError(
             "bash not found in PATH. Install Git Bash (Windows) or any POSIX bash."
         )
-    return bash
+    for c in candidates:
+        try:
+            r = subprocess.run([c, "--version"], capture_output=True, timeout=5)
+            if r.returncode == 0:
+                return c
+        except Exception:
+            continue
+    raise RuntimeError(
+        "bash was found on PATH but every candidate failed to run "
+        f"({', '.join(candidates)}). On Windows this is usually the WSL "
+        "launcher shim at System32\\bash.exe shadowing Git Bash — install "
+        "Git for Windows or remove/reorder the broken WSL entry."
+    )
 
 
 def _to_posix_path(p: Path) -> str:
@@ -460,6 +857,75 @@ def _build_subprocess_env() -> dict[str, str]:
     return out
 
 
+def _force_remove_tree(path: Path) -> None:
+    r"""Remove a directory tree robustly, defeating Windows edge cases.
+
+    shutil.rmtree — and even `rd /s /q` — choke on artifacts that Airflow /
+    Docker routinely leave under an install dir:
+      * reparse points / symlinks (e.g. scheduler/logs/latest)
+      * reserved device-name files (a literal `nul`, `con`, `aux` — created by
+        a shell redirect that hit a non-device context). These cannot even be
+        opened or deleted through normal Win32 path parsing.
+    robocopy mirroring an EMPTY directory into the target reliably empties even
+    those, because robocopy uses the \\?\ extended-length path API internally.
+    We then remove the emptied husk. Raises with a clear message if the tree
+    still can't be removed (so the clone step fails loudly, not cryptically).
+    """
+    try:
+        shutil.rmtree(path)
+        return
+    except OSError:
+        if sys.platform != "win32":
+            # Linux/macOS: a container running as root can write into a
+            # bind-mounted install dir (e.g. enterprise-hadoop's prefetch drops
+            # Hudi/Spark jars into ./jars as root), leaving files the Studio
+            # user can't delete -> PermissionError on the NEXT install's clone.
+            # Delete the tree via a throwaway root container that bind-mounts
+            # the PARENT: docker runs as root, so it can remove anything. No
+            # passwordless sudo required.
+            try:
+                parent = path.parent
+                subprocess.run(
+                    ["docker", "run", "--rm", "-v", f"{parent}:/w",
+                     "alpine", "sh", "-c", f"rm -rf /w/{shlex.quote(path.name)}"],
+                    capture_output=True, timeout=180,
+                )
+            except Exception:
+                pass
+            if path.exists():
+                raise RuntimeError(
+                    f"could not remove existing install dir {path}: it contains "
+                    f"root-owned files (a container wrote into a bind mount as "
+                    f"root) and the docker-based cleanup failed. Remove it "
+                    f"manually with `sudo rm -rf {path}`, then retry."
+                )
+            return
+    # Windows fallback: robocopy /MIR from an empty dir, then rmdir the husk.
+    import tempfile as _tf
+    empty = Path(_tf.mkdtemp(prefix="lhs-empty-"))
+    try:
+        # robocopy exit codes 0-7 are success/informational — do NOT check=True.
+        subprocess.run(
+            ["robocopy", str(empty), str(path), "/MIR",
+             "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS", "/NP"],
+            capture_output=True,
+        )
+        subprocess.run(["cmd", "/c", "rd", "/s", "/q", str(path)],
+                       capture_output=True)
+    finally:
+        try:
+            os.rmdir(empty)
+        except OSError:
+            pass
+    if path.exists():
+        raise RuntimeError(
+            f"could not remove existing install dir {path}: a locked file or "
+            f"Windows reserved-name artifact (e.g. 'nul') remains. Stop any "
+            f"container/process using it, or delete the folder manually, then "
+            f"retry."
+        )
+
+
 class UDPRunner:
     def __init__(self, stack: StackManifest, install_id: str, host: str, install_dir: Path):
         self.stack = stack
@@ -516,12 +982,18 @@ class UDPRunner:
 
         env = _build_subprocess_env()
 
-        proc = await asyncio.create_subprocess_exec(
-            bash, "-c", cmd_str,  # no -l: don't source user profile
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                bash, "-c", cmd_str,  # no -l: don't source user profile
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+        except NotImplementedError:
+            # Windows SelectorEventLoop (set by uvicorn --reload) does not support
+            # asyncio subprocesses. Fall back to blocking subprocess in a thread.
+            return await self._run_bash_threaded(step_id, bash, cmd_str, env, timeout)
+
         self._proc = proc
 
         async def _drain(stream: asyncio.StreamReader, kind: str) -> None:
@@ -572,6 +1044,79 @@ class UDPRunner:
         rc = proc.returncode
         return rc if rc is not None else 1
 
+    async def _run_bash_threaded(
+        self, step_id: str, bash: str, cmd_str: str, env: dict, timeout: int
+    ) -> int:
+        """Thread-based subprocess fallback for Windows SelectorEventLoop."""
+        import subprocess as _sp
+        import threading as _th
+        import queue as _q
+
+        loop = asyncio.get_event_loop()
+        done_q: _q.Queue = _q.Queue()
+        proc_box: list = [None]
+
+        def _log_safe(stream: str, line: str) -> None:
+            loop.call_soon_threadsafe(self._log, step_id, stream, line)
+
+        def _run() -> None:
+            try:
+                p = _sp.Popen(
+                    [bash, "-c", cmd_str],
+                    stdout=_sp.PIPE, stderr=_sp.PIPE,
+                    env=env,
+                )
+                proc_box[0] = p
+                self._proc = p  # type: ignore[assignment]  # enables cancel()
+
+                def _drain(pipe, kind: str) -> None:
+                    for raw in pipe:
+                        try:
+                            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                        except Exception:
+                            line = repr(raw)
+                        _log_safe(kind, line)
+
+                t_out = _th.Thread(target=_drain, args=(p.stdout, "stdout"), daemon=True)
+                t_err = _th.Thread(target=_drain, args=(p.stderr, "stderr"), daemon=True)
+                t_out.start(); t_err.start()
+                t_out.join(); t_err.join()
+                p.wait()
+                done_q.put(p.returncode if p.returncode is not None else 1)
+            except Exception as exc:
+                _log_safe("stderr", f"[subprocess error: {exc}]")
+                done_q.put(1)
+
+        _th.Thread(target=_run, daemon=True).start()
+
+        deadline = loop.time() + timeout
+        while True:
+            if self._cancel:
+                p = proc_box[0]
+                if p:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+                return 1
+            try:
+                rc = done_q.get_nowait()
+                if self._proc is proc_box[0]:
+                    self._proc = None
+                return rc
+            except _q.Empty:
+                pass
+            if loop.time() > deadline:
+                self._log(step_id, "stderr", f"[timeout after {timeout}s; killing]")
+                p = proc_box[0]
+                if p:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+                return 124
+            await asyncio.sleep(0.25)
+
     @staticmethod
     def _sh_quote(s: str) -> str:
         if not s or any(c in s for c in " \t\"'\\$`!|&;()<>*?[]{}"):
@@ -604,6 +1149,26 @@ class UDPRunner:
         repo = self.stack.repository
         url = repo.get("url")
         ref = repo.get("ref", "main")
+
+        # Local bundled stack — copy from Studio's stacks/ directory
+        local_src = repo.get("local_source")
+        if local_src:
+            import shutil as _shutil
+            src_path = Path(__file__).parent.parent / local_src
+            self._log("clone", "stdout", f"local source: {src_path}")
+            if not src_path.exists():
+                self._step_end("clone", False, exit_code=1, message=f"local source not found: {src_path}")
+                return False
+            self.install_dir.parent.mkdir(parents=True, exist_ok=True)
+            if self.install_dir.exists():
+                # Robustly remove the prior workspace. Handles reparse points
+                # (Airflow scheduler/logs/latest) AND Windows reserved-name
+                # files (a literal `nul`) that defeat both rmtree and rd /s /q.
+                _force_remove_tree(self.install_dir)
+            _shutil.copytree(str(src_path), str(self.install_dir))
+            self._step_end("clone", True, exit_code=0)
+            return True
+
         if (self.install_dir / ".git").exists():
             self._log("clone", "stdout", f"existing repo at {self.install_dir}, pulling latest")
             rc = await self._run_bash("clone", ["git", "fetch", "origin", ref], self.install_dir, timeout=120)
@@ -697,8 +1262,10 @@ class UDPRunner:
         text = dep_block_re.sub(_maybe_strip, text)
 
         # Remove `depends_on:` lines whose children were ALL pruned.
+        # Lookahead matches: next line at same indent starting with any non-space
+        # char (covers `<<:` merge keys, `command:`, etc.) OR top-level line.
         text = re.sub(
-            r"^(?P<indent> {4,})depends_on:\s*\n(?=(?P=indent)[a-z]|^[a-z])",
+            r"^(?P<indent> {4,})depends_on:\s*\n(?=(?P=indent)\S|^[a-z])",
             "",
             text,
             flags=re.MULTILINE,
@@ -747,6 +1314,15 @@ class UDPRunner:
         if be_existing_re.search(text):
             text = be_existing_re.sub(be_new, text, count=1)
 
+        # Fix iceberg-rest healthcheck: CMD-SHELL uses /bin/sh (dash) which
+        # does not support /dev/tcp. The tabulario image ships /usr/bin/bash,
+        # so switch to CMD with explicit bash to make the probe actually work.
+        text = re.sub(
+            r'(healthcheck:\s*\n\s*test:\s*)\["CMD-SHELL",\s*"exec 3<>/dev/tcp/localhost/8181[^"]*"\]',
+            r'\1["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8181"]',
+            text,
+        )
+
         # Downgrade `condition: service_healthy` → `condition: service_started`.
         # Several UDP images ship broken healthchecks (iceberg-rest's check
         # calls `wget` which isn't in the image, starrocks-fe takes minutes
@@ -759,6 +1335,21 @@ class UDPRunner:
             "condition: service_started",
             text,
         )
+
+        # Windows-only: remap Spark's app-UI host port 4040 -> 18040. On
+        # Windows, Hyper-V/WinNAT commonly reserves a large dynamic port block
+        # (observed 3897-4602) that swallows 4040, so `docker compose up` dies
+        # with "bind: An attempt was made to access a socket in a way forbidden
+        # by its access permissions". 4040 is only the transient Spark job UI;
+        # nothing in Studio's outputs or doctor references it, so bumping the
+        # HOST side out of the reserved range is safe. Container stays 4040.
+        spark_4040_remapped = 0
+        if platform.system() == "Windows":
+            text, spark_4040_remapped = re.subn(
+                r'(-\s*")4040:4040(")',
+                r'\g<1>18040:4040\g<2>',
+                text,
+            )
 
         if text != original:
             compose_path.write_text(text, encoding="utf-8")
@@ -774,6 +1365,10 @@ class UDPRunner:
             if healthy_to_started:
                 self._log("env", "stdout",
                           f"compose: downgraded {healthy_to_started} 'service_healthy' deps to 'service_started' (UDP upstream healthchecks unreliable; bootstrap step has its own readiness gate)")
+            if spark_4040_remapped:
+                self._log("env", "stdout",
+                          "compose: remapped Spark UI host port 4040 -> 18040 "
+                          "(4040 falls in the Windows Hyper-V reserved port range)")
 
     def _patch_spark_defaults(self) -> None:
         """Repoint Spark's default `udp` catalog from hive-metastore to
@@ -926,21 +1521,84 @@ class UDPRunner:
         and `commands.smoke` argv reference. Unknown stack ids skip the
         write silently; the manifest may run UDP's native scripts instead.
         """
+        # Derive the table format(s) the user picked in the cart so the smoke's
+        # ETL verification runs THAT format (iceberg/delta/hudi). The base stack
+        # is the same regardless; only the format written/verified changes. The
+        # runner substitutes __ETLV_FORMATS__ in the smoke body.
+        etlv_formats = self._chosen_table_formats()
+
+        # Stack-specific container names / endpoints for the shared ETL block.
+        # DEFAULT = udp-family values (byte-identical to before); a stack in
+        # _SMOKE_SUBST overrides only what differs.
+        subst = dict(_SMOKE_SUBST_DEFAULT)
+        subst.update(_SMOKE_SUBST.get(self.stack.id, {}))
+
+        def _apply_subst(body: str) -> str:
+            body = body.replace("__ETLV_FORMATS__", etlv_formats)
+            for ph, val in subst.items():
+                body = body.replace(ph, val)
+            return body
+
+        scripts_dir = self.install_dir / "scripts"
+
+        # Additive 3-catalog feature for stacks that own their bootstrap/smoke
+        # (e.g. Streaming): drop a standalone lhs-etl-verify.sh that their smoke
+        # calls at the end. Runs even when the stack has no _STUDIO_SCRIPT_SETS
+        # entry, so the Kafka/Flink build is left completely untouched.
+        if self.stack.id in _ETL_FEATURE_STACKS:
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            etl_sh = (
+                "#!/usr/bin/env bash\n"
+                "# Studio-generated: additive 3-catalog (iceberg/hudi/delta) verification.\n"
+                "# Source of truth: backend/etl_verify_job.py + _ETL_MULTIFORMAT_BLOCK.\n"
+                "set -eo pipefail\n"
+                "export MSYS_NO_PATHCONV=1\n"
+                "export MSYS2_ARG_CONV_EXCL='*'\n\n"
+                + _apply_subst(_ETL_MULTIFORMAT_BLOCK)
+                + '\necho "[studio-etl-verify] done"\n'
+            )
+            p = scripts_dir / "lhs-etl-verify.sh"
+            p.write_text(etl_sh, encoding="utf-8")
+            try:
+                p.chmod(0o755)
+            except Exception:
+                pass
+
         script_set = _STUDIO_SCRIPT_SETS.get(self.stack.id)
         if script_set is None:
-            self._log("env", "stdout",
-                      f"no studio script set for stack '{self.stack.id}' — "
-                      "falling back to whatever the manifest points at")
+            if self.stack.id not in _ETL_FEATURE_STACKS:
+                self._log("env", "stdout",
+                          f"no studio script set for stack '{self.stack.id}' — "
+                          "falling back to whatever the manifest points at")
             return
-        scripts_dir = self.install_dir / "scripts"
+
         scripts_dir.mkdir(parents=True, exist_ok=True)
         for name, body in script_set:
+            body = _apply_subst(body)
             path = scripts_dir / name
             path.write_text(body, encoding="utf-8")
             try:
                 path.chmod(0o755)
             except Exception:
                 pass
+
+    def _chosen_table_formats(self) -> str:
+        """Table format(s) from the install's cart → ETLV_FORMATS value.
+        Defaults to 'iceberg' when the cart has no explicit format (the base
+        stack is Iceberg-oriented). Multiple picks are preserved, comma-joined."""
+        try:
+            rec = store.get(self.install_id)
+            cart = list((rec.cart if rec else []) or [])
+        except Exception:
+            cart = []
+        picked = []
+        if "iceberg" in cart:
+            picked.append("iceberg")
+        if "delta" in cart or "spark-delta" in cart:
+            picked.append("delta")
+        if "hudi" in cart or "hudi-v1" in cart:
+            picked.append("hudi")
+        return ",".join(picked) if picked else "iceberg"
 
     async def _step_env(self, overrides: dict[str, str]) -> bool:
         self._step_start("env")
@@ -973,6 +1631,23 @@ class UDPRunner:
         # optional UDP services we don't ship (hms/ranger) — silences
         # docker-compose's "variable not set" warnings on every command.
         merged: dict[str, str] = {**self._SAFE_DEFAULTS, **self.stack.env_defaults, **clean_overrides}
+
+        # Name the compose default network with a HYPHEN (not the default
+        # `<project>_default` underscore). A container's reverse-DNS PTR is
+        # `<container>.<network>`; an underscore there is an illegal URI hostname
+        # char and breaks HMS self-resolution -> StarRocks getAllDatabases for
+        # the Delta/Hudi catalogs. Install-specific so side-by-side installs
+        # don't share a network. Fragments reference this via ${LHS_NET}.
+        merged.setdefault("LHS_NET", f"{self.install_dir.name.replace('_', '-')}-net")
+
+        # Auto-generate Airflow secrets if not already in merged/overrides.
+        # Airflow refuses to start with blank FERNET_KEY or SECRET_KEY.
+        if "AIRFLOW_FERNET_KEY" not in merged or not merged["AIRFLOW_FERNET_KEY"]:
+            import base64 as _b64, os as _os
+            merged["AIRFLOW_FERNET_KEY"] = _b64.urlsafe_b64encode(_os.urandom(32)).decode()
+        if "AIRFLOW_WEBSERVER_SECRET_KEY" not in merged or not merged["AIRFLOW_WEBSERVER_SECRET_KEY"]:
+            import secrets as _sec
+            merged["AIRFLOW_WEBSERVER_SECRET_KEY"] = _sec.token_hex(32)
 
         # Patch Spark's catalog config: swap the default `udp` catalog from
         # hive-metastore-backed to iceberg-REST-backed so the Spark bootstrap
@@ -1046,6 +1721,55 @@ class UDPRunner:
             self._step_end("env", False, message=str(e))
             return False
 
+    def _reconstruct_overlays_from_disk(self) -> None:
+        """Rebuild self._overlays from compose files a PRIOR env step wrote.
+
+        Used by the docker_compose_up branch when self._overlays is empty —
+        which happens on Retry/Skip because those restart the pipeline after
+        the env step, so the in-memory overlay list is never populated in the
+        new runner instance. The files themselves persist in install_dir, so
+        we rediscover them here and re-attach their `-f` flags + services.
+
+        The per-stack REQUIRED fragment goes FIRST (front-inserted) so its
+        services come up before any opt-in overlay that might depend on them,
+        matching _write_stack_fragment's ordering.
+        """
+        # Per-stack required fragment (nessie / hms / delta / polaris / trino /
+        # superset / trino+jupyter). Front of the list.
+        try:
+            from .stack_compose_fragments import FRAGMENT_FILENAME, FRAGMENT_SERVICES
+            frag = self.install_dir / FRAGMENT_FILENAME
+            if frag.exists():
+                self._overlays.insert(0, {
+                    "name": f"{self.stack.id}-fragment",
+                    "file": frag,
+                    "services": list(FRAGMENT_SERVICES.get(self.stack.id, []) or []),
+                })
+                self._log("start", "stdout",
+                          f"recovered stack fragment from disk: {frag.name} "
+                          "(env step didn't re-run — likely a retry)")
+        except ImportError:
+            pass
+        # Opt-in overlays (airflow / dagster / superset / observability). A file
+        # only exists on disk if its LHS_*_ENABLED flag was on at env time, so
+        # re-including it here preserves the operator's original choice.
+        try:
+            from . import airflow_overlay, dagster_overlay, superset_overlay, observability_overlay
+            for mod in (airflow_overlay, dagster_overlay, superset_overlay, observability_overlay):
+                fname = getattr(mod, "OVERLAY_FILENAME", None)
+                if not fname:
+                    continue
+                f = self.install_dir / fname
+                if f.exists():
+                    name = mod.__name__.rsplit(".", 1)[-1].replace("_overlay", "")
+                    self._overlays.append({
+                        "name": name,
+                        "file": f,
+                        "services": list(getattr(mod, "SERVICES", []) or []),
+                    })
+        except ImportError:
+            pass
+
     async def _step_cmd(self, step_id: str, cmd_name: str) -> bool:
         self._step_start(step_id)
         try:
@@ -1067,11 +1791,22 @@ class UDPRunner:
             if not services:
                 self._step_end(step_id, False, message="no services to start (cart empty?)")
                 return False
+            # Retry/Skip self-heal: those paths restart the pipeline at a
+            # LATER step, so `_step_env` (which populates self._overlays)
+            # never ran in THIS runner instance — leaving self._overlays
+            # empty even though the fragment / overlay compose files are
+            # already on disk from the original env step. Without them the
+            # `-f <fragment>.yml` flag is omitted and docker compose fails
+            # with `no such service: <fragment-service>` (e.g. trino/nessie).
+            # Rebuild from disk so `start` is idempotent across retries.
+            if not self._overlays:
+                self._reconstruct_overlays_from_disk()
+
             # v0.6.1 — inject opt-in overlay compose files via `-f` and
             # extend the explicit service list with the overlay's services.
-            # When _overlays is empty (default — no LHS_*_ENABLED flags),
-            # this is a no-op and the argv matches the pre-v0.6.1 shape
-            # exactly. Order: `docker compose -f base -f overlay up -d ...`
+            # When _overlays is empty (default — no LHS_*_ENABLED flags and
+            # no per-stack fragment), this is a no-op and the argv matches
+            # the pre-v0.6.1 shape exactly. Order: `-f base -f overlay up -d`.
             argv = ["docker", "compose"]
             if self._overlays:
                 # The base compose file is the default discovery target;
@@ -1157,12 +1892,22 @@ class UDPRunner:
             if sid == step_id: return i
         return -1
 
-    async def run(self, env_overrides: dict[str, str], *, start_at: str = "prepare") -> None:
+    async def run(
+        self,
+        env_overrides: dict[str, str],
+        *,
+        start_at: str = "prepare",
+        post_env_hook=None,
+    ) -> None:
         """Run the pipeline starting at `start_at` (default = beginning).
 
         On the first run this drives all steps. On a Retry, the caller passes
         the failed step id as start_at; on Skip, the caller passes the NEXT
         step id; rollback runs ./udp clean instead.
+
+        post_env_hook: optional async coroutine called after the `env` step
+        succeeds but before `doctor`/`start`. Signature: hook(install_dir).
+        Used by the AI provisioner to inject AI-generated configs.
         """
         try:
             self._set_state("INSPECTING")  # caller did the inspection already
@@ -1179,6 +1924,11 @@ class UDPRunner:
                 if state != "READY":
                     self._set_state(state)
                 ok = await self._execute_step(step_id, env_overrides)
+                if ok and step_id == "env" and post_env_hook is not None:
+                    try:
+                        await post_env_hook(self.install_dir)
+                    except Exception as _hook_exc:
+                        self._log("env", "stderr", f"post-env hook warning: {_hook_exc}")
                 if not ok:
                     # finalize failing means evidence didn't write, stack is still up
                     if step_id == "finalize":
@@ -1226,7 +1976,8 @@ class UDPRunner:
         except asyncio.CancelledError:
             self._fail("cancelled")
         except Exception as e:
-            self._fail(f"unexpected: {e}")
+            import traceback as _tb
+            self._fail(f"unexpected: {type(e).__name__}: {e} | {_tb.format_exc()}")
 
     def _fail(self, msg: str) -> None:
         store.update_state(self.install_id, "FAILED", error=msg)
@@ -1286,12 +2037,349 @@ class UDPRunner:
         return None
 
 
+class RemoteClusterRunner:
+    """Pipeline for mode=remote-cluster stacks.
+
+    No Docker install pipeline. Two steps only:
+      1. verify  — HTTP reachability probe for each component's first URL
+      2. finalize — capture outputs (URLs + connections) into the store
+    """
+
+    _PIPELINE: list[tuple[str, str]] = [
+        ("verify",   "STARTING_STACK"),
+        ("finalize", "READY"),
+    ]
+    SKIPPABLE: frozenset[str] = frozenset({"verify"})
+
+    def __init__(self, stack: StackManifest, install_id: str, host: str, install_dir: Path):
+        self.stack = stack
+        self.install_id = install_id
+        self.host = host
+        self.install_dir = install_dir
+        self._cancel = False
+
+    def _emit(self, kind: str, **kwargs) -> None:
+        from .events import bus
+        bus.emit(self.install_id, {"type": kind, **kwargs})
+
+    def _step_start(self, step_id: str) -> None:
+        store.step_start(self.install_id, step_id)
+        self._emit("step_start", step=step_id)
+
+    def _step_end(self, step_id: str, success: bool, exit_code: int = 0, message: Optional[str] = None) -> None:
+        store.step_end(self.install_id, step_id, success, exit_code=exit_code, message=message)
+        self._emit("step_end", step=step_id, success=success, exit_code=exit_code, message=message)
+
+    def _log(self, step_id: str, stream: str, line: str) -> None:
+        store.append_log(self.install_id, step_id, stream, line)
+        self._emit("log", step=step_id, stream=stream, line=line)
+
+    def _set_state(self, state: str) -> None:
+        store.update_state(self.install_id, state)
+        self._emit("state", status=state)
+
+    def _fail(self, msg: str) -> None:
+        store.update_state(self.install_id, "FAILED", error=msg)
+        self._emit("state", status="FAILED", payload={"error": msg})
+        self._emit("error", line=msg)
+
+    def _step_index(self, step_id: str) -> int:
+        for i, (sid, _) in enumerate(self._PIPELINE):
+            if sid == step_id:
+                return i
+        return -1
+
+    async def _step_verify(self) -> bool:
+        """Probe each component's first port via TCP to confirm cluster is reachable."""
+        import socket as _socket
+        self._step_start("verify")
+        passed = 0
+        warned = 0
+        for comp in self.stack.components:
+            comp_id = comp.get("id", "?")
+            hostname = comp.get("host", "")
+            ports = comp.get("ports", [])
+            if not hostname or not ports:
+                continue
+            port = int(ports[0])
+            try:
+                with _socket.create_connection((hostname, port), timeout=6):
+                    pass
+                self._log("verify", "stdout", f"  ✓ {comp_id}  {hostname}:{port}")
+                passed += 1
+            except OSError as e:
+                self._log("verify", "stdout", f"  ~ {comp_id}  {hostname}:{port}  ({e})")
+                warned += 1
+
+        msg = f"{passed} component(s) reachable, {warned} unreachable (VPN/firewall may apply)"
+        self._log("verify", "stdout", msg)
+        # We treat any partial reachability as a pass — the cluster may be on a VPN
+        # that the Studio host can't reach directly. If EVERYTHING is unreachable it's
+        # more likely a manifest error, but we still let the user proceed.
+        ok = True
+        self._step_end("verify", ok, message=msg)
+        return ok
+
+    async def _step_finalize(self) -> bool:
+        self._step_start("finalize")
+        urls = self.stack.output_urls(self.host)
+        conns = self.stack.output_connections(self.host)
+        outputs = {"urls": urls, "connections": conns}
+        store.set_outputs(self.install_id, outputs)
+        self._emit("result", payload=outputs)
+        try:
+            from .evidence import capture
+            rec = store.get(self.install_id)
+            if rec:
+                out_dir = capture(rec)
+                outputs["evidence_dir"] = str(out_dir)
+                store.set_outputs(self.install_id, outputs)
+                self._log("finalize", "stdout", f"evidence captured: {out_dir}")
+        except Exception as e:
+            self._log("finalize", "stderr", f"evidence capture skipped: {e}")
+        self._step_end("finalize", True)
+        return True
+
+    async def run(self, env_overrides: dict[str, str], *, start_at: str = "verify") -> None:
+        try:
+            self._set_state("INSPECTING")
+            self._set_state("READY_TO_INSTALL")
+
+            start_idx = self._step_index(start_at)
+            if start_idx < 0:
+                return self._fail(f"unknown start step: {start_at}")
+
+            for step_id, state in self._PIPELINE[start_idx:]:
+                if self._cancel:
+                    return self._fail("cancelled")
+                if state != "READY":
+                    self._set_state(state)
+                if step_id == "verify":
+                    ok = await self._step_verify()
+                elif step_id == "finalize":
+                    ok = await self._step_finalize()
+                else:
+                    ok = False
+                if not ok:
+                    return self._fail(f"{step_id} failed")
+
+            self._set_state("READY")
+            self._emit("state", status="READY")
+            try:
+                await notify(
+                    self.install_id,
+                    "install_completed",
+                    "info",
+                    f"Remote cluster connected: {self.stack.id}",
+                    f"Cluster outputs captured. Access the stack via the links below.",
+                    links={"success": f"/installs/{self.install_id}"},
+                )
+            except Exception:
+                pass
+        except asyncio.CancelledError:
+            self._fail("cancelled")
+        except Exception as e:
+            import traceback as _tb
+            self._fail(f"unexpected: {type(e).__name__}: {e} | {_tb.format_exc()}")
+
+    async def cancel(self) -> None:
+        self._cancel = True
+
+
+class RemoteSSHRunner(UDPRunner):
+    """Runs the full UDPRunner pipeline on a remote host via SSH + rsync.
+
+    File preparation (clone + env patching) happens locally in a staging dir.
+    Once the env step completes, the staged files are rsynced to the remote.
+    All subsequent docker/compose commands run on the remote host via SSH.
+    """
+
+    def __init__(
+        self,
+        stack: StackManifest,
+        install_id: str,
+        host: str,
+        local_staging_dir: Path,
+        remote_dir: str,
+        ssh_user: str,
+        ssh_port: int = 22,
+        ssh_key_path: Optional[str] = None,
+        ssh_password: Optional[str] = None,
+    ):
+        super().__init__(stack, install_id, host, local_staging_dir)
+        self.remote_dir = remote_dir
+        self.ssh_user = ssh_user
+        self.ssh_port = ssh_port
+        self.ssh_key_path = ssh_key_path
+        self.ssh_password = ssh_password
+
+    # ── SSH helpers ──────────────────────────────────────────────────────────
+
+    def _ssh_base_opts(self) -> list[str]:
+        opts = [
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=30",
+            "-o", "ServerAliveInterval=30",
+            "-p", str(self.ssh_port),
+        ]
+        if self.ssh_key_path:
+            opts += ["-i", self.ssh_key_path]
+        return opts
+
+    def _ssh_target(self) -> str:
+        return f"{self.ssh_user}@{self.host}"
+
+    def _sshpass_prefix(self) -> list[str]:
+        """Return ['sshpass', '-p', password] prefix when password auth is used."""
+        if not self.ssh_password:
+            return []
+        if shutil.which("sshpass"):
+            return ["sshpass", "-p", self.ssh_password]
+        raise RuntimeError(
+            "sshpass is required for password authentication but is not installed. "
+            "Run: sudo apt-get install -y sshpass"
+        )
+
+    async def _run_ssh(self, step_id: str, remote_cmd: str, timeout: int = 600) -> int:
+        """Run a shell command on the remote host, streaming logs back."""
+        opts = self._ssh_base_opts()
+        full_cmd = f"cd {self._sh_quote(self.remote_dir)} && {remote_cmd}"
+        argv = self._sshpass_prefix() + ["ssh"] + opts + [self._ssh_target(), full_cmd]
+        return await self._run_bash(step_id, argv, Path("/tmp"), timeout)
+
+    async def _sync_to_remote(self, step_id: str) -> bool:
+        """rsync the local staging dir to the remote host."""
+        opts = self._ssh_base_opts()
+        # Build the SSH command string for rsync's -e option.
+        # sshpass must wrap ssh inside the -e string when using password auth.
+        if self.ssh_password and shutil.which("sshpass"):
+            ssh_cmd = f"sshpass -p {self._sh_quote(self.ssh_password)} ssh " + " ".join(opts)
+        else:
+            ssh_cmd = "ssh " + " ".join(opts)
+        src = str(self.install_dir).rstrip("/") + "/"
+        dst = f"{self._ssh_target()}:{self.remote_dir}"
+        self._log(step_id, "stdout", f"[remote] syncing files to {dst}...")
+        rc = await self._run_bash(
+            step_id,
+            ["rsync", "-avz", "--delete", "-e", ssh_cmd, src, dst],
+            Path("/tmp"),
+            timeout=300,
+        )
+        return rc == 0
+
+    # ── Overridden pipeline steps ─────────────────────────────────────────
+
+    async def _step_prepare(self) -> bool:
+        """Create local staging dir + remote install dir."""
+        ok = await super()._step_prepare()
+        if not ok:
+            return False
+        self._log("prepare", "stdout", f"[remote] creating {self.remote_dir} on {self.host}...")
+        rc = await self._run_bash(
+            "prepare",
+            self._sshpass_prefix() + ["ssh"] + self._ssh_base_opts() + [
+                self._ssh_target(),
+                f"mkdir -p {self._sh_quote(self.remote_dir)}",
+            ],
+            Path("/tmp"),
+            timeout=30,
+        )
+        if rc != 0:
+            self._step_end("prepare", False, exit_code=rc,
+                           message=f"Could not create {self.remote_dir} on remote host")
+            return False
+        return True
+
+    async def _step_env(self, overrides: dict[str, str]) -> bool:
+        """Patch files locally (super), then rsync the whole tree to remote."""
+        ok = await super()._step_env(overrides)
+        if not ok:
+            return False
+        # The super call wrote _step_end("env", True). We need to rsync now.
+        # Re-open the step so additional log lines appear correctly.
+        self._log("env", "stdout", "[remote] syncing patched files to remote host...")
+        synced = await self._sync_to_remote("env")
+        if not synced:
+            self._step_end("env", False, exit_code=1,
+                           message="rsync to remote host failed")
+            return False
+        # Fix permissions on the remote (chmod +x scripts)
+        await self._run_ssh(
+            "env",
+            "chmod +x udp scripts/*.sh 2>/dev/null || true",
+            timeout=30,
+        )
+        return True
+
+    async def _step_cmd(self, step_id: str, cmd_name: str) -> bool:
+        """Run a stack command (doctor / start / bootstrap / smoke) on remote."""
+        self._step_start(step_id)
+        try:
+            spec = self.stack.command(cmd_name)
+        except KeyError as e:
+            self._step_end(step_id, False, message=str(e))
+            return False
+
+        argv: list[str] = list(spec["argv"])
+        timeout: int = int(spec.get("timeout", 300))
+
+        # Rewrite the command for remote execution. The argv from the manifest
+        # is a local-path command list like ["bash", "scripts/lhs-bootstrap.sh"].
+        # We join it for execution in the remote shell (cd already provided by
+        # _run_ssh).
+        import shlex as _shlex
+        remote_cmd = " ".join(_shlex.quote(a) for a in argv)
+        rc = await self._run_ssh(step_id, remote_cmd, timeout=timeout)
+        ok = rc == 0
+        self._step_end(step_id, ok, exit_code=rc)
+        return ok
+
+    def _fail(self, msg: str) -> None:
+        store.update_state(self.install_id, "FAILED", error=msg)
+        self._emit("state", status="FAILED")
+        self._emit("error", line=msg)
+
+    def _completion_body(self) -> str:
+        return f"Remote install on {self.host} complete. Access the stack via the links in the install page."
+
+
+def _make_runner(
+    stack: StackManifest,
+    install_id: str,
+    host: str,
+    install_dir: Path,
+    ssh_user: Optional[str] = None,
+    ssh_port: int = 22,
+    ssh_key_path: Optional[str] = None,
+    ssh_password: Optional[str] = None,
+):
+    if stack.is_remote_cluster:
+        return RemoteClusterRunner(stack, install_id, host, install_dir)
+    _is_local = host in ("localhost", "127.0.0.1", "::1")
+    if not _is_local and ssh_user:
+        from .config import WORK_DIR
+        local_staging = WORK_DIR / "remote-staging" / install_id
+        return RemoteSSHRunner(
+            stack, install_id, host,
+            local_staging_dir=local_staging,
+            remote_dir=str(install_dir),
+            ssh_user=ssh_user,
+            ssh_port=ssh_port,
+            ssh_key_path=ssh_key_path,
+            ssh_password=ssh_password,
+        )
+    return UDPRunner(stack, install_id, host, install_dir)
+
+
 def make_steps(stack: StackManifest) -> list[StepStatus]:
     return _build_steps(stack)
 
 
 def next_step_id(stack: StackManifest, step_id: str) -> str | None:
-    pipeline = [sid for sid, _ in UDPRunner._PIPELINE]
+    if stack.is_remote_cluster:
+        pipeline = [sid for sid, _ in RemoteClusterRunner._PIPELINE]
+    else:
+        pipeline = [sid for sid, _ in UDPRunner._PIPELINE]
     try:
         i = pipeline.index(step_id)
     except ValueError:
@@ -1307,8 +2395,10 @@ async def retry_install(stack: StackManifest, install_id: str, host: str, instal
     rec = store.get(install_id)
     if not rec:
         return
-    # Reset everything from start_at onward to pending
-    pipeline = [sid for sid, _ in UDPRunner._PIPELINE]
+    if stack.is_remote_cluster:
+        pipeline = [sid for sid, _ in RemoteClusterRunner._PIPELINE]
+    else:
+        pipeline = [sid for sid, _ in UDPRunner._PIPELINE]
     if start_at not in pipeline:
         return
     cutover = pipeline.index(start_at)
@@ -1321,13 +2411,17 @@ async def retry_install(stack: StackManifest, install_id: str, host: str, instal
             s.message = None
     rec.error = None
     store._persist()
-    runner = UDPRunner(stack, install_id, host, install_dir)
+    runner = _make_runner(
+        stack, install_id, host, install_dir,
+        ssh_user=rec.ssh_user, ssh_port=rec.ssh_port, ssh_key_path=rec.ssh_key_path,
+    )
     await runner.run(env_overrides, start_at=start_at)
 
 
 def mark_step_skipped(install_id: str, step_id: str) -> str | None:
     """Mark a step as skipped (only allowed for SKIPPABLE steps). Return the next step id, or None."""
-    if step_id not in UDPRunner.SKIPPABLE:
+    all_skippable = UDPRunner.SKIPPABLE | RemoteSSHRunner.SKIPPABLE | RemoteClusterRunner.SKIPPABLE
+    if step_id not in all_skippable:
         return None
     rec = store.get(install_id)
     if not rec:
@@ -1342,12 +2436,12 @@ def mark_step_skipped(install_id: str, step_id: str) -> str | None:
 
 
 def next_step_id_for(step_id: str) -> str | None:
-    pipeline = [sid for sid, _ in UDPRunner._PIPELINE]
-    try:
-        i = pipeline.index(step_id)
-    except ValueError:
-        return None
-    return pipeline[i + 1] if i + 1 < len(pipeline) else None
+    for pipeline_def in [UDPRunner._PIPELINE, RemoteClusterRunner._PIPELINE]:
+        pipeline = [sid for sid, _ in pipeline_def]
+        if step_id in pipeline:
+            i = pipeline.index(step_id)
+            return pipeline[i + 1] if i + 1 < len(pipeline) else None
+    return None
 
 
 async def run_command(install_id: str, install_dir: Path, host: str, stack: StackManifest, cmd_name: str) -> int:

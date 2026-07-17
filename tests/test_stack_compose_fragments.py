@@ -377,11 +377,13 @@ def test_trino_service_present_in_trino_stacks(stack_id: str, tmp_path: Path):
     assert trino_svc["image"].startswith("trinodb/trino:"), (
         f"trino service in '{stack_id}' has unexpected image: {trino_svc['image']}"
     )
-    # The Trino UI / API port must be exposed so the bootstrap script
-    # can reach /v1/info and the operator can hit the web console.
+    # The Trino UI / API container port 8080 must be published so the operator
+    # can hit the web console. The HOST side is env-overridable
+    # (${TRINO_HTTP_PORT:-8080}) so shared hosts can dodge a busy 8080 — so we
+    # assert on the container port (:8080), not a fixed host:container literal.
     assert any(
-        "8080:8080" in str(p) for p in trino_svc.get("ports") or []
-    ), f"trino in '{stack_id}' must publish port 8080"
+        str(p).rstrip('"').endswith(":8080") for p in trino_svc.get("ports") or []
+    ), f"trino in '{stack_id}' must publish container port 8080"
 
 
 @pytest.mark.parametrize("stack_id", NON_TRINO_STACK_IDS)

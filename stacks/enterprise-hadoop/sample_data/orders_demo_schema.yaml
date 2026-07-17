@@ -1,0 +1,30 @@
+# Schema for the orders_demo sample pipeline.
+# Consumed by IngestMultipleCsvs (ingestMultipleCSVWithACKToHDFS.py).
+# Staged to HDFS at /techsophy/orders_demo/yamls/ by setup_orders_demo.sh.
+
+schema:
+  - { name: order_id,  type: long,    nullable: false }
+  - { name: order_ref, type: string,  nullable: false }
+  - { name: region,    type: string,  nullable: false }
+  - { name: amount,    type: decimal, precision: 11, scale: 2, nullable: false }
+  - { name: ts,        type: long,    nullable: false }
+
+hudi:
+  table_path:         hdfs://namenode:9820/techsophy/curated/orders_demo
+  table_name:         orders_demo
+  table_type:         COPY_ON_WRITE
+  write_operation:    upsert
+  compression_type:   snappy
+  primary_key_fields: order_id
+  precombine_field:   ts
+  partition_table:    true
+  partition_fields:   region
+
+create_hive_table: true
+hive:
+  database:   default
+  table_name: orders_demo
+
+has_header:      true
+field_separator: ","
+null_value_as:   ""

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  Docker-friendly version of the live core-site.xml.
+  Live cluster runs HTTPS_ONLY with a real keystore at /etc/hadoop-3.4.1/conf/keystore.jks
+  — that file does not exist in this docker image, so the SSL block is omitted here.
+  Proxyusers + group mapping + fs.defaultFS are preserved from live.
+-->
+<configuration>
+    <property>
+        <name>fs.defaultFS</name>
+        <value>hdfs://namenode:9820</value>
+    </property>
+
+    <property>
+        <name>hadoop.tmp.dir</name>
+        <value>/var/tmp/hadoop</value>
+    </property>
+
+    <property>
+        <name>hadoop.proxyuser.airflow.groups</name>
+        <value>hadoop</value>
+    </property>
+
+    <property>
+        <name>hadoop.proxyuser.airflow.hosts</name>
+        <value>*</value>
+    </property>
+
+    <property>
+        <name>hadoop.security.group.mapping</name>
+        <value>org.apache.hadoop.security.ShellBasedUnixGroupsMapping</value>
+    </property>
+</configuration>

@@ -184,7 +184,9 @@ commands:
   start:
     type: docker_compose_up
     extra_services: [create-bucket]
-    timeout: 600
+    # 1800s, not 600s — cold image pulls (Spark + Polaris + Postgres)
+    # routinely exceed 10 minutes on a non-trivial connection.
+    timeout: 1800
   bootstrap: { argv: ["bash", "scripts/lhs-polaris-bootstrap.sh"], timeout: 900 }
   smoke:     { argv: ["bash", "scripts/lhs-polaris-smoke.sh"],     timeout: 600 }
   status:    { argv: ["./udp", "status"],     timeout: 30 }

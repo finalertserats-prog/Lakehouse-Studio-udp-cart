@@ -1,0 +1,151 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK
+# =====================================
+# Fintech Compliance = the udp-trino runtime (MinIO + Iceberg REST + Spark +
+# Trino + StarRocks) with OpenLineage (Marquez) layered on for data-lineage /
+# audit trails — the template's headline feature. The lakehouse core is pinned
+# to the SAME tags as the udp reference stacks and inherits their certification;
+# OpenLineage + its dedicated Postgres are the NEW surface, so the stack as a
+# whole is `candidate` until a full bootstrap+smoke run is captured below.
+
+schema_version: "1.0"
+stack_id: fintech-compliance-local-v0.1
+version_id: "0.1.0"
+certified_at: "2026-07-09T14:00:00+05:30"
+certified_by: gundimedamanaskiran@gmail.com
+certified_on:
+  os: "Ubuntu 22.04 + Docker 29"
+  docker: "29.1.3"
+  docker_compose: "v5"
+status: "candidate"
+
+status_notes: |
+  candidate: the five-component lakehouse core (MinIO + Iceberg REST + Spark +
+  Trino + StarRocks) is byte-identical to the udp reference stacks and inherits
+  their dual-S3-property bootstrap fix and PR #55416 StarRocks requirement.
+  OpenLineage (Marquez 0.50.0) is added via backend/stack_compose_fragments.py
+  with a DEDICATED Postgres (db/user/password all `marquez`) so Marquez
+  auto-migrates its schema on first boot — no separate migration step. Neither
+  Marquez nor the full seven-component combination has an end-to-end evidence
+  run yet — flip to pilot-stable only after a fresh install reaches READY with
+  the Marquez /api/v1/namespaces endpoint green.
+
+components:
+  - id: minio
+    name: MinIO
+    role: object_storage
+    image: minio/minio
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+    registry_url: https://hub.docker.com/r/minio/minio/tags
+    upstream_url: https://github.com/minio/minio
+    notes: Inherited from udp reference stacks.
+
+  - id: minio-client
+    name: MinIO Client (mc)
+    role: object_storage_bootstrap
+    image: minio/mc
+    tag: "RELEASE.2025-04-16T18-13-26Z"
+    registry_url: https://hub.docker.com/r/minio/mc/tags
+    upstream_url: https://github.com/minio/mc
+    notes: One-shot bucket init. Inherited.
+
+  - id: iceberg-rest
+    name: Iceberg REST Catalog
+    role: catalog
+    image: tabulario/iceberg-rest
+    tag: "1.6.0"
+    registry_url: https://hub.docker.com/r/tabulario/iceberg-rest/tags
+    upstream_url: https://github.com/apache/iceberg
+    notes: Inherited. Snapshot-based audit trail substrate.
+
+  - id: spark
+    name: Apache Spark + Iceberg
+    role: processing
+    image: tabulario/spark-iceberg
+    tag: "3.5.5_1.8.1"
+    registry_url: https://hub.docker.com/r/tabulario/spark-iceberg/tags
+    upstream_url: https://iceberg.apache.org/spark-quickstart
+    notes: Inherited. DO NOT bump to 3.5.1_1.5.2 (removed upstream).
+
+  - id: trino
+    name: Trino
+    role: processing
+    image: trinodb/trino
+    tag: "481"
+    registry_url: https://hub.docker.com/r/trinodb/trino/tags
+    upstream_url: https://github.com/trinodb/trino
+    notes: Inherited from udp-trino-local-v0.1. Federated SQL across data zones.
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    image: starrocks/fe-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/fe-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: Inherited. Requires PR #55416 (>= 3.3.12).
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    image: starrocks/be-ubuntu
+    tag: "3.3.12"
+    registry_url: https://hub.docker.com/r/starrocks/be-ubuntu/tags
+    upstream_url: https://github.com/StarRocks/starrocks
+    notes: Same version as FE. Inherited.
+
+  - id: openlineage
+    name: OpenLineage (Marquez)
+    role: lineage
+    image: marquezproject/marquez
+    tag: "0.50.0"
+    registry_url: https://hub.docker.com/r/marquezproject/marquez/tags
+    upstream_url: https://github.com/MarquezProject/marquez
+    notes: |
+      NEW surface for this stack. Marquez lineage/metadata server — API on
+      5000, admin on 5001. Auto-migrates its Flyway schema on startup against
+      the dedicated postgres-marquez DB. This is the template's compliance /
+      audit-trail headline. No end-to-end evidence yet.
+
+  - id: postgres-marquez
+    name: PostgreSQL (Marquez backing DB)
+    role: metastore_db
+    image: postgres
+    tag: "15-alpine"
+    registry_url: https://hub.docker.com/_/postgres/tags
+    upstream_url: https://www.postgresql.org
+    notes: |
+      Dedicated Marquez DB — db/user/password all `marquez` (Marquez's config
+      hardcodes those names). Isolated from any other Postgres so Marquez's
+      auto-migration always finds a clean, correctly-named database.
+
+constraints:
+  - between: [openlineage, postgres-marquez]
+    rule: "Marquez requires a Postgres DB named `marquez` owned by role `marquez`; auto-migrates Flyway schema on boot"
+    verified: "postgres-marquez sets POSTGRES_DB/USER/PASSWORD=marquez; Marquez depends_on it (service_healthy)"
+
+  - between: [openlineage, trino, spark]
+    rule: "Lineage server sits alongside the query/compute engines; emitting lineage events from Trino/Spark into Marquez is an operator-configured integration, not required for the server to run"
+    verified: "Marquez serves /api/v1/namespaces once migrated; event wiring is out of scope for v0.1"
+
+host_requirements:
+  docker_min: "28.0"
+  docker_compose_min: "v2.30"
+  bash_min: "5.0"
+  os_verified:
+    - "Ubuntu 22.04 + Docker 29 (core inherited; Marquez pending evidence)"
+  os_unverified_but_likely_works:
+    - "Windows 11 + Docker Desktop"
+    - "macOS + Docker Desktop"
+  ram_min_gb: 14
+  ram_recommended_gb: 20
+  disk_min_gb: 55
+  ports_required: [9000, 9001, 8181, 8888, 8080, 8030, 9030, 5000]
+
+# Append the first end-to-end run here, then flip status to pilot-stable.
+evidence: []
+
+incompatible:
+  - combination: [spark:3.5.1_1.5.2]
+    reason: "Tag removed from Docker Hub after UDP shipped — fresh install fails at compose up."
+    discovered: "2026-05-16"
+    workaround: "Use 3.5.5_1.8.1 (current certified)."

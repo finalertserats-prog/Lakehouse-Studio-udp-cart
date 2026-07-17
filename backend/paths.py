@@ -65,7 +65,12 @@ def validate_install_dir(raw: str) -> Path:
         except PermissionError as e:
             raise InstallDirError(f"cannot read install_dir {resolved}: {e}")
         if entries:
-            looks_like_udp = (resolved / ".git").exists() and (resolved / "udp").exists()
+            # A valid prior workspace is either a UDP git clone (.git + udp/)
+            # or a local-source stack that was already set up (docker-compose.yml present).
+            looks_like_udp = (
+                ((resolved / ".git").exists() and (resolved / "udp").exists())
+                or (resolved / "docker-compose.yml").exists()
+            )
             if not looks_like_udp:
                 names = ", ".join(sorted(e.name for e in entries[:8]))
                 raise InstallDirError(

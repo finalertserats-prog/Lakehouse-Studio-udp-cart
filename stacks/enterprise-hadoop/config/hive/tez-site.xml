@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  Mirrored from live techsophy.com dev cluster (sdpdevstg01, scanned 2026-05-21).
+  Source: /opt/apache-tez-0.10.4-bin/conf/tez-site.xml
+  Tez JARs uploaded to HDFS by lhs-prefetch.sh / lhs-bootstrap.sh into
+  hdfs:///apps/apache-tez-0.10.4-bin (matches live cluster path).
+-->
+<configuration>
+
+  <property>
+    <name>tez.lib.uris</name>
+    <value>hdfs:///apps/apache-tez-0.10.4-bin,hdfs:///apps/apache-tez-0.10.4-bin/lib</value>
+  </property>
+
+  <property>
+    <name>tez.use.cluster.hadoop-libs</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>tez.runtime.intermediate-output.compress</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>tez.runtime.intermediate-output.compress.codec</name>
+    <value>org.apache.hadoop.io.compress.SnappyCodec</value>
+  </property>
+
+  <property>
+    <name>tez.am.container.reuse.enabled</name>
+    <value>true</value>
+  </property>
+
+  <!-- AM + task sizing (live values) -->
+  <property>
+    <name>tez.am.resource.memory.mb</name>
+    <value>256</value>
+  </property>
+  <property>
+    <name>tez.am.resource.cpu.vcores</name>
+    <value>1</value>
+  </property>
+  <property>
+    <name>tez.task.resource.memory.mb</name>
+    <value>256</value>
+  </property>
+  <property>
+    <name>tez.task.resource.cpu.vcores</name>
+    <value>1</value>
+  </property>
+
+  <!-- History logging via YARN Timeline Service -->
+  <property>
+    <name>tez.history.logging.service.class</name>
+    <value>org.apache.tez.dag.history.logging.ats.ATSHistoryLoggingService</value>
+  </property>
+
+</configuration>

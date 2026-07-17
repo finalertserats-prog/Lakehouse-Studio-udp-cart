@@ -1,4 +1,4 @@
-# Bake recipe for lakehousestudio/spark-hudi:3.5.0_0.15.0
+# Bake recipe for lakehousestudio/spark-hudi:3.5.5_1.0.1
 #
 # This image extends the certified Spark+Iceberg image with the Hudi 0.15
 # Spark runtime bundle jar. Used by the hudi-hms-spark-local-v0.1 stack.
@@ -10,10 +10,10 @@
 #
 # Build:
 #   docker build -f scripts/images/Dockerfile.spark-hudi \
-#     -t lakehousestudio/spark-hudi:3.5.0_0.15.0 .
+#     -t lakehousestudio/spark-hudi:3.5.5_1.0.1 .
 #
 # Publish (when ready):
-#   docker push lakehousestudio/spark-hudi:3.5.0_0.15.0
+#   docker push lakehousestudio/spark-hudi:3.5.5_1.0.1
 #
 # The candidate-status lock file at
 # stacks/compatibility/hudi-hms-spark-local-v0.1.lock.yaml flags the
@@ -22,8 +22,8 @@
 
 FROM tabulario/spark-iceberg:3.5.5_1.8.1
 USER root
-ADD https://repo1.maven.org/maven2/org/apache/hudi/hudi-spark3.5-bundle_2.12/0.15.0/hudi-spark3.5-bundle_2.12-0.15.0.jar /opt/spark/jars/
-RUN chmod 644 /opt/spark/jars/hudi-spark3.5-bundle_2.12-0.15.0.jar
+ADD https://repo1.maven.org/maven2/org/apache/hudi/hudi-spark3.5-bundle_2.12/1.0.1/hudi-spark3.5-bundle_2.12-1.0.1.jar /opt/spark/jars/
+RUN chmod 644 /opt/spark/jars/hudi-spark3.5-bundle_2.12-1.0.1.jar
 # Required for direct spark.sql writes to s3a:// (not just Iceberg-routed writes).
 # The base image's iceberg-spark-runtime jar bundles hadoop-aws internally for
 # Iceberg's own use, but plain spark.sql writes to s3a:// need hadoop-aws as a

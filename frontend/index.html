@@ -182,6 +182,7 @@
     @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
     .step-running { background: linear-gradient(90deg, rgba(34,211,238,0.06) 0%, rgba(168,85,247,0.18) 50%, rgba(236,72,153,0.06) 100%); background-size: 200% 100%; animation: shimmer 2s linear infinite; }
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    @keyframes cascadeToastIn { from { opacity: 0; transform: translateX(-50%) translateY(16px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
     .scroll-shadow { box-shadow: inset 0 -10px 12px -10px rgba(0,0,0,0.4), inset 0 10px 12px -10px rgba(0,0,0,0.4); }
 
     /* ---------------- CUSTOM PIPELINE ---------------- */
@@ -385,6 +386,7 @@
     .badge-rec { background: rgba(34,211,238,0.15); color: #67e8f9; }
     .badge-stable { background: rgba(52,211,153,0.15); color: #6ee7b7; }
     .badge-exp { background: rgba(245,158,11,0.15); color: #fcd34d; }
+    .badge-ent { background: rgba(168,85,247,0.15); color: #d8b4fe; }
 
     /* selection */
     ::selection { background: rgba(168,85,247,0.4); color: white; }
@@ -624,6 +626,344 @@
   </div>
 </div>
 
+<!-- Image Build Modal -->
+<div id="img-build-modal" class="hidden fixed inset-0 z-[110] flex items-center justify-center p-4" style="background:rgba(7,6,26,0.82);backdrop-filter:blur(8px)">
+  <div class="glass w-full max-w-lg p-6" style="border-color:rgba(16,185,129,0.25)">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h3 id="ibm-title" class="text-base font-semibold text-slate-100">Build Custom Image</h3>
+        <div id="ibm-subtitle" class="text-xs text-slate-400 mt-0.5 mono"></div>
+      </div>
+      <button id="ibm-close" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
+    </div>
+
+    <!-- Phase: research -->
+    <div id="ibm-phase-research" class="hidden">
+      <div class="flex items-center gap-2 text-sm text-emerald-300 mb-3">
+        <span id="ibm-research-spinner" style="animation:pulse 1s infinite;display:inline-block">✦</span>
+        <span>AI researching best compatible version…</span>
+      </div>
+    </div>
+
+    <!-- Phase: confirm -->
+    <div id="ibm-phase-confirm" class="hidden">
+      <div class="rounded-lg p-4 mb-4" style="background:rgba(16,185,129,0.07);border:1px solid rgba(16,185,129,0.2)">
+        <div class="text-xs text-slate-400 mb-2 uppercase tracking-wider">AI Recommendation</div>
+        <div class="mono text-sm text-emerald-300" id="ibm-rec-image"></div>
+        <div class="text-xs text-slate-400 mt-2" id="ibm-rec-reason"></div>
+        <div class="grid grid-cols-2 gap-3 mt-3 text-xs">
+          <div><span class="text-slate-500">Spark base</span><br><span class="mono text-slate-200" id="ibm-rec-spark"></span></div>
+          <div><span class="text-slate-500" id="ibm-rec-addon-label">Addon</span><br><span class="mono text-slate-200" id="ibm-rec-addon"></span></div>
+        </div>
+      </div>
+      <div class="flex gap-2 justify-end">
+        <button id="ibm-cancel" class="btn-ghost text-sm">Cancel</button>
+        <button id="ibm-build-btn" class="text-sm px-4 py-1.5 rounded font-medium" style="background:rgba(16,185,129,0.2);border:1px solid rgba(16,185,129,0.4);color:#6ee7b7">⚙ Build &amp; Push</button>
+      </div>
+    </div>
+
+    <!-- Phase: building -->
+    <div id="ibm-phase-build" class="hidden">
+      <div class="flex items-center gap-2 text-xs text-slate-400 mb-2">
+        <span id="ibm-build-status" class="mono text-emerald-400">building…</span>
+      </div>
+      <div id="ibm-log" class="font-mono text-xs overflow-y-auto rounded p-3"
+        style="max-height:240px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.07);color:#94a3b8;line-height:1.6"></div>
+      <div id="ibm-build-footer" class="hidden mt-3 flex gap-2 justify-end">
+        <button id="ibm-done-btn" class="btn-ghost text-sm">Close</button>
+      </div>
+    </div>
+
+    <!-- Phase: error -->
+    <div id="ibm-phase-error" class="hidden">
+      <div class="text-sm text-rose-300 mb-2" id="ibm-error-msg"></div>
+      <div class="flex justify-end">
+        <button id="ibm-err-close" class="btn-ghost text-sm">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== AI PROVISION MODAL ============== -->
+<div id="ai-prov-modal" class="hidden fixed inset-0 z-[120] flex items-center justify-center p-4"
+     style="background:rgba(7,6,26,0.88);backdrop-filter:blur(10px)">
+  <div class="glass w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" style="border-color:rgba(168,85,247,0.3)">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h3 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+          <span style="color:#a855f7">✦</span> AI Lakehouse Builder
+        </h3>
+        <div id="aip-subtitle" class="text-xs text-slate-400 mt-0.5 mono"></div>
+      </div>
+      <button id="aip-close" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
+    </div>
+
+    <!-- Phase progress tracker -->
+    <div id="aip-phases" class="grid grid-cols-3 gap-2 mb-5">
+      <!-- Populated by JS -->
+    </div>
+
+    <!-- Log stream -->
+    <div id="aip-log"
+         class="font-mono text-xs overflow-y-auto rounded p-3 mb-4"
+         style="height:220px;background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.07);color:#94a3b8;line-height:1.7">
+      <div id="aip-log-inner"></div>
+    </div>
+
+    <!-- Connection summary (revealed on completion) -->
+    <div id="aip-summary" class="hidden">
+      <div class="rounded-lg p-4 mb-4" style="background:rgba(168,85,247,0.07);border:1px solid rgba(168,85,247,0.22)">
+        <div class="text-xs text-slate-400 mb-3 uppercase tracking-wider">🎉 Lakehouse Ready</div>
+        <div id="aip-endpoints" class="grid grid-cols-2 gap-x-6 gap-y-2 text-xs mb-4"></div>
+        <div id="aip-pipeline-wrap" class="hidden">
+          <div class="text-xs text-slate-400 mb-1 uppercase tracking-wider">Pipeline starter</div>
+          <pre id="aip-pipeline-code" class="mono text-xs rounded p-3 overflow-x-auto"
+               style="background:rgba(0,0,0,0.4);color:#a5b4fc;border:1px solid rgba(99,102,241,0.2)"></pre>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2">
+        <button id="aip-done-btn" class="btn-primary text-sm">Done →</button>
+      </div>
+    </div>
+
+    <!-- Error state -->
+    <div id="aip-error" class="hidden">
+      <div class="text-sm text-rose-300 mb-3 rounded p-3" style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.25)"
+           id="aip-error-msg"></div>
+      <div class="flex justify-end">
+        <button id="aip-err-close" class="btn-ghost text-sm">Close</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     STACK BUILDER MODAL — wedaa-style custom lakehouse factory
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div id="sb-modal" class="hidden fixed inset-0 z-[130]"
+     style="background:rgba(5,4,20,0.92);backdrop-filter:blur(12px)">
+  <div class="h-full flex flex-col">
+
+    <!-- Header bar -->
+    <div class="flex items-center justify-between px-6 py-4 shrink-0"
+         style="border-bottom:1px solid rgba(168,85,247,0.25);background:rgba(10,9,35,0.7)">
+      <div class="flex items-center gap-3">
+        <span style="font-size:1.4rem">✦</span>
+        <div>
+          <h2 class="text-lg font-bold text-white tracking-tight">Stack Builder</h2>
+          <p class="text-xs text-slate-400">Pick components → AI generates configs + starts your lakehouse</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button id="sb-preview-btn" class="text-xs px-3 py-1.5 rounded-lg hidden"
+                style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:#a5b4fc">
+          Preview compose.yml
+        </button>
+        <button id="sb-build-btn" class="text-sm px-5 py-2 rounded-lg font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                style="background:linear-gradient(135deg,#7c3aed,#be185d);color:#fff;box-shadow:0 0 20px rgba(168,85,247,0.3)"
+                disabled>
+          ✦ AI Build
+        </button>
+        <button id="sb-close" class="text-slate-400 hover:text-white text-2xl leading-none ml-2">×</button>
+      </div>
+    </div>
+
+    <!-- Body: 3-column layout -->
+    <div class="flex-1 flex overflow-hidden">
+
+      <!-- LEFT: Component Picker (scrollable) -->
+      <div class="w-[340px] shrink-0 overflow-y-auto border-r" style="border-color:rgba(255,255,255,0.06);background:rgba(8,7,28,0.5)">
+        <div class="px-4 pt-4 pb-2">
+          <input id="sb-search" type="text" placeholder="Search components…"
+                 class="w-full text-sm px-3 py-2 rounded-lg mono"
+                 style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#e2e8f0;outline:none">
+        </div>
+        <div id="sb-catalog" class="px-3 pb-4 space-y-4">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+      <!-- CENTER: Selected stack + auto-deps -->
+      <div class="flex-1 overflow-y-auto px-6 py-4">
+        <div class="max-w-2xl mx-auto">
+
+          <!-- Stack name -->
+          <div class="mb-5">
+            <label class="text-xs text-slate-400 uppercase tracking-wider block mb-1.5">Stack name</label>
+            <input id="sb-stack-name" type="text" value="custom-lakehouse"
+                   class="text-sm px-3 py-2 rounded-lg mono w-full"
+                   style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#e2e8f0;outline:none">
+          </div>
+
+          <!-- Selected components -->
+          <div class="mb-5">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs text-slate-400 uppercase tracking-wider">Selected components</span>
+              <span id="sb-count" class="text-xs text-slate-500">0 selected</span>
+            </div>
+            <div id="sb-selected-list" class="space-y-1.5">
+              <div class="text-sm text-slate-500 italic py-4 text-center">Pick components from the left panel</div>
+            </div>
+          </div>
+
+          <!-- Auto-added deps -->
+          <div id="sb-auto-section" class="hidden mb-5">
+            <div class="text-xs text-slate-500 uppercase tracking-wider mb-2">Auto-added dependencies</div>
+            <div id="sb-auto-list" class="flex flex-wrap gap-1.5"></div>
+          </div>
+
+          <!-- Conflict warnings -->
+          <div id="sb-conflicts" class="hidden mb-4 text-sm text-amber-300 rounded-lg p-3"
+               style="background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25)">
+          </div>
+
+        </div>
+      </div>
+
+      <!-- RIGHT: Compose preview panel -->
+      <div id="sb-compose-panel" class="hidden w-[400px] shrink-0 overflow-y-auto border-l"
+           style="border-color:rgba(255,255,255,0.06);background:rgba(8,7,28,0.6)">
+        <div class="px-4 py-3 flex items-center justify-between"
+             style="border-bottom:1px solid rgba(255,255,255,0.06)">
+          <span class="text-xs text-slate-300 font-semibold uppercase tracking-wider">docker-compose.yml preview</span>
+          <button id="sb-compose-copy" class="text-xs text-slate-400 hover:text-slate-200">copy</button>
+        </div>
+        <pre id="sb-compose-code" class="text-xs mono overflow-auto px-4 py-3"
+             style="color:#a5b4fc;line-height:1.6;white-space:pre"></pre>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Pre-Install Dialog — review components + add tools + choose target -->
+<div id="preinstall-modal" class="hidden fixed inset-0 z-[145] flex items-center justify-center p-4"
+     style="background:rgba(7,6,26,0.88);backdrop-filter:blur(10px)">
+  <div class="glass w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" style="border-color:rgba(34,211,238,0.3)">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h3 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+          <span style="color:#22d3ee">⚡</span> Install <span id="pi-card-label"></span>
+        </h3>
+        <div class="text-xs text-slate-400 mt-0.5">Review the stack, add tools, and choose where to install.</div>
+      </div>
+      <button id="pi-close" class="text-slate-400 hover:text-white text-xl leading-none">×</button>
+    </div>
+
+    <!-- Components -->
+    <div class="mb-4">
+      <div class="text-xs uppercase tracking-wide text-slate-400 mb-2">Tools to install</div>
+      <div id="pi-components" class="flex flex-wrap gap-2"></div>
+    </div>
+
+    <!-- Add tools -->
+    <div class="mb-5">
+      <div class="text-xs uppercase tracking-wide text-slate-400 mb-2">Add more tools</div>
+      <select id="pi-add-select" class="w-full bg-slate-800/60 border border-slate-600 rounded px-3 py-2 text-sm text-slate-200">
+        <option value="">+ Add a component…</option>
+      </select>
+    </div>
+
+    <!-- Target -->
+    <div class="mb-4">
+      <div class="text-xs uppercase tracking-wide text-slate-400 mb-2">Where should this install?</div>
+      <div class="flex gap-2 mb-3">
+        <button id="pi-target-local" class="btn-primary text-xs flex-1">💻 This machine (localhost)</button>
+        <button id="pi-target-remote" class="btn-ghost text-xs flex-1">🖥 Remote server (SSH)</button>
+      </div>
+      <div id="pi-remote-fields" class="hidden space-y-2">
+        <div>
+          <label class="text-xs text-slate-400">Host *</label>
+          <input id="pi-host" placeholder="e.g. 78.47.4.112" class="w-full bg-slate-800/60 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200">
+          <div class="text-[11px] text-slate-500 mt-0.5">Used to render service URLs after install (e.g. http://&lt;host&gt;:9001).</div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs text-slate-400">SSH user *</label>
+            <input id="pi-ssh-user" placeholder="e.g. hadoop" class="w-full bg-slate-800/60 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400">SSH port</label>
+            <input id="pi-ssh-port" value="22" class="w-full bg-slate-800/60 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">Private key path (on this machine, optional)</label>
+          <input id="pi-ssh-key" placeholder="e.g. /home/hadoop/.ssh/id_rsa  (default key if empty)" class="w-full bg-slate-800/60 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200">
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">SSH password (optional — key auth preferred)</label>
+          <input id="pi-ssh-pass" type="password" placeholder="Leave empty to use key-based auth" class="w-full bg-slate-800/60 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200">
+        </div>
+        <div>
+          <label class="text-xs text-slate-400">Install directory</label>
+          <input id="pi-install-dir" placeholder="(default: lakehouse-studio/&lt;stack&gt;)" class="w-full bg-slate-800/60 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200">
+          <div class="text-[11px] text-slate-500 mt-0.5">Where the stack is cloned and run on the remote host.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-700">
+      <button id="pi-cancel" class="btn-ghost text-sm">Cancel</button>
+      <button id="pi-go" class="btn-primary text-sm">Install →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Stack Builder — Build Progress Modal -->
+<div id="sb-progress-modal" class="hidden fixed inset-0 z-[140] flex items-center justify-center p-4"
+     style="background:rgba(7,6,26,0.88);backdrop-filter:blur(10px)">
+  <div class="glass w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto" style="border-color:rgba(168,85,247,0.3)">
+
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h3 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+          <span style="color:#a855f7">✦</span> Building Lakehouse
+        </h3>
+        <div id="sb-prog-subtitle" class="text-xs text-slate-400 mt-0.5 mono"></div>
+      </div>
+      <button id="sb-prog-close" class="text-slate-400 hover:text-white text-xl leading-none hidden">×</button>
+    </div>
+
+    <div id="sb-prog-phases" class="grid grid-cols-4 gap-2 mb-5 text-center"></div>
+
+    <div id="sb-prog-log"
+         class="font-mono text-xs overflow-y-auto rounded p-3 mb-4"
+         style="height:240px;background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.07);color:#94a3b8;line-height:1.7">
+      <div id="sb-prog-log-inner"></div>
+    </div>
+
+    <div id="sb-prog-summary" class="hidden">
+      <div class="rounded-lg p-4 mb-4" style="background:rgba(168,85,247,0.07);border:1px solid rgba(168,85,247,0.22)">
+        <div class="text-xs text-slate-400 mb-3 uppercase tracking-wider">🎉 Lakehouse Ready</div>
+        <div id="sb-prog-endpoints" class="grid grid-cols-2 gap-x-6 gap-y-2 text-xs mb-4"></div>
+        <div id="sb-prog-pipeline-wrap" class="hidden">
+          <div class="text-xs text-slate-400 mb-1 uppercase tracking-wider">Pipeline starter</div>
+          <pre id="sb-prog-pipeline-code" class="mono text-xs rounded p-3 overflow-x-auto"
+               style="background:rgba(0,0,0,0.4);color:#a5b4fc;border:1px solid rgba(99,102,241,0.2)"></pre>
+        </div>
+      </div>
+      <div class="flex justify-end">
+        <button id="sb-prog-done-btn" class="btn-primary text-sm">Done →</button>
+      </div>
+    </div>
+
+    <div id="sb-prog-error" class="hidden">
+      <div class="text-sm text-rose-300 mb-3 rounded p-3"
+           style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.25)"
+           id="sb-prog-error-msg"></div>
+      <div class="flex gap-2 justify-end">
+        <button id="sb-prog-err-retry" class="btn-primary text-sm">↻ Try Again</button>
+        <button id="sb-prog-err-close" class="btn-ghost text-sm">Close</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
 <!-- Top status bar (fixed) -->
 <div class="statusbar"><div class="dot" id="status-dot"></div><span class="mono" id="status-text">studio · v0.3</span></div>
 
@@ -670,9 +1010,9 @@
     </div>
     <nav class="flex items-center gap-1 text-sm">
       <button data-nav="welcome"  class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Home</button>
+      <button data-nav="quick-install" class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Quick Install</button>
       <button data-nav="installs" class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Installs</button>
       <button data-nav="settings" class="nav-btn px-3 py-1.5 rounded-lg text-slate-300 hover:bg-white/5">Settings</button>
-      <a href="https://github.com/finalertserats-prog/Lakehouse-Studio-udp-cart" target="_blank" class="px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200">GitHub <span class="text-xs">↗</span></a>
     </nav>
   </div>
 </header>
@@ -716,8 +1056,12 @@
         <p class="text-lg text-slate-400 max-w-xl mb-8 leading-relaxed">
           Shop components, size your server, click install. Studio drives the whole stack — MinIO, Iceberg, Spark, StarRocks — with a live demo query on the other side.
         </p>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <button id="btn-start" class="btn-primary text-base">Start install <span class="ml-2">→</span></button>
+          <button id="btn-stack-builder" class="text-sm px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5 transition-all"
+            style="background:linear-gradient(135deg,rgba(124,58,237,0.18),rgba(236,72,153,0.18));border:1px solid rgba(168,85,247,0.35);color:#d8b4fe">
+            ✦ Stack Builder
+          </button>
           <button id="btn-how" class="btn-ghost text-sm">See how it works</button>
         </div>
         <div class="flex items-center gap-6 mt-10 text-xs text-slate-500">
@@ -827,6 +1171,16 @@
       <span id="picker-toggle-label-classic" class="hidden">Switched to classic goals.</span>
       <button id="btn-classic-goals" class="text-cyan-400 hover:text-cyan-300 underline-offset-2 hover:underline">Show classic goals</button>
     </div>
+  </section>
+
+  <!-- ============== QUICK INSTALL ============== -->
+  <section id="screen-quick-install" class="screen hidden fade-up">
+    <div class="mb-8">
+      <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">One click</div>
+      <h2 class="display-2 grad-text-soft inline-block">Quick Install</h2>
+      <p class="text-slate-400 mt-2">Pick a template and deploy the full stack in one click — no cart, no steps. Want to inspect or customise first? Use the template picker on Home.</p>
+    </div>
+    <div id="qi-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
   </section>
 
   <!-- ============== BUILD (cart) ============== -->
@@ -989,16 +1343,46 @@
     <div class="mb-8">
       <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 3 · Target</div>
       <h2 class="display-2 grad-text-soft inline-block">Server details</h2>
-      <p class="text-slate-400 mt-2">For this pilot, the install runs against the machine Studio itself is on. Use <span class="mono text-cyan-300">localhost</span> if you're running everything here, or your VPS hostname if Studio is on the VPS.</p>
+      <p class="text-slate-400 mt-2">Enter <span class="mono text-cyan-300">localhost</span> to install on this machine, or a remote hostname/IP to install on a separate server via SSH.</p>
     </div>
     <div class="glass p-8 max-w-2xl">
       <label class="block text-sm font-medium mb-2">Host</label>
-      <input id="input-host" value="localhost" class="input" />
+      <input id="input-host" value="localhost" class="input" oninput="onHostChange()" />
       <p class="text-xs text-slate-500 mt-2">Used to render service URLs after install (e.g. <span class="mono">http://&lt;host&gt;:9001</span>).</p>
+
+      <!-- SSH credentials — dimmed for localhost, active for remote host -->
+      <div id="ssh-fields" class="mt-6" style="border-left: 2px solid var(--hairline-2); padding-left: 1.25rem;">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-xs uppercase tracking-widest text-slate-500">SSH credentials</div>
+          <div id="ssh-status-badge" class="text-xs px-2 py-0.5 rounded-md bg-slate-700/60 text-slate-400">localhost · not required</div>
+        </div>
+        <div id="ssh-local-note" class="text-xs text-slate-500 mb-3">Change the host above to a remote IP or hostname to configure SSH access.</div>
+        <div id="ssh-form" class="hidden space-y-4">
+          <p class="text-xs text-slate-400">Studio will SSH into the remote host and run the full install pipeline there. The stack runs on the remote machine — not here.</p>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">SSH user <span class="text-rose-400">*</span></label>
+              <input id="input-ssh-user" placeholder="e.g. hadoop" class="input text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">SSH port</label>
+              <input id="input-ssh-port" value="22" type="number" min="1" max="65535" class="input text-sm" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">Private key path <span class="text-slate-500">(on this machine, optional)</span></label>
+            <input id="input-ssh-key" placeholder="e.g. /home/hadoop/.ssh/id_rsa  (default key used if empty)" class="input text-sm mono" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">SSH password <span class="text-slate-500">(optional — key auth preferred)</span></label>
+            <input id="input-ssh-password" type="password" placeholder="Leave empty to use key-based auth" class="input text-sm" />
+          </div>
+        </div>
+      </div>
 
       <label class="block text-sm font-medium mb-2 mt-6">Install directory</label>
       <input id="input-installdir" placeholder="(default: ./work/udp)" class="input" />
-      <p class="text-xs text-slate-500 mt-2">Where the UDP repo will be cloned and run. Leave empty for default.</p>
+      <p id="installdir-desc" class="text-xs text-slate-500 mt-2">Where the stack will be cloned and run. Leave empty for default.</p>
 
       <div class="flex items-center gap-3 mt-8">
         <button id="btn-inspect" class="btn-primary">Inspect server <span class="ml-1">→</span></button>
@@ -1012,14 +1396,19 @@
     <button class="text-sm text-slate-400 hover:text-slate-200 mb-3 flex items-center gap-1" onclick="navigate('server')"><span>←</span> Back</button>
     <div class="mb-8">
       <div class="text-xs uppercase tracking-widest text-slate-500 mb-2">Step 4 · Pre-flight</div>
-      <h2 class="display-2 grad-text-soft inline-block">Pre-flight inspection</h2>
-      <p class="text-slate-400 mt-2">Checking the target environment against stack requirements.</p>
+      <h2 class="display-2 grad-text-soft inline-block" id="inspect-title">Pre-flight inspection</h2>
+      <p class="text-slate-400 mt-2" id="inspect-subtitle">Checking the target environment against stack requirements.</p>
     </div>
     <div id="inspect-summary" class="glass p-6 mb-4"></div>
     <div id="inspect-checks" class="grid grid-cols-1 md:grid-cols-2 gap-2"></div>
     <div class="flex items-center gap-3 mt-8">
       <button id="btn-install" class="btn-primary">Install <span class="ml-1">→</span></button>
-      <button class="btn-ghost" onclick="runInspect()">↻ Re-run inspection</button>
+      <button id="btn-ai-build" class="text-sm px-4 py-2 rounded-lg font-medium flex items-center gap-1.5"
+              style="background:rgba(168,85,247,0.15);border:1px solid rgba(168,85,247,0.35);color:#c4b5fd"
+              title="AI researches versions, generates all configs, installs, and verifies end-to-end">
+        ✦ AI Build
+      </button>
+      <button class="btn-ghost" onclick="runInspect()">↻ Re-run</button>
     </div>
   </section>
 
@@ -1043,6 +1432,7 @@
           <div id="step-list" class="space-y-1"></div>
         </div>
         <div id="failure-controls" class="hidden glass p-3 mt-3 space-y-2"></div>
+        <div id="running-controls" class="hidden glass p-3 mt-3 space-y-2"></div>
       </div>
       <div class="lg:col-span-2">
         <div class="terminal h-[480px] flex flex-col">
@@ -1654,6 +2044,10 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     cartValidation: null,
     lakeName: "",
     catalog: null,
+    sshUser: "",
+    sshPort: 22,
+    sshKeyPath: "",
+    sshPassword: "",
   };
 
   // Phase mapping for the top stepper
@@ -1690,7 +2084,20 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     });
     setStepper(screen);
     if (screen === "installs") loadInstalls();
+    if (screen === "quick-install") loadQuickInstall();
     if (screen !== "success" && typeof stopHealthPolling === "function") stopHealthPolling();
+    if (screen === "server") {
+      const installDir = state.selected?.install_dir || "udp";
+      const ph = document.getElementById("input-installdir");
+      if (ph) ph.placeholder = `(default: ./work/${installDir})`;
+      const desc = document.getElementById("installdir-desc");
+      if (desc) {
+        const name = state.selected?.name || "stack";
+        desc.textContent = `Where the ${name} repo will be cloned and run. Leave empty for default.`;
+      }
+      // Sync SSH section state with current host value
+      if (typeof onHostChange === "function") onHostChange();
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => navigate(b.dataset.nav)));
@@ -1734,6 +2141,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   function _invalidateSpotRects() { _spotRectsValid = false; }
   window.addEventListener("scroll", _invalidateSpotRects, { passive: true });
   window.addEventListener("resize", _invalidateSpotRects, { passive: true });
+
   // Coarse invalidation when the screen changes (different DOM)
   const _origNavigate = window.navigate;  // will rebind below; placeholder
   function _refreshSpotRects() {
@@ -1945,7 +2353,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   // The "Show classic goals" link always exposes the legacy flow.
   const ICON_MAP = {
     laptop: "💻", building: "🏛", sparkles: "✨", chart: "📊",
-    shield: "🛡", bolt: "⚡", cube: "🧊",
+    shield: "🛡", bolt: "⚡", cube: "🧊", server: "🖥",
   };
 
   async function loadGoals() {
@@ -1962,12 +2370,27 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     }
   }
 
-  function renderTemplateCards(templates) {
+  // Quick Install tab: render every installable template with a one-click ⚡ Install.
+  async function loadQuickInstall() {
+    if (!state.catalog) { try { state.catalog = await api("/api/catalog"); } catch (_) {} }
+    let templates = [];
+    try {
+      const r = await api("/api/templates");
+      templates = r?.templates || [];
+    } catch (_) { templates = []; }
+    renderTemplateCards(templates, { listId: "qi-list", mode: "install" });
+  }
+
+  function renderTemplateCards(templates, opts = {}) {
+    // mode "review" (default): whole card → review/build page, no Install button.
+    // mode "install": one-click ⚡ Install button (used by the Quick Install tab).
+    const listId = opts.listId || "goal-list";
+    const mode = opts.mode || "review";
     state._lastTemplates = templates;
-    const list = document.getElementById("goal-list"); list.innerHTML = "";
+    const list = document.getElementById(listId); list.innerHTML = "";
     templates.forEach(t => {
       const div = document.createElement("div");
-      const installable = t.readiness !== "preview";
+      const installable = t.readiness !== "preview" && t.installable !== false;
       div.className = "glass glass-hover spot p-6 " + (installable ? "cursor-pointer" : "opacity-80");
       const tags = (t.compliance_tags || []).map(c =>
         `<span class="badge badge-exp">${esc(c.toUpperCase())}</span>`
@@ -1975,6 +2398,9 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       const pendingBadge = t.pending_count > 0
         ? `<span class="badge" style="background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.35); color: #fcd34d;">${t.pending_count} pending</span>`
         : `<span class="badge badge-stable">all certified</span>`;
+      const testedBadge = t.validated
+        ? `<span class="badge" style="background: rgba(52,211,153,0.14); border-color: rgba(52,211,153,0.4); color: #6ee7b7;">✓ E2E tested</span>`
+        : `<span class="badge" style="background: rgba(148,163,184,0.12); border-color: rgba(148,163,184,0.35); color: #cbd5e1;">untested</span>`;
       const readinessBadge = t.readiness === "preview"
         ? `<span class="badge" style="background: rgba(168,85,247,0.12); border-color: rgba(168,85,247,0.35); color: #d8b4fe;">PREVIEW</span>`
         : "";
@@ -1986,13 +2412,32 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
         <div class="display-3 mb-1">${esc(t.label)}</div>
         <div class="text-sm text-slate-400 mb-3 leading-relaxed">${esc(t.elevator_pitch || "")}</div>
         <div class="text-xs text-slate-500 mb-3">${esc(t.persona || "")}</div>
-        <div class="flex flex-wrap gap-1 mb-3">${pendingBadge}${tags}</div>
-        <div class="text-xs ${installable ? "text-cyan-300" : "text-slate-500"} mt-2 flex items-center gap-1">
-          ${installable ? "Choose <span>→</span>" : "Preview only — coming v0.5"}
+        <div class="flex flex-wrap gap-1 mb-3">${testedBadge}${pendingBadge}${tags}</div>
+        <div class="flex items-center gap-2 mt-3">
+          ${installable
+            ? (mode === "install"
+                ? `<button class="btn-primary text-xs sb-install-btn" data-tid="${esc(t.id)}">⚡ Install</button>`
+                : `<button class="btn-ghost text-xs sb-review-btn" data-tid="${esc(t.id)}">Review →</button>`)
+            : (t.readiness === "preview"
+                ? `<span class="text-xs text-slate-500">Preview only — coming v0.5</span>`
+                : `<span class="text-xs text-amber-400/70">Stack coming soon</span>`)}
         </div>
       `;
       if (installable) {
-        div.addEventListener("click", () => pickTemplate(t.id));
+        if (mode === "install") {
+          // Quick Install tab: one-click build through the Stack Builder pipeline.
+          div.querySelector(".sb-install-btn").addEventListener("click", (e) => {
+            e.stopPropagation();
+            _sbInstallTemplate(t.id, t.label);
+          });
+        } else {
+          // Picker: clicking anywhere on the card lands on the review/build page.
+          div.addEventListener("click", () => pickTemplate(t.id));
+          div.querySelector(".sb-review-btn").addEventListener("click", (e) => {
+            e.stopPropagation();
+            pickTemplate(t.id);
+          });
+        }
       }
       list.appendChild(div);
     });
@@ -2006,8 +2451,13 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       showToast(`Couldn't load template: ${e.message}`); return;
     }
     // Cart pre-fill from the certified subset only — pending stays display-only.
-    state.cart = [...(detail.cart || [])];
+    // The TABLE FORMAT is deliberately left unselected so the user actively
+    // chooses Iceberg / Delta / Hudi (all three are supported by the same base
+    // stack + verified by the smoke). No format is defaulted.
+    const _TABLE_FORMAT_IDS = ["iceberg", "hudi", "hudi-v1", "delta"];
+    state.cart = [...(detail.cart || [])].filter(id => !_TABLE_FORMAT_IDS.includes(id));
     state.template = detail.id;
+    state.templateStackId = detail.stack_id || null;
     state.templatePending = detail.pending || [];
     state.templateCompliance = detail.compliance || [];
     state.goal = null; // template path is mutually exclusive with classic goals
@@ -2141,66 +2591,108 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     alert(lines.trim());
   });
 
-  // ---- enriched component card renderer (v0.4 polish) ----
-  // Pulls logo / tagline / what_it_is / best_for / capabilities / why_this_version /
-  // resource_profile_summary from components-catalog.yaml. Falls back gracefully
-  // for any missing field so older catalog entries still render.
+  // ---- component card renderer ----
   function _logoImg(comp, size = 40) {
     const src = comp.logo || `/assets/logos/${comp.id}.svg`;
     return `<img src="${esc(src)}" alt="" class="object-contain"
       style="width:${size}px;height:${size}px;"
       onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'monogram',textContent:'${esc((comp.name||'?')[0])}'}))">`;
   }
-  function _renderBestForChips(arr) {
-    if (!arr || !arr.length) return "";
-    return arr.slice(0, 3).map(s =>
-      `<span class="text-xs px-2 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25 text-cyan-200">${esc(s)}</span>`
-    ).join("");
+
+  // ---- version helpers (catalog-default only — no live fetch, no picker) ----
+
+  // The version a component installs with is always its catalog default —
+  // either the version_option flagged default:true, the first option, or
+  // the bare `version` field. There is no per-install override from the UI.
+  function _getSelectedVersion(compId) {
+    const comp = _findComponent(compId);
+    if (!comp) return null;
+    if (comp.version_options && comp.version_options.length) {
+      const def = comp.version_options.find(o => o.default);
+      if (def) return String(def.version);
+      return String(comp.version_options[0].version);
+    }
+    return comp.version ? String(comp.version) : null;
+  }
+
+  // Returns the cart ID for a comp's default version. Some version options
+  // map to a different component ID (e.g. Spark+Hudi default → spark-hudi).
+  function _effectiveCartId(comp) {
+    if (!comp.version_options || comp.version_options.length <= 1) return comp.id;
+    const def = comp.version_options.find(o => o.default) || comp.version_options[0];
+    return (def && def.cart_id) ? def.cart_id : comp.id;
+  }
+
+  // A component is "added" if its own id OR any version option's cart_id is in cart.
+  function _isAdded(comp) {
+    if (state.cart.includes(comp.id)) return true;
+    if (comp.version_options) {
+      for (const opt of comp.version_options) {
+        if (opt.cart_id && state.cart.includes(opt.cart_id)) return true;
+      }
+    }
+    return false;
   }
 
   function renderCatalog() {
     const wrap = document.getElementById("catalog-list"); wrap.innerHTML = "";
     (state.catalog.categories || []).forEach((cat) => {
-      const inCart = (cat.components || []).find(c => state.cart.includes(c.id));
+      const visibleComps = (cat.components || []).filter(c => !c.hidden);
+      const inCart = visibleComps.find(c => _isAdded(c));
       const card = document.createElement("div");
       card.className = "cat-card spot" + (inCart ? " added" : "");
       const optionalTag = cat.optional ? `<span class="text-xs text-slate-500 ml-2">(optional)</span>` : "";
 
-      const comps = (cat.components || []).length ? (cat.components.map(comp => {
-        const added = state.cart.includes(comp.id);
-        const badges = (comp.badges || []).map(b => {
-          const cls = b === "Recommended" ? "badge-rec" : b === "Stable" ? "badge-stable" : "badge-exp";
+      const comps = visibleComps.length ? (visibleComps.map(comp => {
+        const added = _isAdded(comp);
+        // For multi-version: resolve active version option and inherit its overrides
+        const hasVersionOptions = comp.version_options && comp.version_options.length > 1;
+        const activeOpt = hasVersionOptions
+          ? comp.version_options.find(o => o.version === _getSelectedVersion(comp.id))
+          : null;
+
+        const activeBadgeList = (activeOpt && activeOpt.badges) || comp.badges || [];
+        const badges = activeBadgeList.map(b => {
+          const cls = b === "Recommended" ? "badge-rec"
+                    : b === "Stable"      ? "badge-stable"
+                    : b === "Enterprise"  ? "badge-ent"
+                    : "badge-exp";
           return `<span class="badge ${cls}">${esc(b)}</span>`;
         }).join("");
-        const bestFor = _renderBestForChips(comp.best_for);
-        // Prefer the new tagline; fall back to the legacy summary if missing.
-        const tagline = comp.tagline || comp.summary || '';
+
+        const tagline = (activeOpt && activeOpt.tagline) || comp.tagline || comp.summary || '';
+
+        // Version is fixed to the catalog default — no live fetch, no picker.
+        // "Tested" means "what Studio certified," so the only choice surfaced
+        // here is the one version_options/version actually marks as default.
+        const _defaultVer = _getSelectedVersion(comp.id);
+        const versionPill = _defaultVer
+          ? `<span class="text-[10px] mono shrink-0" style="color:rgba(148,163,184,0.45)">v${esc(_defaultVer)}</span>`
+          : '';
+
         return `
-          <div class="flex items-start gap-4 p-4 rounded-lg ${added ? 'bg-emerald-500/8 border border-emerald-500/25' : 'bg-white/[0.02] border border-white/5'} mb-2">
-            <div class="shrink-0 w-12 h-12 rounded-lg flex items-center justify-center" style="background: rgba(255,255,255,0.04); border: 1px solid var(--hairline);">
-              ${_logoImg(comp, 36)}
+          <div class="comp-card flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1.5 ${added ? 'bg-emerald-500/8 border border-emerald-500/25' : 'bg-white/[0.02] border border-white/5'}">
+            <div class="shrink-0 w-8 h-8 rounded-md flex items-center justify-center" style="background:rgba(255,255,255,0.04);border:1px solid var(--hairline)">
+              ${_logoImg(comp, 22)}
             </div>
             <div class="flex-1 min-w-0">
-              <div class="flex items-baseline gap-2 mb-1 flex-wrap">
-                <span class="font-semibold text-slate-100">${esc(comp.name)}</span>
-                <span class="text-xs mono text-slate-500">v${esc(comp.version || '?')}</span>
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="font-medium text-sm text-slate-100 leading-tight">${esc(comp.name)}</span>
+                ${versionPill}
                 ${badges}
               </div>
-              <div class="text-sm text-slate-300 mb-2 leading-relaxed">${esc(tagline)}</div>
-              ${bestFor ? `<div class="flex flex-wrap gap-1 mb-2">${bestFor}</div>` : ''}
-              ${comp.production_note ? `<div class="text-xs text-amber-300/80 italic">⚠ ${esc(comp.production_note)}</div>` : ''}
-              <div class="text-xs text-slate-500 mt-1.5 flex items-center gap-2 flex-wrap">
-                <span>${esc(comp.license || '')}</span>
-                <span class="text-slate-700">·</span>
-                <button class="comp-details-btn text-cyan-400 hover:text-cyan-300 underline-offset-2 hover:underline" data-comp="${esc(comp.id)}">Details &rarr;</button>
-              </div>
+              <div class="text-xs leading-tight truncate" style="color:rgba(148,163,184,0.7);margin-top:1px">${esc(tagline)}</div>
             </div>
-            <button class="cart-btn ${added ? 'btn-ghost' : 'btn-primary'} text-sm whitespace-nowrap" data-comp="${esc(comp.id)}">${added ? '✓ Added · remove' : 'Add to cart'}</button>
+            <div class="shrink-0 flex flex-col items-end gap-1.5">
+              <button class="cart-btn text-xs px-2.5 py-1 rounded font-medium transition-colors whitespace-nowrap ${added ? 'border hover:bg-rose-500/15 hover:text-rose-300 hover:border-rose-500/30' : 'bg-cyan-500/90 text-slate-900 hover:bg-cyan-400'}" style="${added ? 'background:rgba(255,255,255,0.06);color:#94a3b8;border-color:rgba(255,255,255,0.1)' : ''}" data-comp="${esc(comp.id)}">${added ? '✓ Added' : '+ Add'}</button>
+              <button class="comp-details-btn text-[10px] transition-colors" style="color:rgba(100,116,139,0.8)" data-comp="${esc(comp.id)}">details ↗</button>
+            </div>
           </div>
         `;
       }).join("")) : `<div class="text-sm text-slate-500 italic px-4 py-3">No options yet — coming in v0.4+.</div>`;
 
       const soon = (cat.coming_soon || []).map(s => {
+
         const fakeId = (s.id || s.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
         const logoSrc = s.logo || (fakeId ? `/assets/logos/${fakeId}.svg` : '');
         const logoEl = logoSrc
@@ -2216,7 +2708,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
             <div class="text-sm text-slate-400">${esc(cat.description || '')}</div>
           </div>
         </div>
-        <div class="mt-3">${comps}</div>
+        <div class="mt-2">${comps}</div>
         ${soon ? `<div class="mt-3 pt-3 border-t border-white/5"><div class="text-xs text-slate-500 mb-2">Coming soon:</div><div class="flex flex-wrap gap-1.5">${soon}</div></div>` : ''}
       `;
       wrap.appendChild(card);
@@ -2225,20 +2717,842 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     // Wire add/remove buttons
     wrap.querySelectorAll(".cart-btn").forEach(b => {
       b.addEventListener("click", async () => {
-        const id = b.dataset.comp;
-        if (state.cart.includes(id)) state.cart = state.cart.filter(x => x !== id);
-        else state.cart = [...state.cart, id];
+        const compId = b.dataset.comp;
+        const comp = _findComponent(compId);
+        if (!comp) return;
+        if (_isAdded(comp)) {
+          // Remove whichever related ID is currently in cart
+          const relatedIds = [comp.id, ...(comp.version_options || []).map(o => o.cart_id).filter(Boolean)];
+          state.cart = state.cart.filter(id => !relatedIds.includes(id));
+        } else {
+          state.cart = [...state.cart, _effectiveCartId(comp)];
+        }
         renderCatalog();
         await refreshCartValidation();
       });
     });
-    // Wire Details buttons
+    // Wire details buttons
     wrap.querySelectorAll(".comp-details-btn").forEach(b => {
       b.addEventListener("click", (e) => {
         e.preventDefault();
         showComponentDetails(b.dataset.comp);
       });
     });
+  }
+
+  // ---- Image Build Modal ----
+  const _IBM_ADDON_LABELS = { 'spark-hudi': 'Apache Hudi', 'spark-delta': 'Delta Lake' };
+
+  function _ibmPhase(name) {
+    ['research','confirm','build','error'].forEach(p => {
+      document.getElementById(`ibm-phase-${p}`).classList.toggle('hidden', p !== name);
+    });
+  }
+
+  function _appendLog(line) {
+    const log = document.getElementById('ibm-log');
+    const el = document.createElement('div');
+    el.textContent = line;
+    if (line.startsWith('[error]')) el.style.color = '#fca5a5';
+    else if (line.startsWith('[done]') || line.includes('✓')) el.style.color = '#6ee7b7';
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function _openBuildModal(compId) {
+    const modal = document.getElementById('img-build-modal');
+    const comp = _findComponent(compId);
+    document.getElementById('ibm-title').textContent = `Build ${comp?.name || compId}`;
+    document.getElementById('ibm-subtitle').textContent = `lakehousestudio/${compId}`;
+    document.getElementById('ibm-rec-addon-label').textContent = _IBM_ADDON_LABELS[compId] || 'Addon';
+    document.getElementById('ibm-log').innerHTML = '';
+    _ibmPhase('research');
+    modal.classList.remove('hidden');
+
+    let research = null;
+    try {
+      const res = await fetch('/api/image-build/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_id: compId }),
+      });
+      research = await res.json();
+      if (research.error) throw new Error(research.error);
+    } catch (err) {
+      _ibmPhase('error');
+      document.getElementById('ibm-error-msg').textContent = `Research failed: ${err}`;
+      return;
+    }
+
+    document.getElementById('ibm-rec-image').textContent = research.full_image;
+    document.getElementById('ibm-rec-spark').textContent = `Spark ${research.spark_ver}`;
+    document.getElementById('ibm-rec-addon').textContent = `${_IBM_ADDON_LABELS[compId] || 'Addon'} ${research.addon_ver}`;
+    document.getElementById('ibm-rec-reason').textContent = research.reason || '';
+    _ibmPhase('confirm');
+
+    document.getElementById('ibm-build-btn').onclick = async () => {
+      _ibmPhase('build');
+      document.getElementById('ibm-build-status').textContent = 'starting…';
+
+      let jobId = null;
+      try {
+        const r = await fetch('/api/image-build/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_id: compId, research }),
+        });
+        const d = await r.json();
+        if (d.job_id) jobId = d.job_id;
+        else throw new Error(d.detail || 'no job_id');
+      } catch (err) {
+        _ibmPhase('error');
+        document.getElementById('ibm-error-msg').textContent = `Failed to start build: ${err}`;
+        return;
+      }
+
+      const es = new EventSource(`/api/image-build/stream/${jobId}`);
+      es.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (d.line) {
+          _appendLog(d.line);
+          document.getElementById('ibm-build-status').textContent = d.status + '…';
+        }
+        if (d.done) {
+          es.close();
+          document.getElementById('ibm-build-status').textContent =
+            d.status === 'done' ? `✓ ${research.full_image} pushed` : '✗ build failed';
+          document.getElementById('ibm-build-footer').classList.remove('hidden');
+          if (d.status === 'done') {
+            // Refresh the version picker so the new tag appears
+            state.versionCache = state.versionCache || {};
+            delete state.versionCache[compId];
+            fetch(`/api/versions/${compId}/refresh`, { method: 'POST' }).then(() => renderCatalog());
+          }
+        }
+      };
+      es.onerror = () => {
+        es.close();
+        _appendLog('[error] SSE connection dropped');
+        document.getElementById('ibm-build-footer').classList.remove('hidden');
+      };
+    };
+  }
+
+  // Wire modal close buttons (run once at startup)
+  document.getElementById('ibm-close').addEventListener('click', () =>
+    document.getElementById('img-build-modal').classList.add('hidden'));
+  document.getElementById('ibm-cancel').addEventListener('click', () =>
+    document.getElementById('img-build-modal').classList.add('hidden'));
+  document.getElementById('ibm-done-btn').addEventListener('click', () =>
+    document.getElementById('img-build-modal').classList.add('hidden'));
+  document.getElementById('ibm-err-close').addEventListener('click', () =>
+    document.getElementById('img-build-modal').classList.add('hidden'));
+
+  // ============================================================
+  // AI Lakehouse Provisioner
+  // ============================================================
+
+  const _AIP_PHASES = [
+    { id: "research",   label: "Version Research" },
+    { id: "gen_config", label: "Config Generation" },
+    { id: "install",    label: "Stack Install" },
+    { id: "post_cfg",   label: "Post-Start Config" },
+    { id: "verify",     label: "Connectivity" },
+    { id: "summary",    label: "Ready" },
+  ];
+
+  let _aipEvtSource = null;
+
+  function _aipClose() {
+    document.getElementById('ai-prov-modal').classList.add('hidden');
+    if (_aipEvtSource) { _aipEvtSource.close(); _aipEvtSource = null; }
+  }
+
+  document.getElementById('aip-close').addEventListener('click', _aipClose);
+  document.getElementById('aip-err-close').addEventListener('click', _aipClose);
+  document.getElementById('aip-done-btn').addEventListener('click', _aipClose);
+
+  function _aipRenderPhases(phaseStates) {
+    const el = document.getElementById('aip-phases');
+    el.innerHTML = _AIP_PHASES.map(p => {
+      const st = phaseStates[p.id] || 'pending';
+      const colors = {
+        pending: 'rgba(255,255,255,0.04)',
+        active:  'rgba(168,85,247,0.15)',
+        done:    'rgba(16,185,129,0.12)',
+        failed:  'rgba(244,63,94,0.12)',
+      };
+      const borders = {
+        pending: 'rgba(255,255,255,0.08)',
+        active:  'rgba(168,85,247,0.4)',
+        done:    'rgba(16,185,129,0.35)',
+        failed:  'rgba(244,63,94,0.35)',
+      };
+      const icons = { pending: '○', active: '◎', done: '✓', failed: '✗' };
+      const textCols = { pending: '#64748b', active: '#c4b5fd', done: '#6ee7b7', failed: '#fca5a5' };
+      return `<div class="rounded-lg p-2.5 text-center text-xs" style="background:${colors[st]};border:1px solid ${borders[st]}">
+        <div style="color:${textCols[st]};font-size:0.85em">${icons[st]}</div>
+        <div class="mt-0.5 font-medium" style="color:${textCols[st]}">${esc(p.label)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function _aipLog(line) {
+    const inner = document.getElementById('aip-log-inner');
+    const div = document.createElement('div');
+    div.textContent = line;
+    inner.appendChild(div);
+    const logEl = document.getElementById('aip-log');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  async function _openAiProvModal() {
+    const stackId  = state.selected?.id;
+    const cartSels = {};
+    // Collect cart selections from state
+    if (state.cart) {
+      state.cart.forEach(item => {
+        if (item.id) cartSels[item.id] = item.version || item.selectedVersion || '';
+      });
+    }
+    if (!stackId) { showToast('No stack selected', 'error'); return; }
+
+    const modal = document.getElementById('ai-prov-modal');
+    document.getElementById('aip-subtitle').textContent = stackId;
+    document.getElementById('aip-log-inner').innerHTML = '';
+    document.getElementById('aip-summary').classList.add('hidden');
+    document.getElementById('aip-error').classList.add('hidden');
+    modal.classList.remove('hidden');
+
+    const initStates = {};
+    _AIP_PHASES.forEach(p => initStates[p.id] = 'pending');
+    _aipRenderPhases(initStates);
+
+    // Kick off provisioning
+    let jobId;
+    try {
+      const r = await api('/api/ai-provision/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          stack_id:        stackId,
+          cart_selections: cartSels,
+          install_options: { host: state.host || 'localhost' },
+        }),
+      });
+      jobId = r.job_id;
+    } catch (e) {
+      document.getElementById('aip-error').classList.remove('hidden');
+      document.getElementById('aip-error-msg').textContent = `Failed to start: ${e.message || e}`;
+      return;
+    }
+
+    // Subscribe to SSE stream
+    if (_aipEvtSource) _aipEvtSource.close();
+    _aipEvtSource = new EventSource(`/api/ai-provision/stream/${jobId}`);
+
+    _aipEvtSource.onmessage = (evt) => {
+      let d;
+      try { d = JSON.parse(evt.data); } catch { return; }
+
+      if (d.kind === 'heartbeat') return;
+
+      if (d.kind === 'log' && d.line != null) {
+        _aipLog(d.line);
+      }
+
+      if (d.kind === 'phase_start' || d.kind === 'phase_end') {
+        // Refresh phase states from server
+        fetch(`/api/ai-provision/status/${jobId}`)
+          .then(r => r.json())
+          .then(s => _aipRenderPhases(s.phase_states || {}))
+          .catch(() => {});
+      }
+
+      if (d.kind === 'connection_info') {
+        // Build endpoint list
+        const info = d.info || {};
+        const endpEl = document.getElementById('aip-endpoints');
+        endpEl.innerHTML = Object.entries(info).map(([k, v]) =>
+          `<div><span class="text-slate-500">${esc(k.replace(/_/g,' '))}</span><br>
+           <a href="${esc(v.replace('HOST','localhost'))}" target="_blank"
+              class="mono text-indigo-300 hover:text-indigo-100">${esc(v)}</a></div>`
+        ).join('');
+
+        if (d.pipeline_example) {
+          document.getElementById('aip-pipeline-code').textContent = d.pipeline_example;
+          document.getElementById('aip-pipeline-wrap').classList.remove('hidden');
+        }
+      }
+
+      if (d.kind === 'provision_complete') {
+        _aipEvtSource.close(); _aipEvtSource = null;
+        if (d.error) {
+          document.getElementById('aip-error').classList.remove('hidden');
+          document.getElementById('aip-error-msg').textContent = d.error;
+        } else {
+          document.getElementById('aip-summary').classList.remove('hidden');
+          document.getElementById('aip-log').style.height = '120px';
+        }
+      }
+    };
+
+    _aipEvtSource.onerror = () => {
+      _aipEvtSource.close(); _aipEvtSource = null;
+    };
+  }
+
+  // Wire the AI Build button on the inspect screen
+  document.getElementById('btn-ai-build').addEventListener('click', _openAiProvModal);
+
+  // ============================================================
+  // STACK BUILDER
+  // ============================================================
+
+  const _SB_PHASES = [
+    { id: "versions",   label: "AI Versions" },
+    { id: "resolve",    label: "Resolve deps" },
+    { id: "compose",    label: "Compose YAML" },
+    { id: "ai_config",  label: "AI Config" },
+    { id: "write_files",label: "Write files" },
+    { id: "start",      label: "Start stack" },
+    { id: "post_cfg",   label: "Post-Start Init" },
+    { id: "verify",     label: "Verify" },
+    { id: "summary",    label: "Ready" },
+  ];
+
+  // ── state ──────────────────────────────────────────────────────────────
+  let _sbCatalog = [];          // [{id, name, category, description, image, version}]
+  let _sbCategoryGroups = {};   // {Category: [id, ...]}
+  let _sbMutuallyExclusive = [];// [[id,id], ...]
+  let _sbSelected = new Set();  // user-selected component IDs
+  let _sbResolved = [];         // resolved + auto-added
+  let _sbAutoAdded = [];        // auto-added only
+  let _sbEvtSource = null;
+
+  // ── open/close ──────────────────────────────────────────────────────────
+  async function _sbOpen() {
+    document.getElementById('sb-modal').classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    if (_sbCatalog.length === 0) await _sbLoadCatalog();
+  }
+
+  function _sbClose() {
+    document.getElementById('sb-modal').classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+
+  document.getElementById('sb-close').addEventListener('click', _sbClose);
+  document.getElementById('btn-stack-builder').addEventListener('click', _sbOpen);
+
+  // ── catalog load ──────────────────────────────────────────────────────
+  async function _sbLoadCatalog() {
+    try {
+      const r = await fetch('/api/stack-builder/catalog');
+      const d = await r.json();
+      _sbCatalog = d.components || [];
+      _sbCategoryGroups = d.category_groups || {};
+      _sbMutuallyExclusive = d.mutually_exclusive || [];
+      _sbRenderCatalog();
+    } catch (e) {
+      console.error('Stack Builder catalog load failed', e);
+    }
+  }
+
+  // ── render catalog left panel ─────────────────────────────────────────
+  function _sbRenderCatalog(filter = '') {
+    const container = document.getElementById('sb-catalog');
+    const lc = filter.toLowerCase();
+    let html = '';
+    for (const [group, ids] of Object.entries(_sbCategoryGroups)) {
+      const items = ids
+        .map(id => _sbCatalog.find(c => c.id === id))
+        .filter(c => c && (!lc || c.name.toLowerCase().includes(lc) || c.description.toLowerCase().includes(lc)));
+      if (!items.length) continue;
+      html += `<div>
+        <div class="text-xs uppercase tracking-widest mb-2 px-1" style="color:#6b7280;letter-spacing:.1em">${esc(group)}</div>
+        <div class="space-y-1">`;
+      for (const c of items) {
+        const sel = _sbSelected.has(c.id);
+        const autoAdded = _sbAutoAdded.includes(c.id) && !_sbSelected.has(c.id);
+        const expBadge = c.experimental
+        ? `<span style="font-size:0.55rem;padding:1px 4px;border-radius:3px;background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);margin-left:4px">EXP</span>`
+        : '';
+      html += `<button class="w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all sb-comp-btn ${sel ? 'sb-sel' : ''}"
+          data-id="${esc(c.id)}"
+          style="background:${sel ? 'rgba(168,85,247,0.15)' : 'rgba(255,255,255,0.03)'};
+                 border:1px solid ${sel ? 'rgba(168,85,247,0.35)' : 'rgba(255,255,255,0.06)'};
+                 color:${sel ? '#e9d5ff' : '#94a3b8'}">
+          <div class="flex items-center justify-between">
+            <span class="font-medium ${sel ? 'text-violet-300' : 'text-slate-300'}">${esc(c.name)}${expBadge}</span>
+            ${sel ? '<span style="color:#a855f7;font-size:0.75rem">✓</span>' : '<span style="color:#374151;font-size:0.6rem">+</span>'}
+          </div>
+          <div class="text-xs mt-0.5 truncate" style="color:#4b5563">${esc(c.description.slice(0, 60))}…</div>
+        </button>`;
+      }
+      html += `</div></div>`;
+    }
+    container.innerHTML = html || '<div class="text-xs text-slate-600 px-2 py-4">No components match.</div>';
+
+    container.querySelectorAll('.sb-comp-btn').forEach(btn => {
+      btn.addEventListener('click', () => _sbToggle(btn.dataset.id));
+    });
+  }
+
+  // ── toggle component selection ────────────────────────────────────────
+  function _sbToggle(id) {
+    // Check mutual exclusion
+    const excludes = _sbMutuallyExclusive
+      .filter(pair => pair.includes(id))
+      .map(pair => pair.find(x => x !== id));
+    for (const ex of excludes) {
+      if (_sbSelected.has(ex)) {
+        _sbSelected.delete(ex);
+      }
+    }
+
+    if (_sbSelected.has(id)) {
+      _sbSelected.delete(id);
+    } else {
+      _sbSelected.add(id);
+    }
+    _sbResolve();
+  }
+
+  // ── resolve deps (debounced) ──────────────────────────────────────────
+  let _sbResolveTimer = null;
+  function _sbResolve() {
+    clearTimeout(_sbResolveTimer);
+    _sbResolveTimer = setTimeout(_sbDoResolve, 80);
+  }
+
+  async function _sbDoResolve() {
+    if (_sbSelected.size === 0) {
+      _sbResolved = [];
+      _sbAutoAdded = [];
+      _sbUpdateUI();
+      return;
+    }
+    try {
+      const r = await fetch('/api/stack-builder/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected: [..._sbSelected] }),
+      });
+      const d = await r.json();
+      _sbResolved = d.resolved || [];
+      _sbAutoAdded = d.auto_added || [];
+    } catch (_) {
+      _sbResolved = [..._sbSelected];
+      _sbAutoAdded = [];
+    }
+    _sbUpdateUI();
+  }
+
+  // ── update all UI panels ──────────────────────────────────────────────
+  function _sbUpdateUI() {
+    _sbRenderCatalog(document.getElementById('sb-search').value);
+    _sbRenderSelected();
+    _sbRenderAuto();
+    _sbCheckConflicts();
+
+    const hasSelection = _sbSelected.size > 0;
+    document.getElementById('sb-build-btn').disabled = !hasSelection;
+    const previewBtn = document.getElementById('sb-preview-btn');
+    if (hasSelection) previewBtn.classList.remove('hidden');
+    else previewBtn.classList.add('hidden');
+  }
+
+  function _sbRenderSelected() {
+    const list = document.getElementById('sb-selected-list');
+    const count = document.getElementById('sb-count');
+    count.textContent = `${_sbSelected.size} selected`;
+
+    if (_sbSelected.size === 0) {
+      list.innerHTML = '<div class="text-sm text-slate-500 italic py-4 text-center">Pick components from the left panel</div>';
+      return;
+    }
+    let html = '';
+    for (const id of [..._sbSelected]) {
+      const comp = _sbCatalog.find(c => c.id === id);
+      if (!comp) continue;
+      html += `<div class="flex items-center justify-between px-3 py-2 rounded-lg"
+                    style="background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.2)">
+        <div>
+          <span class="text-sm font-medium text-violet-300">${esc(comp.name)}</span>
+          <span class="text-xs text-slate-500 ml-2 mono">${esc(comp.version)}</span>
+        </div>
+        <button onclick="_sbToggle('${id}')" class="text-slate-500 hover:text-rose-400 text-xs transition-colors">✕</button>
+      </div>`;
+    }
+    list.innerHTML = html;
+  }
+
+  function _sbRenderAuto() {
+    const section = document.getElementById('sb-auto-section');
+    const list = document.getElementById('sb-auto-list');
+    if (!_sbAutoAdded.length) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    list.innerHTML = _sbAutoAdded.map(id => {
+      const comp = _sbCatalog.find(c => c.id === id);
+      return `<span class="text-xs px-2 py-1 rounded-full" style="background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.25);color:#a5b4fc">${esc(comp ? comp.name : id)}</span>`;
+    }).join('');
+  }
+
+  function _sbCheckConflicts() {
+    const conflictDiv = document.getElementById('sb-conflicts');
+    const msgs = [];
+    for (const [a, b] of _sbMutuallyExclusive) {
+      if (_sbSelected.has(a) && _sbSelected.has(b)) {
+        msgs.push(`⚠ ${a} and ${b} cannot be used together`);
+      }
+    }
+    // Warn about experimental components
+    const expSelected = [..._sbSelected].filter(id => {
+      const c = _sbCatalog.find(x => x.id === id);
+      return c && c.experimental;
+    });
+    if (expSelected.length) {
+      msgs.push(`ℹ ${expSelected.join(', ')} marked EXP — no verified Docker Hub image; will be skipped during build`);
+    }
+    if (msgs.length) {
+      conflictDiv.innerHTML = msgs.join('<br>');
+      conflictDiv.classList.remove('hidden');
+    } else {
+      conflictDiv.classList.add('hidden');
+    }
+  }
+
+  // ── search ────────────────────────────────────────────────────────────
+  document.getElementById('sb-search').addEventListener('input', e => {
+    _sbRenderCatalog(e.target.value);
+  });
+
+  // ── compose preview ───────────────────────────────────────────────────
+  document.getElementById('sb-preview-btn').addEventListener('click', async () => {
+    const panel = document.getElementById('sb-compose-panel');
+    const wasHidden = panel.classList.contains('hidden');
+    if (!wasHidden) { panel.classList.add('hidden'); return; }
+
+    try {
+      const r = await fetch('/api/stack-builder/compose-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected: [..._sbSelected] }),
+      });
+      const d = await r.json();
+      document.getElementById('sb-compose-code').textContent = d.compose_yaml || '';
+      panel.classList.remove('hidden');
+    } catch (e) {
+      alert('Failed to generate preview: ' + e.message);
+    }
+  });
+
+  document.getElementById('sb-compose-copy').addEventListener('click', () => {
+    const code = document.getElementById('sb-compose-code').textContent;
+    navigator.clipboard.writeText(code).catch(() => {});
+    document.getElementById('sb-compose-copy').textContent = 'copied!';
+    setTimeout(() => { document.getElementById('sb-compose-copy').textContent = 'copy'; }, 1500);
+  });
+
+  // ── AI Build ──────────────────────────────────────────────────────────
+  document.getElementById('sb-build-btn').addEventListener('click', _sbStartBuild);
+  document.getElementById('sb-prog-done-btn').addEventListener('click', _sbProgClose);
+  document.getElementById('sb-prog-err-close').addEventListener('click', _sbProgClose);
+  document.getElementById('sb-prog-close').addEventListener('click', _sbProgClose);
+  document.getElementById('sb-prog-err-retry').addEventListener('click', _sbRetryBuild);
+
+  let _sbLastBuildParams = null;
+
+  function _sbProgClose() {
+    document.getElementById('sb-progress-modal').classList.add('hidden');
+    if (_sbEvtSource) { _sbEvtSource.close(); _sbEvtSource = null; }
+  }
+
+  function _sbRetryBuild() {
+    if (!_sbLastBuildParams) return;
+    // Reset UI state then re-run with stored params
+    document.getElementById('sb-prog-log-inner').innerHTML = '';
+    document.getElementById('sb-prog-summary').classList.add('hidden');
+    document.getElementById('sb-prog-error').classList.add('hidden');
+    document.getElementById('sb-prog-close').classList.add('hidden');
+    _sbProgRenderPhases({});
+    _sbRunBuild(_sbLastBuildParams);
+  }
+
+  // Batched log appender — coalesces bursts of log lines into a single DOM
+  // flush per animation frame. A chatty install (hundreds of lines/sec during
+  // docker pulls) otherwise triggers one synchronous reflow per line via
+  // scrollTop, which freezes the browser main thread ("screen unresponsive").
+  // Also caps the line count so long installs don't grow the DOM unbounded.
+  const _logBatchers = new WeakMap();
+  function _batchLogLine(containerEl, scrollEl, cls, text) {
+    if (!containerEl) return;
+    let b = _logBatchers.get(containerEl);
+    if (!b) { b = { queue: [], scheduled: false }; _logBatchers.set(containerEl, b); }
+    b.queue.push({ cls, text });
+    if (b.scheduled) return;
+    b.scheduled = true;
+    requestAnimationFrame(() => {
+      b.scheduled = false;
+      if (!b.queue.length) return;
+      const frag = document.createDocumentFragment();
+      for (const it of b.queue) {
+        const d = document.createElement('div');
+        if (it.cls) d.className = it.cls;
+        d.textContent = it.text;
+        frag.appendChild(d);
+      }
+      b.queue = [];
+      containerEl.appendChild(frag);
+      while (containerEl.children.length > 4000) containerEl.removeChild(containerEl.firstChild);
+      const s = scrollEl || containerEl;
+      s.scrollTop = s.scrollHeight;
+    });
+  }
+  function _clearLogBatcher(containerEl) {
+    const b = containerEl && _logBatchers.get(containerEl);
+    if (b) b.queue = [];
+  }
+
+  function _sbProgLog(line) {
+    _batchLogLine(
+      document.getElementById('sb-prog-log-inner'),
+      document.getElementById('sb-prog-log'),
+      '', line);
+  }
+
+  function _sbProgRenderPhases(phaseStates) {
+    const container = document.getElementById('sb-prog-phases');
+    container.innerHTML = _SB_PHASES.map(p => {
+      const st = phaseStates[p.id] || 'pending';
+      const colors = {
+        pending: 'background:rgba(255,255,255,0.04);color:#4b5563;border-color:rgba(255,255,255,0.07)',
+        active:  'background:rgba(168,85,247,0.15);color:#d8b4fe;border-color:rgba(168,85,247,0.4)',
+        done:    'background:rgba(34,197,94,0.1);color:#86efac;border-color:rgba(34,197,94,0.3)',
+        failed:  'background:rgba(244,63,94,0.1);color:#fca5a5;border-color:rgba(244,63,94,0.3)',
+      };
+      const icons = { pending: '○', active: '◉', done: '✓', failed: '✗' };
+      return `<div class="text-xs rounded px-2 py-2 text-center" style="border:1px solid;${colors[st]}">
+        <div style="font-size:0.65rem">${icons[st]}</div>
+        <div class="truncate mt-0.5">${esc(p.label)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // ── Pre-install dialog: review components, add tools, choose target ──────
+  let _piState = null;   // {templateId, label, stackName, components:Set, mode, catalog:[]}
+
+  async function _sbInstallTemplate(templateId, label) {
+    let preset, catalog;
+    try {
+      const r = await api('/api/stack-builder/presets');
+      preset = (r.presets || []).find(p => p.template_id === templateId);
+      const c = await api('/api/stack-builder/catalog');
+      catalog = c.components || [];
+    } catch (e) {
+      showToast(`Couldn't load preset: ${e.message}`); return;
+    }
+    if (!preset || !preset.components || !preset.components.length) {
+      showToast(`Template '${templateId}' has no installable components`); return;
+    }
+    _piState = {
+      templateId,
+      label,
+      stackName: preset.stack_name || templateId.replace(/_/g, '-'),
+      components: new Set(preset.components),
+      mode: 'local',
+      catalog,
+    };
+    document.getElementById('pi-card-label').textContent = label;
+    _piRenderComponents();
+    _piPopulateAddSelect();
+    _piSetMode('local');
+    document.getElementById('preinstall-modal').classList.remove('hidden');
+  }
+
+  function _piRenderComponents() {
+    const wrap = document.getElementById('pi-components');
+    wrap.innerHTML = [..._piState.components].map(id =>
+      `<span class="badge badge-stable flex items-center gap-1" style="padding:3px 8px">
+         ${esc(id)}
+         <button class="pi-rm text-rose-300 hover:text-rose-100 ml-1" data-id="${esc(id)}" title="remove">×</button>
+       </span>`
+    ).join('');
+    wrap.querySelectorAll('.pi-rm').forEach(b =>
+      b.addEventListener('click', () => {
+        _piState.components.delete(b.dataset.id);
+        _piRenderComponents(); _piPopulateAddSelect();
+      }));
+  }
+
+  function _piPopulateAddSelect() {
+    const sel = document.getElementById('pi-add-select');
+    const avail = (_piState.catalog || [])
+      .filter(c => !_piState.components.has(c.id))
+      .sort((a, b) => (a.category || '').localeCompare(b.category || ''));
+    sel.innerHTML = `<option value="">+ Add a component…</option>` +
+      avail.map(c => `<option value="${esc(c.id)}">${esc(c.category || '')} — ${esc(c.name || c.id)}</option>`).join('');
+  }
+
+  function _piSetMode(mode) {
+    _piState.mode = mode;
+    const localBtn = document.getElementById('pi-target-local');
+    const remoteBtn = document.getElementById('pi-target-remote');
+    const fields = document.getElementById('pi-remote-fields');
+    if (mode === 'remote') {
+      fields.classList.remove('hidden');
+      remoteBtn.className = 'btn-primary text-xs flex-1';
+      localBtn.className = 'btn-ghost text-xs flex-1';
+    } else {
+      fields.classList.add('hidden');
+      localBtn.className = 'btn-primary text-xs flex-1';
+      remoteBtn.className = 'btn-ghost text-xs flex-1';
+    }
+  }
+
+  function _piClose() { document.getElementById('preinstall-modal').classList.add('hidden'); }
+
+  // wire dialog controls
+  document.getElementById('pi-close').addEventListener('click', _piClose);
+  document.getElementById('pi-cancel').addEventListener('click', _piClose);
+  document.getElementById('pi-target-local').addEventListener('click', () => _piSetMode('local'));
+  document.getElementById('pi-target-remote').addEventListener('click', () => _piSetMode('remote'));
+  document.getElementById('pi-add-select').addEventListener('change', (e) => {
+    const id = e.target.value;
+    if (id) { _piState.components.add(id); _piRenderComponents(); _piPopulateAddSelect(); }
+  });
+
+  document.getElementById('pi-go').addEventListener('click', () => {
+    if (!_piState || _piState.components.size === 0) { showToast('Select at least one tool'); return; }
+    const params = {
+      selected: [..._piState.components],
+      versions: {},
+      stack_name: _piState.stackName,
+    };
+    if (_piState.mode === 'remote') {
+      const host = document.getElementById('pi-host').value.trim();
+      const user = document.getElementById('pi-ssh-user').value.trim();
+      if (!host || !user) { showToast('Host and SSH user are required for remote install'); return; }
+      params.target = {
+        mode: 'remote',
+        host,
+        ssh_user: user,
+        ssh_port: parseInt(document.getElementById('pi-ssh-port').value || '22', 10),
+        ssh_key_path: document.getElementById('pi-ssh-key').value.trim() || null,
+        ssh_password: document.getElementById('pi-ssh-pass').value || null,
+        install_dir: document.getElementById('pi-install-dir').value.trim() || null,
+      };
+    } else {
+      params.target = { mode: 'local' };
+    }
+    _piClose();
+    // Open progress modal and run the build with the chosen target.
+    _sbLastBuildParams = params;
+    const modal = document.getElementById('sb-progress-modal');
+    modal.classList.remove('hidden');
+    const tgt = params.target.mode === 'remote' ? `remote ${params.target.host}` : 'localhost';
+    document.getElementById('sb-prog-subtitle').textContent =
+      `${_piState.label} → ${tgt} — ${params.selected.join(', ')}`;
+    document.getElementById('sb-prog-log-inner').innerHTML = '';
+    document.getElementById('sb-prog-summary').classList.add('hidden');
+    document.getElementById('sb-prog-error').classList.add('hidden');
+    document.getElementById('sb-prog-close').classList.add('hidden');
+    _sbProgRenderPhases({});
+    _sbRunBuild(params);
+  });
+
+  async function _sbStartBuild() {
+    if (_sbSelected.size === 0) return;
+
+    const stackName = document.getElementById('sb-stack-name').value.trim() || 'custom-lakehouse';
+    _sbLastBuildParams = {
+      selected:   [..._sbSelected],
+      stack_name: stackName,
+    };
+
+    // Open progress modal
+    const modal = document.getElementById('sb-progress-modal');
+    modal.classList.remove('hidden');
+    document.getElementById('sb-prog-subtitle').textContent = '';
+    document.getElementById('sb-prog-log-inner').innerHTML = '';
+    document.getElementById('sb-prog-summary').classList.add('hidden');
+    document.getElementById('sb-prog-error').classList.add('hidden');
+    document.getElementById('sb-prog-close').classList.add('hidden');
+    _sbProgRenderPhases({});
+
+    _sbRunBuild(_sbLastBuildParams);
+  }
+
+  async function _sbRunBuild(params) {
+    const { stack_name: stackName } = params;
+    try {
+      const r = await fetch('/api/stack-builder/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const { job_id } = await r.json();
+
+      document.getElementById('sb-prog-subtitle').textContent = `job: ${job_id.slice(0, 8)}…  stack: ${stackName}`;
+
+      // Subscribe to SSE stream
+      if (_sbEvtSource) _sbEvtSource.close();
+      _sbEvtSource = new EventSource(`/api/stack-builder/stream/${job_id}`);
+
+      const phaseStates = {};
+      _sbEvtSource.onmessage = (e) => {
+        const ev = JSON.parse(e.data);
+        if (ev.kind === 'log') {
+          _sbProgLog(ev.line || '');
+        } else if (ev.kind === 'phase_start') {
+          phaseStates[ev.phase] = 'active';
+          _sbProgRenderPhases(phaseStates);
+        } else if (ev.kind === 'phase_end') {
+          phaseStates[ev.phase] = ev.ok ? 'done' : 'failed';
+          _sbProgRenderPhases(phaseStates);
+        } else if (ev.kind === 'connection_info') {
+          const endpoints = document.getElementById('sb-prog-endpoints');
+          const info = ev.info || {};
+          endpoints.innerHTML = Object.entries(info).map(([k, v]) =>
+            `<div><span class="text-slate-400">${esc(k)}</span></div>
+             <div><a href="${esc(v)}" target="_blank" class="text-cyan-400 hover:underline mono">${esc(v)}</a></div>`
+          ).join('');
+          if (ev.pipeline_example) {
+            document.getElementById('sb-prog-pipeline-code').textContent = ev.pipeline_example;
+            document.getElementById('sb-prog-pipeline-wrap').classList.remove('hidden');
+          }
+        } else if (ev.kind === 'versions_ready') {
+          const vmap = ev.versions || {};
+          const lines = Object.entries(vmap).map(([k,v]) => `  ${k}: ${v}`).join('\n');
+          _sbProgLog(`AI-selected versions:\n${lines}`);
+        } else if (ev.kind === 'skipped_experimental') {
+          const names = (ev.components || []).join(', ');
+          _sbProgLog(`⚠ Skipped experimental: ${names} (no verified Docker Hub image)`);
+        } else if (ev.kind === 'provision_complete') {
+          document.getElementById('sb-prog-summary').classList.remove('hidden');
+          document.getElementById('sb-prog-close').classList.remove('hidden');
+          _sbEvtSource.close(); _sbEvtSource = null;
+        } else if (ev.kind === 'error') {
+          document.getElementById('sb-prog-error-msg').textContent = ev.message || 'Unknown error';
+          document.getElementById('sb-prog-error').classList.remove('hidden');
+          document.getElementById('sb-prog-close').classList.remove('hidden');
+          _sbEvtSource.close(); _sbEvtSource = null;
+        } else if (ev.kind === 'done') {
+          if (ev.state !== 'done') {
+            document.getElementById('sb-prog-close').classList.remove('hidden');
+          }
+        }
+      };
+      _sbEvtSource.onerror = () => {
+        _sbProgLog('[error] SSE stream disconnected');
+        document.getElementById('sb-prog-close').classList.remove('hidden');
+      };
+    } catch (err) {
+      document.getElementById('sb-prog-error-msg').textContent = String(err);
+      document.getElementById('sb-prog-error').classList.remove('hidden');
+      document.getElementById('sb-prog-close').classList.remove('hidden');
+    }
   }
 
   // ---- Details modal ----
@@ -2250,7 +3564,8 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     logoImg.src = comp.logo || `/assets/logos/${comp.id}.svg`;
     logoImg.style.display = "";
     document.getElementById("comp-modal-name").textContent = comp.name || comp.id;
-    document.getElementById("comp-modal-version").textContent = comp.version ? `v${comp.version}` : '';
+    const _modalVer = _getSelectedVersion(comp.id);
+    document.getElementById("comp-modal-version").textContent = _modalVer ? `v${_modalVer}` : '';
     document.getElementById("comp-modal-tagline").textContent = comp.tagline || comp.summary || '';
     const badgesEl = document.getElementById("comp-modal-badges");
     badgesEl.innerHTML = (comp.badges || []).map(b => {
@@ -2274,12 +3589,16 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     const urlEl = document.getElementById("comp-modal-url");
     urlEl.href = comp.url || "#";
     const addBtn = document.getElementById("comp-modal-add");
-    const isAdded = state.cart.includes(compId);
+    const isAdded = _isAdded(comp);
     addBtn.textContent = isAdded ? "✓ Remove from cart" : "Add to cart";
     addBtn.className = isAdded ? "btn-ghost text-sm" : "btn-primary text-sm";
     addBtn.onclick = async () => {
-      if (state.cart.includes(compId)) state.cart = state.cart.filter(x => x !== compId);
-      else state.cart = [...state.cart, compId];
+      if (_isAdded(comp)) {
+        const relatedIds = [comp.id, ...(comp.version_options || []).map(o => o.cart_id).filter(Boolean)];
+        state.cart = state.cart.filter(id => !relatedIds.includes(id));
+      } else {
+        state.cart = [...state.cart, _effectiveCartId(comp)];
+      }
       _hideCompModal();
       renderCatalog();
       await refreshCartValidation();
@@ -2355,7 +3674,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     document.getElementById("sizing-ram").textContent  = t.ram_gb  ?? "—";
     document.getElementById("sizing-disk").textContent = t.disk_gb ?? "—";
     const hint = (sizing.tiers.recommended.cheapest_overall)
-      ? `Fits cheapest VPS: ${sizing.tiers.recommended.cheapest_overall.provider} ${sizing.tiers.recommended.cheapest_overall.plan} (~$${sizing.tiers.recommended.cheapest_overall.monthly_usd}/mo)`
+      ? `Fits cheapest VPS: ${sizing.tiers.recommended.cheapest_overall.provider_name} ${sizing.tiers.recommended.cheapest_overall.plan} (~$${sizing.tiers.recommended.cheapest_overall.usd_month}/mo)`
       : `Full UDP stack — minimal tier exists for smaller VPSes.`;
     document.getElementById("sizing-hint").textContent = hint;
   }
@@ -2387,7 +3706,9 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
         const c = idx[id] || { name: id, category: "?" };
         const div = document.createElement("div");
         div.className = "flex items-center justify-between text-xs";
-        div.innerHTML = `<span class="text-emerald-300">✓</span><span class="flex-1 ml-2 text-slate-300">${esc(c.name)}</span><span class="text-slate-500">${esc(c.category)}</span>`;
+        const ver = _getSelectedVersion(id);
+        const verBadge = ver ? `<span style="font-family:monospace;font-size:9px;color:rgba(103,232,249,0.7);background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.18);border-radius:3px;padding:0 4px;margin-right:4px">v${esc(ver)}</span>` : '';
+        div.innerHTML = `<span class="text-emerald-300">✓</span><span class="flex-1 ml-2 text-slate-300">${esc(c.name)}</span>${verBadge}<span class="text-slate-500">${esc(c.category)}</span>`;
         list.appendChild(div);
       });
     }
@@ -2425,11 +3746,19 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     state.cart = []; renderCatalog(); await refreshCartValidation();
   });
   document.getElementById("btn-cart-recommend").addEventListener("click", async () => {
-    const r = await api("/api/cart/recommended");
+    // Recommend the set for the CURRENT template/goal — not a fixed Iceberg cart.
+    const qs = state.template ? `?template=${encodeURIComponent(state.template)}`
+             : state.goal     ? `?goal=${encodeURIComponent(state.goal)}`
+             : "";
+    const r = await api("/api/cart/recommended" + qs);
     state.cart = r.cart; renderCatalog(); await refreshCartValidation();
   });
   document.getElementById("btn-build-continue").addEventListener("click", async () => {
     if (!state.cartValidation?.complete) return;
+    if (!state.templateStackId && state.template) {
+      showToast("This template doesn't have an installable stack yet — it's on the roadmap.", "warn");
+      return;
+    }
     // Load sizing for the underlying stack (UDP)
     await loadNameScreen();
     navigate("name");
@@ -2523,10 +3852,23 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   });
   document.getElementById("btn-name-continue").addEventListener("click", async () => {
     if (!state.lakeName) return;
-    // Pretend we already picked the UDP stack — it's the only one our cart maps to in v0.3
-    state.selected = { id: "udp-local-v0.2" };
+    // A template's cart only maps to a real install if its recommended_set
+    // carries a certified stack_id. Guard here as a second line of defence
+    // (backend also sets installable:false when stack_id is absent).
+    if (!state.templateStackId) {
+      showToast("This template doesn't have an installable stack yet — it's on the roadmap.", "warn");
+      return;
+    }
+    const stackId = state.templateStackId;
+    // Fetch full stack metadata so install_dir and mode are available downstream.
+    try {
+      const stacks = await api("/api/stacks");
+      state.selected = stacks.find(s => s.id === stackId) || { id: stackId };
+    } catch (_) {
+      state.selected = { id: stackId };
+    }
     navigate("sizing");
-    await loadSizing("udp-local-v0.2");
+    await loadSizing(stackId);
   });
 
   // ===========================================================
@@ -2674,9 +4016,58 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   document.getElementById("btn-to-server").addEventListener("click", () => navigate("server"));
 
   // ----- server / inspect -----
+  // The address the browser used to reach Studio == the server Studio runs on.
+  // Installs against THAT host run locally on the server (no SSH); only a
+  // DIFFERENT host is a genuine remote target. This is generic — it adapts to
+  // localhost, an office FQDN, or a bare IP with no hardcoding.
+  function _studioOrigin() {
+    return (window.location.hostname || "").trim();
+  }
+  function _isLocalHost(h) {
+    const self = _studioOrigin();
+    return !h || h === "localhost" || h === "127.0.0.1" || h === "::1"
+           || (!!self && h === self);
+  }
+
+  function onHostChange() {
+    const h = document.getElementById("input-host").value.trim();
+    const isLocal = _isLocalHost(h);
+    const sshForm = document.getElementById("ssh-form");
+    const sshNote = document.getElementById("ssh-local-note");
+    const badge = document.getElementById("ssh-status-badge");
+    if (isLocal) {
+      sshForm.classList.add("hidden");
+      sshNote.classList.remove("hidden");
+      // "this server" is accurate whether the host is localhost or the FQDN
+      // Studio is being served from.
+      badge.textContent = "this server · no SSH required";
+      badge.className = "text-xs px-2 py-0.5 rounded-md bg-slate-700/60 text-slate-400";
+    } else {
+      sshForm.classList.remove("hidden");
+      sshNote.classList.add("hidden");
+      badge.textContent = "remote host · SSH required";
+      badge.className = "text-xs px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30";
+    }
+  }
+
+  // Generic default: prefill Host with the same address the browser used to
+  // reach Studio, so post-install service URLs (MinIO, StarRocks, Trino …) are
+  // clickable from wherever the operator sits — no hardcoded server name.
+  (function _defaultHostToStudioOrigin() {
+    const el = document.getElementById("input-host");
+    if (!el) return;
+    const h = _studioOrigin();
+    if (h) el.value = h;
+    onHostChange();
+  })();
+
   document.getElementById("btn-inspect").addEventListener("click", () => {
     state.host = document.getElementById("input-host").value.trim() || "localhost";
     state.installDir = document.getElementById("input-installdir").value.trim();
+    state.sshUser = document.getElementById("input-ssh-user").value.trim();
+    state.sshPort = parseInt(document.getElementById("input-ssh-port").value.trim(), 10) || 22;
+    state.sshKeyPath = document.getElementById("input-ssh-key").value.trim();
+    state.sshPassword = document.getElementById("input-ssh-password").value;
     navigate("inspect");
     runInspect();
   });
@@ -2684,10 +4075,24 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
   async function runInspect() {
     const summary = document.getElementById("inspect-summary");
     const grid = document.getElementById("inspect-checks");
-    summary.innerHTML = `<div class="flex items-center gap-2 text-slate-400 text-sm"><div class="w-2 h-2 rounded-full bg-cyan-400 pulse-dot"></div>Inspecting…</div>`;
+    const isRemote = state.selected?.mode === "remote-cluster";
+    const titleEl = document.getElementById("inspect-title");
+    const subtitleEl = document.getElementById("inspect-subtitle");
+    if (titleEl) titleEl.textContent = isRemote ? "Cluster connectivity check" : "Pre-flight inspection";
+    if (subtitleEl) subtitleEl.textContent = isRemote
+      ? "Probing each cluster node over TCP to confirm this Studio host can reach the datalake."
+      : "Checking the target environment against stack requirements.";
+    summary.innerHTML = `<div class="flex items-center gap-2 text-slate-400 text-sm"><div class="w-2 h-2 rounded-full bg-cyan-400 pulse-dot"></div>${isRemote ? "Connecting to cluster nodes…" : "Inspecting…"}</div>`;
     grid.innerHTML = "";
     try {
-      const r = await api("/api/inspect", { method: "POST", body: JSON.stringify({ stack_id: state.selected.id, host: state.host }) });
+      const inspectBody = { stack_id: state.selected.id, host: state.host };
+      if (!_isLocalHost(state.host) && state.sshUser) {
+        inspectBody.ssh_user = state.sshUser;
+        inspectBody.ssh_port = state.sshPort || 22;
+        if (state.sshKeyPath) inspectBody.ssh_key_path = state.sshKeyPath;
+        if (state.sshPassword) inspectBody.ssh_password = state.sshPassword;
+      }
+      const r = await api("/api/inspect", { method: "POST", body: JSON.stringify(inspectBody) });
       state.inspectReport = r;
       renderInspect(r);
     } catch (e) { summary.innerHTML = `<div class="text-rose-400">${esc(e.message)}</div>`; }
@@ -2728,7 +4133,11 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       `;
       grid.appendChild(el);
     });
-    document.getElementById("btn-install").disabled = !r.recommended;
+    const btnInstall = document.getElementById("btn-install");
+    btnInstall.disabled = !r.recommended;
+    btnInstall.innerHTML = state.selected?.mode === "remote-cluster"
+      ? "Connect to cluster <span class='ml-1'>→</span>"
+      : "Install <span class='ml-1'>→</span>";
   }
 
   // ----- install -----
@@ -2739,6 +4148,12 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     if (state.lakeName) body.lake_name = state.lakeName;
     if (state.goal) body.goal = state.goal;
     if (state.cart && state.cart.length) body.cart = state.cart;
+    if (!_isLocalHost(state.host) && state.sshUser) {
+      body.ssh_user = state.sshUser;
+      body.ssh_port = state.sshPort || 22;
+      if (state.sshKeyPath) body.ssh_key_path = state.sshKeyPath;
+      if (state.sshPassword) body.ssh_password = state.sshPassword;
+    }
     const rec = await api("/api/installs", { method: "POST", body: JSON.stringify(body) });
     state.installId = rec.install_id;
     state.installRecord = rec;
@@ -2759,10 +4174,33 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
         el.appendChild(div);
       }
     }
+    renderRunningControls(rec);
     renderFailureControls(rec);
   }
 
-  const SKIPPABLE_STEPS = new Set(["smoke", "finalize"]);
+  const RUNNING_STATES = new Set(["STARTING_STACK", "BOOTSTRAPPING", "RUNNING", "SMOKING", "FINALIZING"]);
+  function renderRunningControls(rec) {
+    const wrap = document.getElementById("running-controls");
+    if (!RUNNING_STATES.has(rec.state)) { wrap.classList.add("hidden"); return; }
+    wrap.classList.remove("hidden");
+    wrap.innerHTML = `
+      <button id="btn-stop-install" class="w-full px-3 py-2 rounded-lg text-sm flex items-center justify-center gap-2"
+        style="background:rgba(244,63,94,0.12);border:1px solid rgba(244,63,94,0.35);color:#fca5a5;">
+        ⏹ Stop install
+      </button>
+    `;
+    document.getElementById("btn-stop-install").addEventListener("click", async () => {
+      if (!confirm("Stop this install? Docker containers will be left as-is — use Rollback afterwards to clean them up.")) return;
+      const btn = document.getElementById("btn-stop-install");
+      btn.disabled = true; btn.textContent = "Stopping…";
+      try {
+        await api(`/api/installs/${state.installId}/cancel`, { method: "POST" });
+        setTimeout(() => refreshInstall(state.installId), 800);
+      } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = "⏹ Stop install"; }
+    });
+  }
+
+  const SKIPPABLE_STEPS = new Set(["smoke", "finalize", "verify"]);
   function renderFailureControls(rec) {
     const wrap = document.getElementById("failure-controls");
     const diag = document.getElementById("install-diagnose");
@@ -2820,7 +4258,11 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     } catch (e) { alert(e.message); }
   }
   async function rollbackInstall() {
-    if (!confirm("This will run ./udp clean and REMOVE all UDP Docker volumes (data loss). Continue?")) return;
+    const isRemote = state.selected?.mode === "remote-cluster";
+    const msg = isRemote
+      ? "This will remove the install record for this remote cluster from Studio. The cluster itself is NOT affected. Continue?"
+      : "This will run ./udp clean and REMOVE all UDP Docker volumes (data loss). Continue?";
+    if (!confirm(msg)) return;
     try {
       openLogStream(state.installId);
       const r = await api(`/api/installs/${state.installId}/steps/rollback`, { method: "POST" });
@@ -2915,7 +4357,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       }
       if (evt.kind === "reset") {
         // Server says our resume point was too old; clear local log.
-        if (logEl) logEl.innerHTML = "";
+        if (logEl) { _clearLogBatcher(logEl); logEl.innerHTML = ""; }
         state._wsLastSeq[id] = 0;
         return;
       }
@@ -2961,12 +4403,9 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
 
   function handleEvent(evt, logEl) {
     if (evt.kind === "log") {
-      const div = document.createElement("div");
-      div.className = "log-line " + (evt.stream === "stderr" ? "text-amber-300" : "text-slate-300");
-      div.textContent = evt.line;
-      logEl.appendChild(div);
-      if (logEl.children.length > 4000) logEl.removeChild(logEl.firstChild);
-      logEl.scrollTop = logEl.scrollHeight;
+      _batchLogLine(logEl, logEl,
+        "log-line " + (evt.stream === "stderr" ? "text-amber-300" : "text-slate-300"),
+        evt.line);
       document.getElementById("log-step").textContent = evt.step || "";
     } else if (evt.kind === "step_start") { updateStepUI(evt.step, "running"); }
     else if (evt.kind === "step_end") { updateStepUI(evt.step, evt.status === "success" ? "success" : "failed"); }
@@ -2982,7 +4421,7 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     } else if (evt.kind === "result") {
       if (state.installRecord) state.installRecord.outputs = evt.payload || {};
     } else if (evt.kind === "error") {
-      const div = document.createElement("div"); div.className = "log-line text-rose-400"; div.textContent = "ERROR: " + (evt.line || ""); logEl.appendChild(div); logEl.scrollTop = logEl.scrollHeight;
+      _batchLogLine(logEl, logEl, "log-line text-rose-400", "ERROR: " + (evt.line || ""));
     }
   }
 
@@ -3008,6 +4447,8 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
       document.getElementById("first-action-title").textContent = "Start using your lakehouse";
     }
     renderFirstActions(rec);
+
+    
     const urls = document.getElementById("success-urls"); urls.innerHTML = "";
     Object.values(rec.outputs?.urls || {}).forEach(u => {
       const a = document.createElement("a");
@@ -3670,10 +5111,8 @@ SELECT * FROM app_analytics.demo_customer_summary LIMIT 5;</textarea>
     }
     root.innerHTML = `<div class="v04-empty">Loading backups…</div>`;
     try {
-      const r = await api(`/api/installs/${state.installId}/backups`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      const items = data.data?.backups || data.backups || data.data || [];
+      const data = await api(`/api/installs/${state.installId}/backups`);
+      const items = data?.data?.backups || data?.backups || data?.data || (Array.isArray(data) ? data : []);
       if (!items.length) {
         root.innerHTML = `<div class="v04-empty">No backups yet — create your first one above.</div>`;
         return;

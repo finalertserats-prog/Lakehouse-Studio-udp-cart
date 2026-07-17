@@ -70,11 +70,10 @@ components:
   - id: trino
     name: Trino
     category: processing
-    # Same Trino 475 pin as udp-trino-local-v0.1 — picked for its
-    # in-market maturity around Iceberg-REST + MinIO. Nessie exposes
-    # the same Iceberg REST surface, so the same Trino release applies.
-    version: "475"
-    image: trinodb/trino:475
+    # Trino 481 — bumped from 475 on 2026-05-27. Nessie exposes the
+    # same Iceberg REST surface as the REST catalog; same release applies.
+    version: "481"
+    image: trinodb/trino:481
     service_name: trino
     ports: [8080]
     resource_profiles:
@@ -108,25 +107,35 @@ components:
       recommended: { cpu: 4, ram_gb: 8,  disk_gb: 50 }
       comfortable: { cpu: 8, ram_gb: 16, disk_gb: 200 }
 
+  - id: airflow
+    name: Apache Airflow
+    category: orchestration
+    version: "2.10.4"
+    image: apache/airflow:2.10.4-python3.11
+    service_name: airflow
+    ports: [9090]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2, disk_gb: 5 }
+      recommended: { cpu: 2, ram_gb: 4, disk_gb: 10 }
+      comfortable: { cpu: 2, ram_gb: 4, disk_gb: 10 }
+
 requirements:
   os: [linux, windows-docker-desktop, darwin]
   docker: required
   docker_compose: required
   bash: required
-  # Honest sizing (Gemini review 2026-05-17): summing recommended profiles
-  # is Trino 10 + StarRocks FE 4 + StarRocks BE 8 + Nessie 2 + MinIO 4 =
-  # ~28 GB. Summing minimal profiles is ~13 GB but with OS + Docker
-  # overhead you need 16 GB floor or Trino planning OOMs on Iceberg scans.
+  # Sizing: Trino 10 + StarRocks FE 4 + StarRocks BE 8 + Nessie 2 +
+  # MinIO 4 + Airflow 4 + Postgres-Airflow 1 = ~33 GB recommended.
   minimum_ram_gb: 16
-  recommended_ram_gb: 28
+  recommended_ram_gb: 32
   minimum_cpu_cores: 4
   recommended_cpu_cores: 8
   minimum_disk_gb: 60
   recommended_disk_gb: 120
 
 ports:
-  # MinIO console + API, Nessie REST, Trino UI, StarRocks FE.
-  required: [9000, 9001, 19120, 8080, 8030, 9030]
+  # MinIO, Nessie REST, Trino UI, StarRocks FE, Airflow webserver.
+  required: [9000, 9001, 19120, 8080, 8030, 9030, 9090]
   optional: [9020, 8040, 8060, 9050, 9060]
 
 env_defaults:
@@ -179,8 +188,10 @@ commands:
   start:
     type: docker_compose_up
     extra_services: [create-bucket]
-    timeout: 600
-  bootstrap: { argv: ["bash", "scripts/lhs-nessie-bootstrap.sh"], timeout: 900 }
+    # 1800s, not 600s — cold image pulls (Trino + StarRocks + Nessie)
+    # routinely exceed 10 minutes on a non-trivial connection.
+    timeout: 1800
+  bootstrap: { argv: ["bash", "scripts/lhs-nessie-bootstrap.sh"], timeout: 1500 }
   smoke:     { argv: ["bash", "scripts/lhs-nessie-smoke.sh"],     timeout: 600 }
   status:    { argv: ["./udp", "status"],     timeout: 30 }
   stop:      { argv: ["./udp", "stop"],       timeout: 120 }
@@ -192,10 +203,12 @@ outputs:
     nessie_api:     { url: "http://{host}:19120/api/v2/config", label: "Nessie REST" }
     trino_ui:       { url: "http://{host}:8080", label: "Trino UI" }
     starrocks_ui:   { url: "http://{host}:8030", label: "StarRocks UI" }
+    airflow_ui:     { url: "http://{host}:9090", label: "Airflow UI" }
   connections:
     starrocks_mysql: "mysql -h {host} -P 9030 -u root"
     trino_cli:       "trino --server http://{host}:8080 --catalog iceberg"
     nessie_cli:      "nessie --endpoint http://{host}:19120/api/v2"
+    airflow_web:     "http://{host}:9090 (admin / admin)"
 
 certification:
   # Both flags true — promotion REQUIRES a passing smoke + a real

@@ -1,0 +1,3 @@
+# Live worker manifest (from /etc/hadoop-3.4.1/etc/hadoop/workers on sdpdevnn01)
+#sdpdevnn01.techsophy.com   # commented out on live — NameNode is not a DataNode
+datanode

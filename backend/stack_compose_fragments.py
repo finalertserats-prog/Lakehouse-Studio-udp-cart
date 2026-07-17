@@ -49,13 +49,21 @@ log = logging.getLogger("lhs.stack_compose_fragments")
 # ---- pinned image tags (verified 2026-05-17 against stack manifests) ----
 _NESSIE_IMAGE = "ghcr.io/projectnessie/nessie:0.99.0"
 _HMS_IMAGE = "bitsondatadev/hive-metastore:latest"
+# tabulario/spark-iceberg (same image the udp stacks use): ships PySpark 3.5 +
+# Iceberg S3FileIO. Added to stacks that lack a Spark to run the multi-format
+# ETL (e.g. Nessie). Delta/Hudi/hadoop-aws come in at submit time via --packages.
+_SPARK_ICEBERG_IMAGE = "tabulario/spark-iceberg:3.5.5_1.8.1"
 _POLARIS_IMAGE = "apache/polaris:1.4.1"  # bumped from 1.0.1 — that tag never published; 1.4.1 is real + has CVE fixes (Gemini research 2026-05-17, verified via docker manifest inspect)
 _POSTGRES_IMAGE = "postgres:15-alpine"
 _MYSQL_IMAGE = "mysql:8.0"
-# Trino 475 verified via `docker manifest inspect trinodb/trino:475`
-# on 2026-05-16. Matches the stack manifests' pin for udp-trino,
-# iceberg-nessie-trino, and delta-hms-spark-trino.
-_TRINO_IMAGE = "trinodb/trino:475"
+# Trino 481 — updated from 475 on 2026-06-17 to match lock files.
+_TRINO_IMAGE = "trinodb/trino:481"
+# JupyterLab with PySpark 3.5 pre-installed (AI/ML Research stack).
+_JUPYTER_IMAGE = "jupyter/all-spark-notebook:spark-3.5.0"
+# OpenLineage server (Marquez) + web UI + its dedicated Postgres (Fintech stack).
+_MARQUEZ_IMAGE = "marquezproject/marquez:0.50.0"
+_MARQUEZ_WEB_IMAGE = "marquezproject/marquez-web:0.50.0"
+_PG_MARQUEZ_VOLUME = "udp-postgres-marquez-data"
 
 
 # Filename the runner injects with `-f` when a fragment is needed.
@@ -68,8 +76,19 @@ FRAGMENT_FILENAME = "docker-compose.fragment.yml"
 # services come up alongside the base stack's services rather than
 # being filtered out by the runner's per-cart service list.
 FRAGMENT_SERVICES: dict[str, list[str]] = {
-    "udp-trino-local-v0.1":              ["trino"],
-    "iceberg-nessie-trino-local-v0.1":  ["nessie", "trino"],
+    # Local Demo is now a MULTI-FORMAT lakehouse: it gains a Hive Metastore so
+    # that when the user picks Delta or Hudi, StarRocks can register a
+    # delta_catalog / hudi_catalog against HMS (Iceberg keeps its REST catalog).
+    # HMS is harmless for the Iceberg case — it just goes unused.
+    "udp-local-v0.2":                    ["mysql-hms", "hive-metastore"],
+    # Superset belongs to Startup Analytics, NOT the Local Demo (udp-local-v0.2).
+    # Keying it here (per-stack) is what makes the two templates install
+    # genuinely different stacks instead of both dragging in Superset.
+    "startup-analytics-local-v0.1":      ["superset", "mysql-hms", "hive-metastore"],
+    "ai-ml-research-local-v0.1":         ["trino", "jupyter", "mysql-hms", "hive-metastore"],
+    "udp-trino-local-v0.1":              ["trino", "mysql-hms", "hive-metastore"],
+    "fintech-compliance-local-v0.1":     ["trino", "openlineage", "postgres-marquez", "marquez-web", "mysql-hms", "hive-metastore"],
+    "iceberg-nessie-trino-local-v0.1":  ["nessie", "trino", "postgres-airflow", "airflow", "spark", "mysql-hms", "hive-metastore"],
     "hudi-hms-spark-local-v0.1":        ["mysql-hms", "hive-metastore"],
     "delta-hms-spark-trino-local-v0.1": ["mysql-hms", "hive-metastore", "trino"],
     "iceberg-polaris-spark-local-v0.1": ["postgres-polaris", "polaris"],
@@ -153,7 +172,10 @@ def _trino_service_yaml(env: dict) -> str:
         "      TRINO_QUERY_MAX_MEMORY_PER_NODE: ${TRINO_QUERY_MAX_MEMORY_PER_NODE:-1.5GB}\n"
         "      TRINO_QUERY_MAX_MEMORY: ${TRINO_QUERY_MAX_MEMORY:-1.5GB}\n"
         "    ports:\n"
-        "      - \"8080:8080\"\n"
+        # Host port is env-overridable (TRINO_HTTP_PORT) so Trino stacks can
+        # dodge a host that already runs something on 8080 (common on shared
+        # servers). Container side stays 8080. Default preserves prior behavior.
+        "      - \"${TRINO_HTTP_PORT:-8080}:8080\"\n"
         "    healthcheck:\n"
         "      test: [\"CMD-SHELL\", \"curl -fsS http://localhost:8080/v1/info >/dev/null\"]\n"
         "      interval: 15s\n"
@@ -188,8 +210,192 @@ def _render_udp_trino_fragment(env: dict) -> str:
         "# up -d ... trino ...` actually has a service to bring up.\n"
         "services:\n"
         + _trino_service_yaml(env)
+        # Hive Metastore so this Trino stack is multi-format too (Delta/Hudi catalogs).
+        + _hms_services_yaml(env)
+        + "volumes:\n"
+        f"  {_MYSQL_HMS_VOLUME}:\n"
         + "networks:\n"
-        "  default: {}\n"
+        "  default:\n"
+        # Name the compose default network explicitly with a HYPHEN so a
+        # container's reverse-DNS PTR is `<container>.<net>` with no underscore.
+        # The default `<project>_default` has an underscore, which is an illegal
+        # URI hostname char and breaks HMS self-resolution -> StarRocks
+        # getAllDatabases. Install-specific (via LHS_NET) so installs don't share.
+        '    name: "${LHS_NET:-udp-net}"\n'
+    )
+
+
+def _jupyter_service_yaml(env: dict) -> str:
+    """Return ONLY the JupyterLab service YAML block (indented under services:).
+
+    jupyter/all-spark-notebook ships PySpark 3.5 + the Python data stack.
+    Host port 8889 (container 8888) so it never collides with the base UDP
+    Spark notebook on 8888. AWS creds point at MinIO so s3a:// reads work
+    from a notebook; the operator points Spark at the iceberg-rest catalog
+    for Iceberg tables (same warehouse the Trino/StarRocks engines read).
+    """
+    user = env.get("MINIO_ROOT_USER", "admin")
+    pw = env.get("MINIO_ROOT_PASSWORD", "udp_admin_12345")
+    token = env.get("JUPYTER_TOKEN", "lakehouse")
+    return (
+        "  jupyter:\n"
+        f"    image: {_JUPYTER_IMAGE}\n"
+        "    container_name: udp-jupyter\n"
+        "    restart: unless-stopped\n"
+        "    environment:\n"
+        "      JUPYTER_ENABLE_LAB: \"yes\"\n"
+        f"      JUPYTER_TOKEN: {token}\n"
+        f"      AWS_ACCESS_KEY_ID: {user}\n"
+        f"      AWS_SECRET_ACCESS_KEY: {pw}\n"
+        "      AWS_REGION: us-east-1\n"
+        "    ports:\n"
+        "      - \"8889:8888\"\n"
+        "    healthcheck:\n"
+        "      test: [\"CMD-SHELL\", \"curl -fsS http://localhost:8888/api >/dev/null\"]\n"
+        "      interval: 15s\n"
+        "      timeout: 5s\n"
+        "      retries: 12\n"
+        "      start_period: 30s\n"
+        "    networks:\n"
+        "      - default\n"
+    )
+
+
+def _render_ai_ml_fragment(env: dict) -> str:
+    """Render the Trino + JupyterLab fragment for ai-ml-research-local-v0.1.
+
+    The AI/ML Research stack is the udp-trino runtime (MinIO + Iceberg-REST +
+    Spark + StarRocks from UDP's base compose) PLUS Trino for federated SQL
+    and JupyterLab for notebooks. UDP's upstream compose ships neither Trino
+    nor Jupyter, and one fragment is produced per stack id, so this renderer
+    supplies BOTH — reusing the shared `_trino_service_yaml()` block so the
+    Trino definition never drifts from the other Trino-bearing stacks.
+    """
+    return (
+        "# docker-compose.fragment.yml -- Trino + JupyterLab services for "
+        "ai-ml-research-local-v0.1.\n"
+        "# Generated by backend/stack_compose_fragments.py.\n"
+        "#\n"
+        "# REQUIRED: UDP's upstream docker-compose.yml ships neither Trino nor\n"
+        "# JupyterLab. This fragment supplies both so the AI/ML Research stack\n"
+        "# actually brings up a query engine AND a notebook surface.\n"
+        "services:\n"
+        + _trino_service_yaml(env)
+        + _jupyter_service_yaml(env)
+        # Hive Metastore so AI/ML Research is multi-format too (Delta/Hudi catalogs).
+        + _hms_services_yaml(env)
+        + "volumes:\n"
+        f"  {_MYSQL_HMS_VOLUME}:\n"
+        + "networks:\n"
+        "  default:\n"
+        # Name the compose default network explicitly with a HYPHEN so a
+        # container's reverse-DNS PTR is `<container>.<net>` with no underscore.
+        # The default `<project>_default` has an underscore, which is an illegal
+        # URI hostname char and breaks HMS self-resolution -> StarRocks
+        # getAllDatabases. Install-specific (via LHS_NET) so installs don't share.
+        '    name: "${LHS_NET:-udp-net}"\n'
+    )
+
+
+def _render_fintech_fragment(env: dict) -> str:
+    """Render the Trino + OpenLineage(Marquez) fragment for
+    fintech-compliance-local-v0.1.
+
+    The Fintech Compliance stack is the udp-trino runtime (MinIO + Iceberg-REST
+    + Spark + Trino + StarRocks) PLUS OpenLineage for data-lineage / audit
+    trails — the template's headline feature. UDP's upstream compose ships
+    neither Trino nor OpenLineage, so this fragment supplies:
+
+      * trino            — shared Trino service block (via _trino_service_yaml)
+      * postgres-marquez — a DEDICATED Postgres whose db/role/password are all
+                           `marquez` (Marquez's config hardcodes those). A
+                           dedicated DB means Marquez auto-migrates its schema
+                           on first boot — no separate bootstrap step needed.
+      * openlineage      — Marquez server on 5000 (API) + 5001 (admin).
+    """
+    user = env.get("MINIO_ROOT_USER", "admin")  # noqa: F841 (kept for symmetry)
+    return (
+        "# docker-compose.fragment.yml -- Trino + OpenLineage(Marquez) for "
+        "fintech-compliance-local-v0.1.\n"
+        "# Generated by backend/stack_compose_fragments.py.\n"
+        "#\n"
+        "# REQUIRED: UDP's upstream docker-compose.yml ships neither Trino nor\n"
+        "# OpenLineage. This fragment supplies both plus Marquez's dedicated\n"
+        "# Postgres so the compliance stack actually delivers lineage tracking.\n"
+        "services:\n"
+        + _trino_service_yaml(env)
+        + "  postgres-marquez:\n"
+        f"    image: {_POSTGRES_IMAGE}\n"
+        "    container_name: udp-postgres-marquez\n"
+        "    restart: unless-stopped\n"
+        "    environment:\n"
+        "      POSTGRES_USER: marquez\n"
+        "      POSTGRES_PASSWORD: marquez\n"
+        "      POSTGRES_DB: marquez\n"
+        "    volumes:\n"
+        f"      - {_PG_MARQUEZ_VOLUME}:/var/lib/postgresql/data\n"
+        "    healthcheck:\n"
+        "      test: [\"CMD-SHELL\", \"pg_isready -U marquez\"]\n"
+        "      interval: 10s\n"
+        "      timeout: 5s\n"
+        "      retries: 20\n"
+        "      start_period: 20s\n"
+        "    networks:\n"
+        "      - default\n"
+        "  openlineage:\n"
+        f"    image: {_MARQUEZ_IMAGE}\n"
+        "    container_name: udp-openlineage\n"
+        "    restart: unless-stopped\n"
+        "    environment:\n"
+        "      MARQUEZ_PORT: \"5000\"\n"
+        "      MARQUEZ_ADMIN_PORT: \"5001\"\n"
+        "      MARQUEZ_CONFIG: \"\"\n"
+        "      POSTGRES_HOST: udp-postgres-marquez\n"
+        "      POSTGRES_PORT: \"5432\"\n"
+        "      POSTGRES_DB: marquez\n"
+        "      POSTGRES_USER: marquez\n"
+        "      POSTGRES_PASSWORD: marquez\n"
+        "    depends_on:\n"
+        "      postgres-marquez:\n"
+        "        condition: service_healthy\n"
+        "    ports:\n"
+        "      - \"5000:5000\"\n"
+        "      - \"5001:5001\"\n"
+        "    healthcheck:\n"
+        "      test: [\"CMD-SHELL\", \"wget -qO- http://localhost:5000/api/v1/namespaces >/dev/null 2>&1 || exit 1\"]\n"
+        "      interval: 15s\n"
+        "      timeout: 5s\n"
+        "      retries: 20\n"
+        "      start_period: 45s\n"
+        "    networks:\n"
+        "      - default\n"
+        # Marquez WEB UI — the browsable lineage GRAPH (port 3000). The
+        # openlineage service above is the API (5000); this proxies /api/v1 to
+        # it. WEB_PORT MUST be set or the image logs 'listening on port
+        # undefined' and never binds.
+        "  marquez-web:\n"
+        f"    image: {_MARQUEZ_WEB_IMAGE}\n"
+        "    container_name: udp-marquez-web\n"
+        "    restart: unless-stopped\n"
+        "    environment:\n"
+        "      MARQUEZ_HOST: udp-openlineage\n"
+        "      MARQUEZ_PORT: \"5000\"\n"
+        "      WEB_PORT: \"3000\"\n"
+        "    depends_on:\n"
+        "      openlineage:\n"
+        "        condition: service_started\n"
+        "    ports:\n"
+        "      - \"3000:3000\"\n"
+        "    networks:\n"
+        "      - default\n"
+        # Hive Metastore so Fintech Compliance is multi-format too (Delta/Hudi catalogs).
+        + _hms_services_yaml(env)
+        + "networks:\n"
+        "  default:\n"
+        '    name: "${LHS_NET:-udp-net}"\n'
+        "volumes:\n"
+        f"  {_PG_MARQUEZ_VOLUME}: {{}}\n"
+        f"  {_MYSQL_HMS_VOLUME}:\n"
     )
 
 
@@ -229,35 +435,196 @@ def _render_nessie_fragment(env: dict) -> str:
         "      # add a postgres-nessie service when promoting past v0.1.\n"
         "      NESSIE_VERSION_STORE_TYPE: IN_MEMORY\n"
         "      QUARKUS_OIDC_TENANT_ENABLED: \"false\"\n"
-        "      # S3 + warehouse config moved OUT of env vars and into a\n"
-        "      # bind-mounted application.properties (see volumes: below).\n"
-        "      # 2026-05-17: 3 prior attempts to wire S3 STATIC credentials\n"
-        "      # via NESSIE_CATALOG_SERVICE_S3_* env vars + URN reverse-\n"
-        "      # mapping all failed on Nessie 0.99 — SmallRye's env-var\n"
-        "      # reverse-mapping is unreliable for dotted-hyphenated\n"
-        "      # secret-config names. The official projectnessie demo at\n"
-        "      # docker/catalog-auth-s3/docker-compose.yml uses dotted\n"
-        "      # Quarkus properties (via -D or properties file), not env.\n"
+        "      # S3 credentials via standard AWS SDK v2 env vars.\n"
+        "      # Nessie 0.99 schema does not have access-key-id /\n"
+        "      # secret-access-key under nessie.catalog.service.s3.*\n"
+        "      # so those property names cause SRCFG00050 at boot.\n"
+        "      # AWS SDK v2 EnvironmentVariableCredentialsProvider picks\n"
+        "      # these up before Quarkus config is consulted.\n"
+        f"      AWS_ACCESS_KEY_ID: {env.get('MINIO_ROOT_USER', 'admin')}\n"
+        f"      AWS_SECRET_ACCESS_KEY: {env.get('MINIO_ROOT_PASSWORD', 'udp_admin_12345')}\n"
+        "      AWS_REGION: us-east-1\n"
         "    volumes:\n"
         "      - ./nessie.properties:/deployments/config/application.properties:ro\n"
         "    ports:\n"
         "      - \"19120:19120\"\n"
         "    healthcheck:\n"
-        "      test: [\"CMD\", \"curl\", \"-fsS\", \"http://localhost:19120/q/health\"]\n"
+        "      test: [\"CMD\", \"curl\", \"-fsS\", \"http://localhost:9000/q/health\"]\n"
         "      interval: 10s\n"
         "      timeout: 5s\n"
         "      retries: 12\n"
         "    networks:\n"
         "      - default\n"
         + _trino_service_yaml(env)
-        # Codex P0 fix 2026-05-17: the fragment used to declare
-        # `default: { external: true }` which only works if the network
-        # is pre-created. With docker compose -f base -f fragment, the
-        # base compose creates `default` on first start and our fragment
-        # joins by reference. No `external:` and no explicit `name:`
-        # needed — let compose's merge logic do the work.
+        + _airflow_services_yaml(env)
+        # ADDITIVE 3-catalog feature: Spark runs the multi-format ETL and Hive
+        # Metastore backs the Hudi/Delta catalogs. The Nessie/Trino/StarRocks/
+        # Airflow build above is untouched. Spark reaches Nessie's iceberg REST
+        # endpoint (via ETLV_ICE_URI in the smoke) for the iceberg format.
+        + "  spark:\n"
+        f"    image: {_SPARK_ICEBERG_IMAGE}\n"
+        "    container_name: udp-spark\n"
+        "    restart: unless-stopped\n"
+        "    environment:\n"
+        f"      AWS_ACCESS_KEY_ID: {env.get('MINIO_ROOT_USER', 'admin')}\n"
+        f"      AWS_SECRET_ACCESS_KEY: {env.get('MINIO_ROOT_PASSWORD', 'udp_admin_12345')}\n"
+        "      AWS_REGION: us-east-1\n"
+        "    healthcheck:\n"
+        "      test: [\"CMD-SHELL\", \"bash -c 'echo > /dev/tcp/localhost/8888' 2>/dev/null\"]\n"
+        "      interval: 15s\n"
+        "      timeout: 5s\n"
+        "      retries: 12\n"
+        "      start_period: 30s\n"
+        "    networks:\n"
+        "      - default\n"
+        + _hms_services_yaml(env)
+        # Rename the compose default network to a HYPHENATED name: a container's
+        # reverse-PTR is `<container>.<net>`, and the default `<project>_default`
+        # has an underscore (illegal URI host char) that breaks StarRocks
+        # getAllDatabases against HMS. LHS_NET (set by the runner per-install)
+        # resolves to `iceberg-nessie-trino-net`; the Nessie bootstrap's
+        # `docker run --network` is updated to match.
         + "networks:\n"
-        "  default: {}\n"
+        "  default:\n"
+        '    name: "${LHS_NET:-udp-net}"\n'
+        "volumes:\n"
+        "  udp_airflow_postgres_data: {}\n"
+        "  udp_airflow_dags: {}\n"
+        "  udp_airflow_logs: {}\n"
+        f"  {_MYSQL_HMS_VOLUME}:\n"
+    )
+
+
+def _airflow_services_yaml(env: dict) -> str:
+    """Postgres + Airflow standalone for iceberg-nessie-trino-local-v0.1.
+
+    Airflow runs in `standalone` mode (webserver + scheduler in one process)
+    backed by a dedicated Postgres instance. Uses LocalExecutor — no Redis or
+    Celery needed for a single-node pilot. Host port 9090 avoids collision
+    with Trino on 8080.
+
+    _AIRFLOW_WWW_USER_* env vars are read by the standalone entrypoint on
+    first boot to create the admin user; subsequent boots skip user creation.
+    """
+    af_user = env.get("AIRFLOW_ADMIN_USER", "admin")
+    af_pass = env.get("AIRFLOW_ADMIN_PASSWORD", "admin")
+    return (
+        "  postgres-airflow:\n"
+        "    image: postgres:15-alpine\n"
+        "    container_name: udp-postgres-airflow\n"
+        "    restart: unless-stopped\n"
+        "    environment:\n"
+        "      POSTGRES_USER: airflow\n"
+        "      POSTGRES_PASSWORD: airflow\n"
+        "      POSTGRES_DB: airflow\n"
+        "    volumes:\n"
+        "      - udp_airflow_postgres_data:/var/lib/postgresql/data\n"
+        "    healthcheck:\n"
+        '      test: ["CMD", "pg_isready", "-U", "airflow"]\n'
+        "      interval: 5s\n"
+        "      timeout: 5s\n"
+        "      retries: 10\n"
+        "    networks:\n"
+        "      - default\n"
+        "  airflow:\n"
+        "    image: apache/airflow:2.10.4-python3.11\n"
+        "    container_name: udp-airflow\n"
+        "    restart: unless-stopped\n"
+        "    command: standalone\n"
+        "    depends_on:\n"
+        "      postgres-airflow:\n"
+        "        condition: service_healthy\n"
+        "    environment:\n"
+        "      AIRFLOW__CORE__EXECUTOR: LocalExecutor\n"
+        "      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow\n"
+        "      AIRFLOW__CORE__LOAD_EXAMPLES: \"false\"\n"
+        "      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: \"true\"\n"
+        "      AIRFLOW__WEBSERVER__SECRET_KEY: lakehouse-studio-pilot\n"
+        # Right-sized for a loaded dev host: the defaults (4 sync workers,
+        # 120s master timeout) make gunicorn kill itself on cold start when
+        # the whole lakehouse stack is booting alongside Airflow.
+        "      AIRFLOW__WEBSERVER__WORKERS: \"2\"\n"
+        "      AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: \"300\"\n"
+        "      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: \"300\"\n"
+        f"      _AIRFLOW_WWW_USER_CREATE: \"true\"\n"
+        f"      _AIRFLOW_WWW_USER_USERNAME: {af_user}\n"
+        f"      _AIRFLOW_WWW_USER_PASSWORD: {af_pass}\n"
+        "    volumes:\n"
+        "      - udp_airflow_dags:/opt/airflow/dags\n"
+        "      - udp_airflow_logs:/opt/airflow/logs\n"
+        "    ports:\n"
+        '      - "9090:8080"\n'
+        "    healthcheck:\n"
+        '      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]\n'
+        "      interval: 30s\n"
+        "      timeout: 10s\n"
+        "      retries: 10\n"
+        "      start_period: 90s\n"
+        "    networks:\n"
+        "      - default\n"
+    )
+
+
+def _hms_services_yaml(env: dict) -> str:
+    """Return ONLY the mysql-hms + hive-metastore service YAML blocks (indented
+    under `services:`). Reused by every stack that wants a Hive Metastore so the
+    multi-format (Delta/Hudi) catalog capability is identical everywhere — no
+    per-stack drift. Caller supplies the `services:` header, the
+    `${_MYSQL_HMS_VOLUME}` volume declaration, and the trailing networks block.
+    (The bind-mounted metastore-site.xml is dropped by write_fragment.)
+    """
+    return (
+        "  mysql-hms:\n"
+        f"    image: {_MYSQL_IMAGE}\n"
+        "    container_name: udp-mysql-hms\n"
+        "    restart: unless-stopped\n"
+        # MySQL 8 defaults to caching_sha2_password, which the old Hive
+        # Metastore 3.0 JDBC driver can't negotiate over a non-SSL TCP
+        # connection (localhost healthcheck passes, but HMS over the network
+        # gets "Access denied"). Force native password so HMS connects.
+        '    command: ["--default-authentication-plugin=mysql_native_password"]\n'
+        "    environment:\n"
+        "      MYSQL_DATABASE: metastore\n"
+        "      MYSQL_USER: hive\n"
+        "      MYSQL_PASSWORD: ${HMS_DB_PASSWORD:-hive_password_pilot}\n"
+        "      MYSQL_ROOT_PASSWORD: ${HMS_DB_ROOT_PASSWORD:-root_password_pilot}\n"
+        "    volumes:\n"
+        f"      - {_MYSQL_HMS_VOLUME}:/var/lib/mysql\n"
+        "    expose:\n"
+        '      - "3306"\n'
+        "    healthcheck:\n"
+        '      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uhive -p$${MYSQL_PASSWORD} -D metastore -e \\"SELECT 1\\" >/dev/null"]\n'
+        "      interval: 10s\n"
+        "      timeout: 5s\n"
+        "      retries: 30\n"
+        "      start_period: 60s\n"
+        "    networks:\n"
+        "      - default\n"
+        "  hive-metastore:\n"
+        f"    image: {_HMS_IMAGE}\n"
+        "    container_name: udp-hive-metastore\n"
+        # Clean hostname so HMS's self-resolved canonical name is `hive-metastore`
+        # not `udp-hive-metastore.<net>` — the network-name underscore is an
+        # illegal URI host char and breaks StarRocks getAllDatabases.
+        "    hostname: hive-metastore\n"
+        "    restart: unless-stopped\n"
+        "    depends_on:\n"
+        "      mysql-hms:\n"
+        "        condition: service_started\n"
+        "    environment:\n"
+        "      METASTORE_DB_HOSTNAME: mysql-hms\n"
+        "    volumes:\n"
+        "      - ./hive-metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro\n"
+        "    expose:\n"
+        '      - "9083"\n'
+        "    healthcheck:\n"
+        '      test: ["CMD-SHELL", "bash -c \'</dev/tcp/127.0.0.1/9083\'"]\n'
+        "      interval: 15s\n"
+        "      timeout: 5s\n"
+        "      retries: 20\n"
+        "      start_period: 30s\n"
+        "    networks:\n"
+        "      - default\n"
     )
 
 
@@ -275,66 +642,17 @@ def _render_hms_fragment(env: dict) -> str:
         "# hudi-hms-spark-local-v0.1 / delta-hms-spark-trino-local-v0.1.\n"
         "# Generated by backend/stack_compose_fragments.py.\n"
         "services:\n"
-        "  mysql-hms:\n"
-        f"    image: {_MYSQL_IMAGE}\n"
-        "    container_name: udp-mysql-hms\n"
-        "    restart: unless-stopped\n"
-        "    environment:\n"
-        "      MYSQL_DATABASE: metastore\n"
-        "      MYSQL_USER: hive\n"
-        "      MYSQL_PASSWORD: ${HMS_DB_PASSWORD:-hive_password_pilot}\n"
-        "      MYSQL_ROOT_PASSWORD: ${HMS_DB_ROOT_PASSWORD:-root_password_pilot}\n"
-        "    volumes:\n"
-        f"      - {_MYSQL_HMS_VOLUME}:/var/lib/mysql\n"
-        "    expose:\n"
-        '      - "3306"\n'
-        "    healthcheck:\n"
-        # Codex review 2026-05-17: prefer checking the HMS user + db over
-        # bare root ping — this proves init scripts ran AND user/grants
-        # are in place AND the metastore db exists. Without this stricter
-        # check, mysqladmin ping can go green during the MySQL official
-        # image's TWO-PHASE init (temp startup then final startup), and
-        # the dependent HMS container then crashes against an incomplete
-        # MySQL. start_period 60s is generous enough for the cold-volume
-        # init on a stock VPS.
-        '      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uhive -p$${MYSQL_PASSWORD} -D metastore -e \\"SELECT 1\\" >/dev/null"]\n'
-        "      interval: 10s\n"
-        "      timeout: 5s\n"
-        "      retries: 30\n"
-        "      start_period: 60s\n"
-        "    networks:\n"
-        "      - default\n"
-        "  hive-metastore:\n"
-        f"    image: {_HMS_IMAGE}\n"
-        "    container_name: udp-hive-metastore\n"
-        "    restart: unless-stopped\n"
-        "    depends_on:\n"
-        # 2026-05-17 fix: was `condition: service_healthy` which compose v5
-        # enforces synchronously at up-time. MySQL's first-init takes
-        # 30-60s for permission setup; compose timed out at ~4s waiting.
-        # HMS's own entrypoint has its own `nc -z $METASTORE_DB_HOSTNAME
-        # 3306` wait loop, so service_started is sufficient — HMS will
-        # block-loop until MySQL is reachable, then schematool runs.
-        "      mysql-hms:\n"
-        "        condition: service_started\n"
-        "    environment:\n"
-        "      METASTORE_DB_HOSTNAME: mysql-hms\n"
-        "    volumes:\n"
-        "      - ./hive-metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro\n"
-        "    expose:\n"
-        '      - "9083"\n'
-        "    healthcheck:\n"
-        '      test: ["CMD-SHELL", "bash -c \'</dev/tcp/127.0.0.1/9083\'"]\n'
-        "      interval: 15s\n"
-        "      timeout: 5s\n"
-        "      retries: 20\n"
-        "      start_period: 30s\n"
-        "    networks:\n"
-        "      - default\n"
-        "volumes:\n"
+        + _hms_services_yaml(env)
+        + "volumes:\n"
         f"  {_MYSQL_HMS_VOLUME}:\n"
         "networks:\n"
-        "  default: {}\n"
+        "  default:\n"
+        # Name the compose default network explicitly with a HYPHEN so a
+        # container's reverse-DNS PTR is `<container>.<net>` with no underscore.
+        # The default `<project>_default` has an underscore, which is an illegal
+        # URI hostname char and breaks HMS self-resolution -> StarRocks
+        # getAllDatabases. Install-specific (via LHS_NET) so installs don't share.
+        '    name: "${LHS_NET:-udp-net}"\n'
     )
 
 
@@ -361,6 +679,11 @@ def _render_delta_fragment(env: dict) -> str:
         f"    image: {_MYSQL_IMAGE}\n"
         "    container_name: udp-mysql-hms\n"
         "    restart: unless-stopped\n"
+        # MySQL 8 defaults to caching_sha2_password, which the old Hive
+        # Metastore 3.0 JDBC driver can't negotiate over a non-SSL TCP
+        # connection (localhost healthcheck passes, but HMS over the network
+        # gets "Access denied"). Force native password so HMS connects.
+        '    command: ["--default-authentication-plugin=mysql_native_password"]\n'
         "    environment:\n"
         "      MYSQL_DATABASE: metastore\n"
         "      MYSQL_USER: hive\n"
@@ -381,6 +704,11 @@ def _render_delta_fragment(env: dict) -> str:
         "  hive-metastore:\n"
         f"    image: {_HMS_IMAGE}\n"
         "    container_name: udp-hive-metastore\n"
+        # Clean hostname so HMS's self-resolved canonical name is `hive-metastore`
+        # and not `udp-hive-metastore.<project>_default` — the underscore in the
+        # compose network name is an illegal URI hostname char and breaks
+        # StarRocks getAllDatabases against the metastore.
+        "    hostname: hive-metastore\n"
         "    restart: unless-stopped\n"
         "    depends_on:\n"
         "      mysql-hms:\n"
@@ -403,7 +731,13 @@ def _render_delta_fragment(env: dict) -> str:
         + "volumes:\n"
         f"  {_MYSQL_HMS_VOLUME}:\n"
         "networks:\n"
-        "  default: {}\n"
+        "  default:\n"
+        # Name the compose default network explicitly with a HYPHEN so a
+        # container's reverse-DNS PTR is `<container>.<net>` with no underscore.
+        # The default `<project>_default` has an underscore, which is an illegal
+        # URI hostname char and breaks HMS self-resolution -> StarRocks
+        # getAllDatabases. Install-specific (via LHS_NET) so installs don't share.
+        '    name: "${LHS_NET:-udp-net}"\n'
     )
 
 
@@ -414,53 +748,41 @@ def _render_nessie_properties(env: dict) -> str:
     /deployments/config/application.properties (Quarkus's standard
     config location, auto-loaded on boot).
 
-    2026-05-17: three prior attempts to wire S3 STATIC credentials
-    through NESSIE_CATALOG_SERVICE_S3_* env vars + the
-    `urn:nessie-secret:quarkus:<name>` reverse-mapping all failed on
-    Nessie 0.99 -- SmallRye env-var reverse-mapping is unreliable for
-    dotted-hyphenated secret-config names. We then tried the URN form
-    in this properties file directly, and Nessie 0.99 STILL refused to
-    start (container exited at boot with the URN line present; a
-    minimal properties file with no credentials brought it up clean).
-
-    EXPERIMENT (this commit): drop the URN indirection AND the
-    auth-type=STATIC line. Use the literal short-form keys
-    `access-key-id` / `secret-access-key` -- some Nessie builds accept
-    these directly and auto-detect static auth from key presence.
-
-    FALLBACK if this still fails (try in next session):
-      1. Add `nessie.catalog.service.s3.default-options.credentials-provider=STATIC`
-         alongside the literal keys.
-      2. Drop the keys from the properties file entirely and pass
-         AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY on the nessie
-         service's env block -- Nessie's S3 client (AWS SDK v2) reads
-         its own process env via the default credentials provider chain.
-
-    Credentials are interpolated from the env dict here (Python
-    f-string) -- NOT compose ${VAR:-default} interpolation -- because
-    this file is read by Nessie/Quarkus directly, not by docker compose.
+    Credentials use the Nessie secrets subsystem (not direct property
+    keys). Nessie 0.99 startup logs confirm: "secrets are retrieved only
+    from the Quarkus configuration" when no external secrets manager is
+    configured. Secret type BASIC = access-key-id (name) + secret-access-key
+    (secret). The access-key.name property references the secret by name.
     """
     minio_user = env.get("MINIO_ROOT_USER", "admin")
     minio_pass = env.get("MINIO_ROOT_PASSWORD", "udp_admin_12345")
     return (
-        "# Nessie catalog S3 + warehouse config -- literal access-key-id /\n"
-        "# secret-access-key form. URN indirection was rejected by Nessie\n"
-        "# 0.99 at boot; this experiment uses the short-form keys directly\n"
-        "# and relies on Nessie to auto-detect static auth from their\n"
-        "# presence (no explicit auth-type line).\n"
+        "# Nessie 0.99 catalog S3 + warehouse config.\n"
+        "# Credentials via Quarkus-config secrets (no external secrets manager).\n"
+        "# auth-type=APPLICATION_GLOBAL uses AWS SDK DefaultCredentialsProvider\n"
+        "# which reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the\n"
+        "# nessie service env (see docker-compose.fragment.yml).\n"
+        "# STATIC (the default) requires a URN secret reference — not supported\n"
+        "# without an external secrets manager in pilot scope.\n"
+        "nessie.catalog.service.s3.default-options.auth-type=APPLICATION_GLOBAL\n"
         "nessie.catalog.default-warehouse=warehouse\n"
         "nessie.catalog.warehouses.warehouse.location=s3://datalake/warehouse\n"
         "nessie.catalog.service.s3.default-options.endpoint=http://minio:9000\n"
         "nessie.catalog.service.s3.default-options.region=us-east-1\n"
         "nessie.catalog.service.s3.default-options.path-style-access=true\n"
-        f"nessie.catalog.service.s3.default-options.access-key-id={minio_user}\n"
-        f"nessie.catalog.service.s3.default-options.secret-access-key={minio_pass}\n"
     )
 
 
 def _render_hms_site_xml(env: dict) -> str:
     """metastore-site.xml that bitsondatadev HMS bind-mount expects."""
     pw = env.get("HMS_DB_PASSWORD", "hive_password_pilot")
+    # HMS itself creates managed database/table directories on the warehouse
+    # (s3a://datalake/warehouse). Without S3 creds it gets 403 Forbidden from
+    # MinIO when a Spark hive_sync / saveAsTable creates a new database. Give
+    # HMS the same MinIO credentials the engines use.
+    s3_ep  = env.get("S3_ENDPOINT") or "http://minio:9000"
+    s3_key = env.get("MINIO_ROOT_USER") or env.get("AWS_ACCESS_KEY_ID") or "admin"
+    s3_sec = env.get("MINIO_ROOT_PASSWORD") or env.get("AWS_SECRET_ACCESS_KEY") or "udp_admin_12345"
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n'
         '<configuration>\n'
@@ -496,6 +818,16 @@ def _render_hms_site_xml(env: dict) -> str:
         '    <name>metastore.warehouse.dir</name>\n'
         '    <value>s3a://datalake/warehouse</value>\n'
         '  </property>\n'
+        '  <property><name>fs.s3a.endpoint</name>'
+        f'<value>{s3_ep}</value></property>\n'
+        '  <property><name>fs.s3a.access.key</name>'
+        f'<value>{s3_key}</value></property>\n'
+        '  <property><name>fs.s3a.secret.key</name>'
+        f'<value>{s3_sec}</value></property>\n'
+        '  <property><name>fs.s3a.path.style.access</name><value>true</value></property>\n'
+        '  <property><name>fs.s3a.connection.ssl.enabled</name><value>false</value></property>\n'
+        '  <property><name>fs.s3a.impl</name>'
+        '<value>org.apache.hadoop.fs.s3a.S3AFileSystem</value></property>\n'
         '</configuration>\n'
     )
 
@@ -608,7 +940,13 @@ def _render_polaris_fragment(env: dict) -> str:
         # joins by reference. No `external:` and no explicit `name:`
         # needed — let compose's merge logic do the work.
         "networks:\n"
-        "  default: {}\n"
+        "  default:\n"
+        # Name the compose default network explicitly with a HYPHEN so a
+        # container's reverse-DNS PTR is `<container>.<net>` with no underscore.
+        # The default `<project>_default` has an underscore, which is an illegal
+        # URI hostname char and breaks HMS self-resolution -> StarRocks
+        # getAllDatabases. Install-specific (via LHS_NET) so installs don't share.
+        '    name: "${LHS_NET:-udp-net}"\n'
     )
 
 
@@ -628,11 +966,59 @@ def _network_name_token(env: dict) -> str:
     return env.get("LHS_BASE_NETWORK_NAME") or "udp_default"
 
 
+def _render_superset_fragment(env: dict) -> str:
+    """Superset for the startup-analytics-local-v0.1 stack.
+
+    Single-container Superset with SQLite backend — no extra Postgres or
+    Redis needed for pilot scope. Bootstrap initialises the DB, creates
+    the admin user, and runs superset init. Port 8088 on the host.
+    """
+    secret = env.get("SUPERSET_SECRET_KEY", "lakehouse-studio-pilot")
+    return (
+        "# docker-compose.fragment.yml -- Superset for udp-local-v0.2.\n"
+        "# Generated by backend/stack_compose_fragments.py.\n"
+        "services:\n"
+        "  superset:\n"
+        "    image: apache/superset:4.1.1\n"
+        "    container_name: udp-superset\n"
+        "    restart: unless-stopped\n"
+        "    environment:\n"
+        f"      SUPERSET_SECRET_KEY: {secret}\n"
+        "      SUPERSET_LOAD_EXAMPLES: \"false\"\n"
+        "      SUPERSET_WEBSERVER_PORT: \"8088\"\n"
+        "    volumes:\n"
+        "      - udp_superset_home:/app/superset_home\n"
+        "    ports:\n"
+        '      - "8088:8088"\n'
+        "    healthcheck:\n"
+        '      test: ["CMD", "curl", "-fsS", "http://localhost:8088/health"]\n'
+        "      interval: 30s\n"
+        "      timeout: 10s\n"
+        "      retries: 10\n"
+        "      start_period: 120s\n"
+        "    networks:\n"
+        "      - default\n"
+        # Hive Metastore so Startup Analytics is multi-format too: choosing
+        # Delta/Hudi registers a delta_catalog/hudi_catalog in StarRocks.
+        + _hms_services_yaml(env)
+        + "networks:\n"
+        "  default:\n"
+        '    name: "${LHS_NET:-udp-net}"\n'
+        "volumes:\n"
+        "  udp_superset_home: {}\n"
+        f"  {_MYSQL_HMS_VOLUME}:\n"
+    )
+
+
 # ---------- dispatch ----------
 
 
 _FRAGMENT_RENDERERS: dict[str, Callable[[dict], str]] = {
+    "udp-local-v0.2":                    _render_hms_fragment,
+    "startup-analytics-local-v0.1":      _render_superset_fragment,
+    "ai-ml-research-local-v0.1":         _render_ai_ml_fragment,
     "udp-trino-local-v0.1":              _render_udp_trino_fragment,
+    "fintech-compliance-local-v0.1":     _render_fintech_fragment,
     "iceberg-nessie-trino-local-v0.1":  _render_nessie_fragment,
     "hudi-hms-spark-local-v0.1":        _render_hms_fragment,
     "delta-hms-spark-trino-local-v0.1": _render_delta_fragment,
@@ -681,7 +1067,10 @@ def write_fragment(stack_id: str, install_dir: Path,
     # fragment — bind-mounted into the HMS container so its entrypoint
     # picks up the right JDBC URL. Refactored 2026-05-17 after VPS
     # install attempts 2-6 fought the image's MySQL-only assumption.
-    if stack_id in ("hudi-hms-spark-local-v0.1", "delta-hms-spark-trino-local-v0.1"):
+    if stack_id in ("hudi-hms-spark-local-v0.1", "delta-hms-spark-trino-local-v0.1",
+                    "udp-local-v0.2", "startup-analytics-local-v0.1",
+                    "ai-ml-research-local-v0.1", "fintech-compliance-local-v0.1",
+                    "udp-trino-local-v0.1", "iceberg-nessie-trino-local-v0.1"):
         site_path = install_dir / "hive-metastore-site.xml"
         _atomic_write(site_path, _render_hms_site_xml(enriched))
         log.info("wrote hive-metastore-site.xml for stack=%s", stack_id)

@@ -122,7 +122,11 @@ commands:
   start:
     type: docker_compose_up
     extra_services: [create-bucket]
-    timeout: 600
+    # 1800s, not 600s: a cold pull of this cart's images (spark-iceberg alone
+    # is 6.4GB; starrocks-fe/be add several more GB) routinely exceeds 10
+    # minutes on a non-trivial connection. Once images are cached, `start`
+    # finishes in well under a minute regardless of this ceiling.
+    timeout: 1800
   # Studio's own bootstrap (not UDP's) — uses REST catalog only, no
   # dependency on hive-metastore. Written into the install_dir by the
   # env step. See backend/runner.py:_STUDIO_BOOTSTRAP_SH.

@@ -1,0 +1,320 @@
+id: enterprise-hadoop-v1.0
+name: Enterprise Hadoop Datalake
+version: "1.0"
+mode: docker-compose
+maturity: pilot
+description: >
+  Single-host Docker replica of the techsophy.com Enterprise On-Prem Datalake
+  (sdpdevnn01 / sdpdevstg01 / sdpdevdn01 / sdpdevafw01). Versions, internal ports
+  and config layout are aligned byte-for-byte with the 2026-05-21 live scan:
+  Hadoop 3.4.1 (HDFS + YARN), Hive 4.0.1 + Tez 0.10.4, Spark 3.4.4 + Hudi 1.0.1,
+  PostgreSQL 14 + PgBouncer v1.23.1-p3 backing the Hive Metastore,
+  StarRocks 4.0.0-rc01 (FE + BE) for sub-second OLAP,
+  Trino 480 for federated SQL,
+  Apache Ranger 3.0.0-SNAPSHOT (Admin + Usersync) on Apache Solr 8.11.4,
+  Airflow 2.10.5 (Celery + Postgres) for orchestration,
+  Prometheus 3.4.1 + Grafana 12.0.1 + Loki 3.0.0 + Promtail for observability.
+
+repository:
+  local_source: stacks/enterprise-hadoop
+  install_dir: enterprise-hadoop
+
+requirements:
+  os: [linux, macos, windows]
+  docker: required
+  # Minimum lowered from 32 → 24 GB so hosts with smaller physical RAM but generous
+  # swap can pass the inspector. Note: heavy Hadoop/YARN workloads on swap are slow.
+  # If your physical RAM is below ~24 GB, also lower YARN_NM_MEMORY_MB in .env (default 34816)
+  # to something like 4096–8192 so YARN doesn't try to allocate containers larger than physical RAM.
+  minimum_ram_gb: 20
+  recommended_ram_gb: 48
+  minimum_cpu_cores: 8
+  recommended_cpu_cores: 16
+  minimum_disk_gb: 60
+  recommended_disk_gb: 120
+
+# Host ports below mirror the live cluster's port numbers (e.g. 8030 for StarRocks FE,
+# 6080/6182 for Ranger). Where two live services share a port across different hosts
+# (Trino on stg01:8080 + Airflow on afw01:8080), the host mapping for the second is
+# shifted by +1 in docker-compose; container internal ports remain 8080 in both cases.
+ports:
+  required: [9820, 9871, 8090, 9083, 10000, 8030, 9030, 28080, 28081]
+  optional: [9866, 9867, 9865, 8044, 8048, 19890, 9020, 9050, 9060, 8050, 8060, 9070,
+             5432, 6432, 29090, 23000, 23100, 6080, 6182, 8983, 25673]
+
+commands:
+  prefetch:
+    type: script
+    script: scripts/lhs-prefetch.sh
+    argv: ["bash", "scripts/lhs-prefetch.sh"]
+    timeout: 600
+    description: "Download Tez 0.10.4 and Hudi 1.0.1 JARs before starting"
+  doctor:
+    argv: ["bash", "scripts/lhs-doctor.sh"]
+    timeout: 60
+  start:
+    argv: ["bash", "-c", "BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose up --build --no-recreate -d"]
+    timeout: 7200
+    # NOT consumed by the raw `docker compose up` above (which starts ALL
+    # services in the compose). It IS read by runner._patch_compose_images to
+    # decide which depends_on edges to keep — listing the Celery broker and the
+    # Airflow one-shot/worker here prevents the pruner from stripping the
+    # `depends_on: airflow-init` (db migrate) edge, without which the webserver
+    # and scheduler crash-loop on "you need to initialize the database".
+    extra_services: [rabbitmq, airflow-init, airflow-scheduler, airflow-worker]
+  bootstrap:
+    type: script
+    script: scripts/lhs-bootstrap.sh
+    argv: ["bash", "scripts/lhs-bootstrap.sh"]
+    timeout: 3600
+  smoke:
+    type: script
+    script: scripts/lhs-smoke.sh
+    argv: ["bash", "scripts/lhs-smoke.sh"]
+    timeout: 300
+
+outputs:
+  urls:
+    # {host} is substituted with the install host at finalize (output_urls).
+    # Ports here are the DOCKER-published host ports, not the production "live"
+    # ports, so the links actually open on this install.
+    hdfs_namenode_ui:  { url: "http://{host}:9870",  label: "HDFS NameNode UI" }
+    yarn_rm_ui:        { url: "http://{host}:8088",  label: "YARN ResourceManager" }
+    mr_history_ui:     { url: "http://{host}:19888", label: "MR History Server" }
+    hive_metastore:    { url: "thrift://{host}:9083", label: "Hive Metastore (Thrift, internal — not host-published)" }
+    hiveserver2_jdbc:  { url: "jdbc:hive2://{host}:10000", label: "HiveServer2 JDBC" }
+    hiveserver2_ui:    { url: "http://{host}:10002", label: "HiveServer2 Web UI" }
+    starrocks_ui:      { url: "http://{host}:8030",  label: "StarRocks FE UI" }
+    starrocks_mysql:   { url: "mysql://{host}:9030", label: "StarRocks (MySQL)" }
+    trino_ui:          { url: "http://{host}:28080",  label: "Trino Coordinator (host:28080 → container:8080)" }
+    airflow_ui:        { url: "http://{host}:28081",  label: "Airflow UI (host:28081 → container:8080)" }
+    prometheus_ui:     { url: "http://{host}:29090",  label: "Prometheus" }
+    grafana_ui:        { url: "http://{host}:23000",  label: "Grafana Dashboards" }
+    loki_api:          { url: "http://{host}:23100",  label: "Loki Log API" }
+    ranger_ui_http:    { url: "http://{host}:6080",  label: "Ranger Admin UI (HTTP)" }
+    ranger_ui_https:   { url: "https://{host}:6182", label: "Ranger Admin UI (HTTPS, like live)" }
+    solr_ui:           { url: "http://{host}:8983",  label: "Solr Admin UI" }
+    postgres:          { url: "postgresql://{host}:5433", label: "PostgreSQL 14 (HMS + Ranger + Airflow DB)" }
+    pgbouncer:         { url: "postgresql://{host}:6432", label: "PgBouncer (HMS pool)" }
+  connections:
+    starrocks_mysql: "mysql -h 127.0.0.1 -P 9030 -u root"
+    hdfs_shell:      "docker exec ehd-namenode hdfs dfs -ls /"
+    hive_beeline:    "docker exec -it ehd-hiveserver2 beeline -u 'jdbc:hive2://localhost:10000'"
+    trino_cli:       "docker exec ehd-trino trino --server http://localhost:8080"
+    pgbouncer:       "psql -h 127.0.0.1 -p 6432 -U hive -d metastore"
+    postgres:        "psql -h 127.0.0.1 -p 5432 -U postgres"
+
+components:
+  - id: hdfs
+    name: Apache HDFS
+    category: object_storage
+    version: "3.4.1"
+    image: ehd-hadoop:3.4.1
+    service_name: namenode
+    # Live: NN RPC 9820, NN HTTPS UI 9871 (HTTPS_ONLY), 2NN 9869; DN data 9866 / IPC 9867 / HTTPS 9865
+    ports: [9820, 9871, 9869, 9866, 9867, 9865]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 50 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 200 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 500 }
+
+  - id: hadoop-yarn
+    name: Apache YARN
+    category: compute_hadoop
+    version: "3.4.1"
+    image: ehd-hadoop:3.4.1
+    service_name: resourcemanager
+    # Live RM ports: 8090 (web UI), 8037 (RM IPC), 8031 (RT), 8033 (Admin), 8035 (RPC)
+    # Live NM ports: 8040 (localizer), 8044 (web UI), 8048 (IPC); 19890 MR history
+    ports: [8090, 8037, 8031, 8033, 8035, 8040, 8044, 8048, 19890]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 20 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 40 }
+
+  - id: postgresql
+    name: PostgreSQL
+    category: metadata_store
+    version: "14"
+    image: postgres:14-alpine
+    service_name: postgres
+    # Live: PostgreSQL 14 on stg01 (backs Hive Metastore + Ranger DB) and on afw01
+    # (backs Airflow metadata). Docker collapses to a single instance with 3 DBs.
+    ports: [5432]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1, disk_gb: 10 }
+      recommended: { cpu: 2, ram_gb: 2, disk_gb: 20 }
+      comfortable: { cpu: 4, ram_gb: 4, disk_gb: 50 }
+
+  - id: pgbouncer
+    name: PgBouncer
+    category: connection_pooling
+    version: "v1.23.1-p3"
+    image: edoburu/pgbouncer:v1.23.1-p3
+    service_name: pgbouncer
+    # Live: stg01:6432 fronting HMS database.
+    ports: [6432]
+    resource_profiles:
+      minimal:     { cpu: 0, ram_gb: 0.1, disk_gb: 0 }
+      recommended: { cpu: 0, ram_gb: 0.1, disk_gb: 0 }
+      comfortable: { cpu: 0, ram_gb: 0.1, disk_gb: 0 }
+
+  - id: hive-metastore-hadoop
+    name: Hive Metastore + HiveServer2
+    category: catalog
+    version: "4.0.1"
+    image: ehd-hive:4.0.1-ranger
+    service_name: hive-metastore
+    ports: [9083, 10000, 10002]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 2,  disk_gb: 5 }
+      recommended: { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      comfortable: { cpu: 4, ram_gb: 8,  disk_gb: 20 }
+
+  - id: tez
+    name: Apache Tez
+    category: tez_engine
+    version: "0.10.4"
+    image: ""
+    service_name: ""
+    ports: []
+    resource_profiles:
+      minimal:     { cpu: 0, ram_gb: 0.5, disk_gb: 1 }
+      recommended: { cpu: 0, ram_gb: 1,   disk_gb: 2 }
+      comfortable: { cpu: 0, ram_gb: 2,   disk_gb: 4 }
+
+  - id: hudi-v1
+    name: Apache Hudi
+    category: table_format
+    version: "1.0.1"
+    image: ""
+    service_name: ""
+    ports: []
+    resource_profiles:
+      minimal:     { cpu: 0, ram_gb: 0, disk_gb: 0 }
+      recommended: { cpu: 0, ram_gb: 0, disk_gb: 0 }
+      comfortable: { cpu: 0, ram_gb: 0, disk_gb: 0 }
+
+  - id: spark-hadoop
+    name: Apache Spark (Hadoop)
+    category: processing
+    version: "3.4.4"
+    image: apache/spark:3.4.4-scala2.12-java11-python3-ubuntu
+    service_name: spark
+    ports: [4040]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 20 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 40 }
+
+  - id: starrocks
+    name: StarRocks
+    category: serving
+    version: "4.0.0-rc01"
+    image: starrocks/fe-ubuntu:4.0.0-rc01
+    service_name: starrocks-fe
+    # Live FE: 8030 HTTP UI, 9010 edit log, 9020 RPC, 9030 MySQL
+    # Live BE: 9050 heartbeat, 9060 thrift, 8050 web, 8060 brpc, 9070 be_port
+    ports: [8030, 9010, 9020, 9030, 9050, 9060, 8050, 8060, 9070]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 20 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 50 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 100 }
+
+  - id: trino-enterprise
+    name: Trino
+    category: federated_sql
+    version: "480"
+    image: trinodb/trino:480
+    service_name: trino
+    # Live: Trino 480 binary installed at /opt/trino-server-480 on stg01 — not running at scan time.
+    ports: [8080]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 20 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 40 }
+
+  - id: airflow
+    name: Apache Airflow
+    category: orchestration
+    version: "2.10.5"
+    image: apache/airflow:2.10.5
+    service_name: airflow-webserver
+    # Live: 2.10.5 with Celery executor, Postgres 14 metadata DB, gunicorn on :8080.
+    # Single-host docker maps Airflow externally to 8081 (Trino owns host 8080).
+    ports: [8080]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2,  disk_gb: 5 }
+      recommended: { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      comfortable: { cpu: 4, ram_gb: 8,  disk_gb: 20 }
+
+  - id: prometheus
+    name: Prometheus
+    category: observability
+    version: "3.4.1"
+    image: prom/prometheus:v3.4.1
+    service_name: prometheus
+    # Live: installed at /opt/prometheus-3.4.1.linux-amd64 on nn01 (not running at scan time).
+    ports: [9090]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1,  disk_gb: 10 }
+      recommended: { cpu: 1, ram_gb: 2,  disk_gb: 20 }
+      comfortable: { cpu: 2, ram_gb: 4,  disk_gb: 50 }
+
+  - id: grafana
+    name: Grafana
+    category: observability
+    version: "12.0.1"
+    image: grafana/grafana:12.0.1
+    service_name: grafana
+    # Live: installed at /opt/grafana-v12.0.1 on nn01 (not running at scan time).
+    ports: [3000]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1,  disk_gb: 5 }
+      recommended: { cpu: 1, ram_gb: 2,  disk_gb: 10 }
+      comfortable: { cpu: 2, ram_gb: 4,  disk_gb: 20 }
+
+  - id: loki
+    name: Grafana Loki
+    category: observability
+    version: "3.0.0"
+    image: grafana/loki:3.0.0
+    service_name: loki
+    # Live: /opt/loki-promtail/ on nn01 (not running at scan time).
+    ports: [3100]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1,  disk_gb: 20 }
+      recommended: { cpu: 1, ram_gb: 2,  disk_gb: 50 }
+      comfortable: { cpu: 2, ram_gb: 4,  disk_gb: 100 }
+
+  - id: ranger
+    name: Apache Ranger
+    category: security
+    version: "3.0.0-SNAPSHOT"
+    image: ehd-ranger-admin:3.0.0-SNAPSHOT
+    service_name: ranger-admin
+    # Live: 6182 (HTTPS, in use) — 6080 (HTTP) closed. Docker exposes both.
+    ports: [6080, 6182]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2,  disk_gb: 5 }
+      recommended: { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      comfortable: { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+
+  - id: solr
+    name: Apache Solr (Ranger Audit)
+    category: audit
+    version: "8.11.4"
+    image: solr:8.11.4
+    service_name: solr
+    # Live: no Solr deployed on production cluster (audit goes to filesystem). Included
+    # in docker stack to back Ranger audit. Standard Solr port restored from 6983→8983.
+    ports: [8983]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1,  disk_gb: 10 }
+      recommended: { cpu: 1, ram_gb: 2,  disk_gb: 20 }
+      comfortable: { cpu: 2, ram_gb: 4,  disk_gb: 50 }
+
+certification:
+  smoke_test_required: true
+  demo_bootstrap_required: true
+  evidence_dir: evidence/enterprise-hadoop-v1.0/

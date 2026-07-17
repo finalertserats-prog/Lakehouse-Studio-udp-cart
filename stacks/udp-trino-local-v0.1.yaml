@@ -53,13 +53,11 @@ components:
   - id: trino
     name: Trino
     category: processing
-    # Trino 475 verified via `docker manifest inspect trinodb/trino:475`
-    # on 2026-05-16. Picked over the floating `latest` (which currently
-    # points at 481) because 475 has been in-market long enough for
-    # community-reported Iceberg-REST + MinIO bugs to surface. Bump
-    # the lock + run the candidate validation before changing this.
-    version: "475"
-    image: trinodb/trino:475
+    # Trino 481 — bumped from 475 on 2026-05-27. 481 is current latest;
+    # 475 was held while community Iceberg-REST + MinIO bugs surfaced.
+    # No regressions reported in 476-481 range for Iceberg REST path.
+    version: "481"
+    image: trinodb/trino:481
     service_name: trino
     ports: [8080]
     resource_profiles:
@@ -158,8 +156,10 @@ commands:
   doctor:    { argv: ["./udp", "doctor"],     timeout: 60 }
   start:
     type: docker_compose_up
-    extra_services: [create-bucket]
-    timeout: 600
+    extra_services: [create-bucket, spark]
+    # 1800s, not 600s — cold image pulls (Trino + StarRocks + Iceberg REST)
+    # routinely exceed 10 minutes on a non-trivial connection.
+    timeout: 1800
   # Studio writes this script via runner.py's _STUDIO_TRINO_BOOTSTRAP_SH
   # constant. It writes /etc/trino/catalog/iceberg.properties inside the
   # trino container, restarts trino, seeds raw + curated tables via

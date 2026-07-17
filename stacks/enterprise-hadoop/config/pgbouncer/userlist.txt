@@ -1,0 +1,2 @@
+"hive" "HiveAdmin"
+"postgres" "postgres"

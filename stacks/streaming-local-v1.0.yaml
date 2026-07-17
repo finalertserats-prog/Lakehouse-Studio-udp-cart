@@ -1,0 +1,154 @@
+id: streaming-local-v1.0
+name: Streaming Lakehouse
+version: "1.0"
+mode: docker-compose
+maturity: pilot
+description: >
+  Real-time CDC-into-Iceberg pipeline on a single Docker host.
+  Kafka 3.8.1 (KRaft, no Zookeeper) as the event bus, Flink 1.20
+  streaming compute with the Iceberg Flink connector writing
+  micro-batches to MinIO, Iceberg REST Catalog for table metadata,
+  Spark 3.5 for batch queries and notebook access, StarRocks 3.3
+  for sub-second serving. Bootstrap demonstrates a live
+  Kafka → Flink → Iceberg → StarRocks pipeline.
+
+repository:
+  local_source: stacks/streaming
+  install_dir: streaming
+
+requirements:
+  os: [linux, windows-docker-desktop, darwin]
+  docker: required
+  docker_compose: required
+  bash: required
+  minimum_ram_gb: 8
+  recommended_ram_gb: 16
+  minimum_cpu_cores: 4
+  recommended_cpu_cores: 8
+  minimum_disk_gb: 30
+  recommended_disk_gb: 60
+
+ports:
+  required: [9010, 9011, 8282, 9092, 8085, 8083, 8890, 8034, 9034]
+  optional: [4041, 9024]
+
+env_defaults:
+  MINIO_ROOT_USER: admin
+  MINIO_ROOT_PASSWORD: streaming123
+  MINIO_BUCKET: streaming-lake
+  SL_PROJECT_NAME: streaming-lakehouse
+
+commands:
+  doctor:
+    argv: ["bash", "scripts/lhs-doctor.sh"]
+    timeout: 60
+  start:
+    argv: ["bash", "-c", "BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose up --build -d"]
+    timeout: 1800
+  bootstrap:
+    type: script
+    script: scripts/lhs-bootstrap.sh
+    argv: ["bash", "scripts/lhs-bootstrap.sh"]
+    timeout: 900
+  smoke:
+    type: script
+    script: scripts/lhs-smoke.sh
+    argv: ["bash", "scripts/lhs-smoke.sh"]
+    timeout: 300
+  stop:
+    argv: ["docker", "compose", "down"]
+    timeout: 120
+  clean:
+    argv: ["docker", "compose", "down", "-v"]
+    timeout: 180
+
+components:
+  - id: minio
+    name: MinIO
+    category: object_storage
+    version: RELEASE.2025-04-22T22-12-26Z
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    service_name: sl-minio
+    ports: [9010, 9011]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1, disk_gb: 10 }
+      recommended: { cpu: 2, ram_gb: 2, disk_gb: 30 }
+      comfortable: { cpu: 2, ram_gb: 4, disk_gb: 100 }
+
+  - id: iceberg-rest
+    name: Iceberg REST Catalog
+    category: catalog
+    version: "1.6.0"
+    image: tabulario/iceberg-rest:1.6.0
+    service_name: sl-iceberg-rest
+    ports: [8282]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 1, disk_gb: 1 }
+      recommended: { cpu: 1, ram_gb: 1, disk_gb: 2 }
+      comfortable: { cpu: 1, ram_gb: 2, disk_gb: 5 }
+
+  - id: kafka
+    name: Apache Kafka
+    category: streaming
+    version: "3.8.0"
+    image: apache/kafka:3.8.0
+    service_name: sl-kafka
+    ports: [9092]
+    resource_profiles:
+      minimal:     { cpu: 1, ram_gb: 2, disk_gb: 5 }
+      recommended: { cpu: 2, ram_gb: 4, disk_gb: 10 }
+      comfortable: { cpu: 4, ram_gb: 8, disk_gb: 50 }
+
+  - id: flink
+    name: Apache Flink
+    category: streaming
+    version: "1.20.1"
+    image: sl-flink:1.20-iceberg
+    service_name: sl-flink-jobmanager
+    ports: [8083]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 2, disk_gb: 2 }
+      recommended: { cpu: 4, ram_gb: 4, disk_gb: 5 }
+      comfortable: { cpu: 8, ram_gb: 8, disk_gb: 10 }
+
+  - id: spark-iceberg
+    name: Apache Spark + Iceberg
+    category: processing
+    version: 3.5.5_1.8.1
+    image: tabulario/spark-iceberg:3.5.5_1.8.1
+    service_name: sl-spark
+    ports: [8890, 4041]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 5 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 10 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 20 }
+
+  - id: starrocks
+    name: StarRocks (FE + BE)
+    category: serving
+    version: "3.3.12"
+    image: starrocks/fe-ubuntu:3.3.12
+    service_name: sl-starrocks-fe
+    ports: [8034, 9034]
+    resource_profiles:
+      minimal:     { cpu: 2, ram_gb: 4,  disk_gb: 10 }
+      recommended: { cpu: 4, ram_gb: 8,  disk_gb: 30 }
+      comfortable: { cpu: 8, ram_gb: 16, disk_gb: 100 }
+
+outputs:
+  urls:
+    flink_ui:       { url: "http://{host}:8083",  label: "Flink Dashboard" }
+    kafka_ui:       { url: "http://{host}:8085",  label: "Kafka UI (topics & messages)" }
+    iceberg_rest:   { url: "http://{host}:8282/v1/namespaces", label: "Iceberg REST" }
+    minio_console:  { url: "http://{host}:9011",  label: "MinIO Console" }
+    spark_notebook: { url: "http://{host}:8890",  label: "Spark Notebook" }
+    starrocks_ui:   { url: "http://{host}:8034",  label: "StarRocks UI" }
+  connections:
+    starrocks_mysql: "mysql -h {host} -P 9034 -u root"
+    kafka_topics:    "docker exec sl-kafka kafka-topics.sh --bootstrap-server localhost:9092 --list"
+    flink_sql:       "docker exec -it sl-flink-jobmanager /opt/flink/bin/sql-client.sh"
+
+certification:
+  smoke_test_required: true
+  demo_bootstrap_required: true
+  evidence_dir: evidence/streaming-local-v1.0/

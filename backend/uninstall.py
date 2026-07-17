@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .config import EVIDENCE_DIR
+from .config import EVIDENCE_DIR, WORK_DIR
 from .events import bus
 from .models import LogEvent
 from .runner import run_command
@@ -59,6 +59,94 @@ def _archive_evidence(stack_id: str, install_id: str) -> Optional[Path]:
         return dst
     except Exception:
         return None
+
+
+def _is_compose_build(path: Path) -> bool:
+    """Safety for custom/Quick-Install builds: only remove a dir that is under
+    WORK_DIR and actually holds a generated docker-compose.yml. Prevents
+    rmtree of anything outside the studio work area."""
+    try:
+        path.resolve().relative_to(WORK_DIR.resolve())
+    except (ValueError, OSError):
+        return False
+    return (path / "docker-compose.yml").exists()
+
+
+async def uninstall_custom(install_id: str, running_states: frozenset[str],
+                           install_tasks: dict) -> dict:
+    """Uninstall a custom / Quick-Install build (no stack manifest).
+
+    These run off a generated docker-compose.yml in WORK_DIR/<name> rather than
+    a UDP clone, so cleanup is `docker compose down -v` + rmtree — there's no
+    `./udp clean` and no manifest to load.
+    """
+    rec = store.get(install_id)
+    if not rec:
+        raise UninstallError(f"install {install_id!r} not found")
+    if rec.state in running_states:
+        raise UninstallError(f"cannot uninstall while state is {rec.state}; cancel first")
+    if install_id in install_tasks and not install_tasks[install_id].done():
+        raise UninstallError("an install task is still running; cancel before uninstall")
+
+    install_dir = Path(rec.install_dir)
+    steps: list[dict] = []
+
+    def _step(name: str, status: str, detail: str = ""):
+        steps.append({"name": name, "status": status, "detail": detail})
+        bus.publish_nowait(LogEvent(
+            install_id=install_id, ts=time.time(),
+            kind="log", stream="stdout" if status != "failed" else "stderr",
+            step="uninstall", line=f"[uninstall] {name}: {status}{(' — ' + detail) if detail else ''}",
+        ))
+
+    compose_file = install_dir / "docker-compose.yml"
+
+    # Step 1: docker compose down -v (best-effort; if Docker is down, log + continue)
+    if compose_file.exists():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "compose", "-f", str(compose_file), "down", "-v", "--remove-orphans",
+                cwd=str(install_dir),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            out, _ = await proc.communicate()
+            if proc.returncode == 0:
+                _step("docker-compose-down", "passed", "containers + volumes removed")
+            else:
+                tail = (out or b"").decode(errors="replace").strip().splitlines()[-1:] or [""]
+                _step("docker-compose-down", "warning", f"exit {proc.returncode}: {tail[0]} — continuing")
+        except Exception as e:
+            _step("docker-compose-down", "warning", f"{type(e).__name__}: {e} — continuing")
+    else:
+        _step("docker-compose-down", "skipped", "no docker-compose.yml found")
+
+    # Step 2: archive evidence (if any)
+    archived = _archive_evidence(rec.stack_id, install_id)
+    _step("evidence-archive", "passed" if archived else "skipped",
+          str(archived) if archived else "no evidence found")
+
+    # Step 3: remove the install directory (only if it's a real compose build dir)
+    if install_dir.exists():
+        if _is_compose_build(install_dir):
+            try:
+                shutil.rmtree(install_dir, onerror=_on_rmtree_error)
+                _step("rm-install-dir", "passed", str(install_dir))
+            except Exception as e:
+                _step("rm-install-dir", "failed", f"{type(e).__name__}: {e}")
+        else:
+            _step("rm-install-dir", "skipped",
+                  f"{install_dir} is not a WORK_DIR compose build — leaving on disk")
+    else:
+        _step("rm-install-dir", "skipped", "already gone")
+
+    # Step 4: delete the install record
+    deleted = store.delete(install_id)
+    _step("delete-record", "passed" if deleted else "skipped",
+          "removed from state.json" if deleted else "record already gone")
+
+    bus.publish_nowait(LogEvent(install_id=install_id, ts=time.time(), kind="state", status="UNINSTALLED"))
+    return {"uninstalled": True, "install_id": install_id, "steps": steps,
+            "archived_to": str(archived) if archived else None}
 
 
 async def uninstall(install_id: str, stack: StackManifest, running_states: frozenset[str],

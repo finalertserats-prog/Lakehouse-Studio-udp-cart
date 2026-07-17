@@ -1,0 +1,724 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Test Cases &amp; Code Quality Report — LakeHouse Studio v0.6</title>
+<style>
+ body { font-family: 'Segoe UI', Arial, sans-serif; color:#1a2233; margin:0; background:#fff; }
+ .page { max-width: 1000px; margin: 0 auto; padding: 32px 40px 60px; }
+ h1 { font-size: 24px; letter-spacing:.5px; margin:0 0 2px; color:#0b1c33; }
+ .sub { color:#4a5a72; font-size:13px; margin-bottom:4px; }
+ .meta { color:#7a8699; font-size:12px; margin-bottom:24px; }
+ h2 { font-size:17px; color:#0b1c33; border-bottom:2px solid #2563eb; padding-bottom:4px; margin:34px 0 12px; }
+ h3 { font-size:13.5px; color:#20304a; margin:22px 0 6px; }
+ table { border-collapse:collapse; width:100%; font-size:11.5px; margin-bottom:8px; }
+ th { background:#eef2f9; color:#243b5e; text-align:left; padding:5px 8px; border:1px solid #cdd7e4; font-size:11px; }
+ td { padding:4px 8px; border:1px solid #dde4ee; vertical-align:top; }
+ tr:nth-child(even) td { background:#f8fafd; }
+ td.c { text-align:center; white-space:nowrap; }
+ .good { color:#0a7d3e; font-weight:600; } .ok { color:#1e6fd9; font-weight:600; }
+ .warn { color:#b06a00; font-weight:600; } .bad { color:#c22525; font-weight:700; }
+ .muted { color:#9aa6b5; }
+ .st-pass { color:#0a7d3e; font-weight:700; } .st-fail { color:#c22525; font-weight:700; }
+ .st-skip { color:#8b8b8b; font-weight:600; }
+ .scores { display:flex; gap:10px; margin:14px 0 18px; flex-wrap:wrap; }
+ .score { flex:1; min-width:110px; border:1px solid #cdd7e4; border-radius:8px; text-align:center; padding:10px 6px; background:#f6f9fd; }
+ .score b { display:block; font-size:22px; color:#0b1c33; }
+ .score span { font-size:11px; color:#4a5a72; }
+ .sev-Critical { color:#fff; background:#c22525; padding:1px 7px; border-radius:9px; font-size:10.5px; font-weight:700; }
+ .sev-High { color:#fff; background:#d97706; padding:1px 7px; border-radius:9px; font-size:10.5px; font-weight:700; }
+ .sev-Medium { color:#fff; background:#2563eb; padding:1px 7px; border-radius:9px; font-size:10.5px; font-weight:700; }
+ .sev-Low { color:#fff; background:#64748b; padding:1px 7px; border-radius:9px; font-size:10.5px; font-weight:700; }
+ .note { font-size:11px; color:#57657a; }
+ code { background:#eef2f9; padding:0 4px; border-radius:3px; font-size:10.5px; }
+ @media print { .page { padding:10px 0; } h2 { page-break-after:avoid; } table { page-break-inside:auto; } tr { page-break-inside:avoid; } }
+</style></head><body><div class="page">
+<h1>TEST CASES &amp; CODE QUALITY REPORT</h1>
+<div class="sub">LAKEHOUSE STUDIO V0.6 — UI-driven installer &amp; operator for open data lakehouses</div>
+<div class="meta">Generated: July 07, 2026 &nbsp;|&nbsp; Prepared by: Techsophy Data Engineering &nbsp;|&nbsp; Suite: pytest — 447 passed / 22 failed / 2 skipped of 471 executed</div>
+
+<h2>1. Scope</h2><table><tr><th style='width:32%'>File / Module</th><th>Type</th><th style='width:15%'>Location</th></tr>
+<tr><td><code>backend/main.py</code></td><td>FastAPI entry point — ~120 routes, /api/v1 alias middleware, auth, WS log streams</td><td>backend/</td></tr>
+<tr><td><code>backend/runner.py (+ runner_extra_scripts.py)</code></td><td>Install pipeline state machine: prepare→clone→env→doctor→start→bootstrap→smoke→finalize; local / SSH-remote / remote-cluster runners; embedded bootstrap+smoke scripts</td><td>backend/</td></tr>
+<tr><td><code>backend/state.py, models.py, events.py</code></td><td>InstallRecord store (debounced atomic JSON), Pydantic contracts, per-install event bus with seq replay</td><td>backend/</td></tr>
+<tr><td><code>backend/config.py, paths.py, redact.py</code></td><td>Env config, install_dir validation, secret redaction</td><td>backend/</td></tr>
+<tr><td><code>backend/catalog.py, templates.py, compliance.py, cart.py</code></td><td>Component catalog loader + validators, template layer, compliance framing, cart scoring</td><td>backend/</td></tr>
+<tr><td><code>backend/compatibility.py, compat_check.py, compat_explainer.py</code></td><td>Lock-file enforcement, registry prechecks, upgrade simulate, cart marriage verdicts</td><td>backend/</td></tr>
+<tr><td><code>backend/component_registry.py, stack_composer.py, stack_compose_fragments.py</code></td><td>Stack Builder: 35-component registry, dynamic compose generation, per-stack fragments</td><td>backend/</td></tr>
+<tr><td><code>backend/custom_stack_runner.py</code></td><td>Stack Builder end-to-end orchestrator (versions→resolve→compose→AI config→up→verify)</td><td>backend/</td></tr>
+<tr><td><code>backend/ai_assistant.py, compat_ai.py, ai_configurator.py, ai_provisioner.py, image_builder.py</code></td><td>AI layer: grounded assistant, compat research, LLM config generation, provisioner, image build pipeline</td><td>backend/</td></tr>
+<tr><td><code>backend/version_fetcher.py, error_explainer.py</code></td><td>Version discovery (Apache/GitHub/DockerHub) + failure pattern classifier</td><td>backend/</td></tr>
+<tr><td><code>backend/backup.py, audit_log.py, rbac_auth.py, notifications.py</code></td><td>Day-2 ops: backups+DR drills, SQLite audit trail, opt-in RBAC, multi-channel notifications</td><td>backend/</td></tr>
+<tr><td><code>backend/health.py, service_logs.py, monitoring.py, structured_smoke.py, inspector.py</code></td><td>Health probes, docker log streaming, monitoring sidecar, smoke checks, preflight inspection</td><td>backend/</td></tr>
+<tr><td><code>backend/tls_wizard.py, caddy_tls.py, jdbc_extras.py, upgrade_executor.py, uninstall.py</code></td><td>TLS certs + password rotation, Caddy sidecar, JDBC side-load, destructive upgrade executor, uninstall</td><td>backend/</td></tr>
+<tr><td><code>backend/ingest.py, data_sources.py, destinations.py, insyght_connector.py</code></td><td>CSV/Postgres/MySQL ingest, Fernet-encrypted source/destination registries, Insyght provisioning</td><td>backend/</td></tr>
+<tr><td><code>backend/sql_editor.py, demo_query.py, table_explorer.py, data_quality.py</code></td><td>Sandboxed read-only SQL, canned queries, Iceberg REST explorer, DQ checks</td><td>backend/</td></tr>
+<tr><td><code>backend/gitops_export.py, gitops_import.py, evidence.py</code></td><td>Portable stack bundles (scrubbed), safe tar import, install evidence capture</td><td>backend/</td></tr>
+<tr><td><code>backend/scorer.py, sizer.py, providers.py, lake_namer.py</code></td><td>Stack scoring, resource sizing tiers, VPS plan matching, name generator</td><td>backend/</td></tr>
+<tr><td><code>backend/*_overlay.py (airflow, dagster, superset, observability)</code></td><td>Opt-in compose overlays gated by LHS_*_ENABLED env flags</td><td>backend/</td></tr>
+<tr><td><code>backend/v1/ (executor_interface, multi_tenant_schema, rbac)</code></td><td>v1.0 architecture scaffolds: executor ABC, tenant SQLite schema, role/permission map</td><td>backend/v1/</td></tr>
+<tr><td><code>cli/ (main, client, render, ws)</code></td><td>`lks` Click CLI mirroring the HTTP API + WS log follow</td><td>cli/</td></tr>
+<tr><td><code>frontend/index.html</code></td><td>Single-file SPA (~6,200 lines) — 8-step wizard, Stack Builder, day-2 ops cards</td><td>frontend/</td></tr>
+<tr><td><code>scripts/install_harness.py</code></td><td>Cross-platform install verification harness</td><td>scripts/</td></tr>
+<tr><td><code>stacks/*.yaml + stacks/compatibility/*.lock.yaml</code></td><td>10 stack manifests, component catalog, 8 compatibility locks with evidence</td><td>stacks/</td></tr>
+<tr><td><code>stacks/streaming/, stacks/enterprise-hadoop/ (compose, Dockerfiles, sh scripts)</code></td><td>Local-source stack bundles: compose, Flink/Hadoop/Ranger images, doctor/bootstrap/smoke scripts</td><td>stacks/</td></tr>
+<tr><td><code>tests/ (19 modules)</code></td><td>Pytest suite — 471 automated tests executed for this report</td><td>tests/</td></tr>
+</table>
+<h2>2. Overall Quality Scores</h2>
+<p class="note">Scores are based on a full static review of every module in scope (completed July 07, 2026) and an executed
+run of the automated test suite (447/471 passed, 47.0s, Python 3.13 / pytest 9.x).
+Logic and Security are marked down for the six open defects and six security findings documented in sections 5–6.</p>
+<div class="scores">
+<div class="score"><b>9/10</b><span>Syntax</span></div>
+<div class="score"><b>7/10</b><span>Logic</span></div>
+<div class="score"><b>8/10</b><span>Efficiency</span></div>
+<div class="score"><b>7/10</b><span>Security</span></div>
+<div class="score"><b>8/10</b><span>Test Cases</span></div>
+<div class="score"><b>7.8/10</b><span>Overall</span></div>
+</div><h3>Per-File Score Breakdown</h3>
+<table><tr><th>File / Module</th><th class='c'>Syntax</th><th class='c'>Logic</th><th class='c'>Efficiency</th><th class='c'>Security</th><th class='c'>Test Cases</th><th class='c'>Overall</th></tr>
+<tr><td><code>main.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c warn">7</td><td class="c"><b>8.0</b></td></tr>
+<tr><td><code>runner.py + runner_extra_scripts.py</code></td><td class="c good">9</td><td class="c bad">6</td><td class="c warn">7</td><td class="c warn">7</td><td class="c bad">6</td><td class="c"><b>7.0</b></td></tr>
+<tr><td><code>state.py / models.py / events.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c warn">7</td><td class="c"><b>8.2</b></td></tr>
+<tr><td><code>config.py / paths.py / redact.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c muted">–</td><td class="c"><b>9.0</b></td></tr>
+<tr><td><code>catalog.py</code></td><td class="c ok">8</td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c"><b>8.6</b></td></tr>
+<tr><td><code>templates.py / compliance.py / cart.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>compatibility.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c good">9</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>compat_check.py</code></td><td class="c good">9</td><td class="c warn">7</td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c"><b>8.4</b></td></tr>
+<tr><td><code>compat_explainer.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c good">9</td><td class="c ok">8</td><td class="c"><b>8.4</b></td></tr>
+<tr><td><code>component_registry.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c warn">7</td><td class="c ok">8</td><td class="c"><b>8.2</b></td></tr>
+<tr><td><code>stack_composer.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c good">9</td><td class="c"><b>8.6</b></td></tr>
+<tr><td><code>stack_compose_fragments.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c warn">7</td><td class="c ok">8</td><td class="c"><b>8.0</b></td></tr>
+<tr><td><code>custom_stack_runner.py</code></td><td class="c good">9</td><td class="c warn">7</td><td class="c warn">7</td><td class="c warn">7</td><td class="c muted">–</td><td class="c"><b>7.5</b></td></tr>
+<tr><td><code>ai_assistant.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c ok">8</td><td class="c"><b>8.6</b></td></tr>
+<tr><td><code>compat_ai.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c warn">7</td><td class="c ok">8</td><td class="c"><b>8.0</b></td></tr>
+<tr><td><code>ai_configurator.py</code></td><td class="c good">9</td><td class="c warn">7</td><td class="c warn">7</td><td class="c warn">7</td><td class="c muted">–</td><td class="c"><b>7.5</b></td></tr>
+<tr><td><code>ai_provisioner.py</code></td><td class="c good">9</td><td class="c bad">5</td><td class="c warn">7</td><td class="c warn">7</td><td class="c muted">–</td><td class="c"><b>7.0</b></td></tr>
+<tr><td><code>image_builder.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c warn">7</td><td class="c muted">–</td><td class="c"><b>8.0</b></td></tr>
+<tr><td><code>version_fetcher.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c muted">–</td><td class="c"><b>8.2</b></td></tr>
+<tr><td><code>error_explainer.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c muted">–</td><td class="c"><b>9.0</b></td></tr>
+<tr><td><code>backup.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c"><b>8.4</b></td></tr>
+<tr><td><code>audit_log.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c good">9</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>rbac_auth.py + bootstrap_rbac.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c good">9</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>notifications.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c"><b>8.4</b></td></tr>
+<tr><td><code>monitoring.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c muted">–</td><td class="c"><b>8.5</b></td></tr>
+<tr><td><code>health.py / structured_smoke.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c ok">8</td><td class="c"><b>8.6</b></td></tr>
+<tr><td><code>service_logs.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c"><b>9.0</b></td></tr>
+<tr><td><code>inspector.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c muted">–</td><td class="c"><b>8.2</b></td></tr>
+<tr><td><code>tls_wizard.py / caddy_tls.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c muted">–</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>jdbc_extras.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>upgrade_executor.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c muted">–</td><td class="c"><b>8.5</b></td></tr>
+<tr><td><code>uninstall.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c muted">–</td><td class="c"><b>8.5</b></td></tr>
+<tr><td><code>ingest.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c muted">–</td><td class="c"><b>8.2</b></td></tr>
+<tr><td><code>data_sources.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c ok">8</td><td class="c"><b>8.6</b></td></tr>
+<tr><td><code>destinations.py + insyght_connector.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c good">9</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>sql_editor.py / demo_query.py / table_explorer.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c muted">–</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>data_quality.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c good">9</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>gitops_export.py / gitops_import.py / evidence.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c good">9</td><td class="c good">9</td><td class="c"><b>8.8</b></td></tr>
+<tr><td><code>scorer.py / sizer.py / providers.py / lake_namer.py</code></td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c muted">–</td><td class="c"><b>9.0</b></td></tr>
+<tr><td><code>airflow/dagster/superset/observability overlays</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c"><b>8.2</b></td></tr>
+<tr><td><code>v1/ scaffolds (executor, schema, rbac)</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c good">9</td><td class="c good">9</td><td class="c"><b>8.6</b></td></tr>
+<tr><td><code>cli/ (main, client, render, ws)</code></td><td class="c good">9</td><td class="c good">9</td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c"><b>8.6</b></td></tr>
+<tr><td><code>frontend/index.html</code></td><td class="c ok">8</td><td class="c warn">7</td><td class="c warn">7</td><td class="c warn">7</td><td class="c muted">–</td><td class="c"><b>7.2</b></td></tr>
+<tr><td><code>scripts/install_harness.py</code></td><td class="c good">9</td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c good">9</td><td class="c"><b>8.4</b></td></tr>
+<tr><td><code>stacks shell scripts + Dockerfiles</code></td><td class="c ok">8</td><td class="c ok">8</td><td class="c ok">8</td><td class="c bad">6</td><td class="c muted">–</td><td class="c"><b>7.5</b></td></tr>
+</table>
+<h2>3. Test Cases</h2>
+<p class="note">All 471 test cases were executed with pytest (asyncio mode).
+Result: <b class="st-pass">447 PASSED</b>, <b class="st-fail">22 FAILED</b>,
+2 skipped. Failures are analysed in section 4 — the majority are stale expectations,
+one group is a genuine regression.</p>
+<h3>3.1 tests/TestArgParsing.py</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-001</td><td><code>test_minimal_args</code></td><td>Minimal args</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-002</td><td><code>test_stack_is_required</code></td><td>Stack is required</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-003</td><td><code>test_work_dir_override</code></td><td>Work dir override</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-004</td><td><code>test_keep_flag</code></td><td>Keep flag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-005</td><td><code>test_no_teardown_flag</code></td><td>No teardown flag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-006</td><td><code>test_json_without_path_uses_stdout_sentinel</code></td><td>Json without path uses stdout sentinel</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-007</td><td><code>test_json_with_path</code></td><td>Json with path</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-008</td><td><code>test_all_flags_compose</code></td><td>All flags compose</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.2 tests/TestCleanFirstArg.py</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-009</td><td><code>test_clean_first_defaults_on</code></td><td>Clean first defaults on</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-010</td><td><code>test_no_clean_first_opts_out</code></td><td>No clean first opts out</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-011</td><td><code>test_clean_first_flag_explicit</code></td><td>Clean first flag explicit</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.3 tests/TestEvidenceRenderer.py</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-012</td><td><code>test_shape_matches_lock_file</code></td><td>Shape matches lock file</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-013</td><td><code>test_proof_falls_back_when_smoke_silent</code></td><td>Proof falls back when smoke silent</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-014</td><td><code>test_smoke_failure_captures_stderr_tail</code></td><td>Smoke failure captures stderr tail</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-015</td><td><code>test_missing_step_marked_not_run</code></td><td>Missing step marked not run</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-016</td><td><code>test_short_install_id_when_no_prefix</code></td><td>Short install id when no prefix</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-017</td><td><code>test_dump_yaml_is_loadable_list</code></td><td>Dump yaml is loadable list</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-018</td><td><code>test_dump_yaml_uses_block_literal_for_multiline</code></td><td>Dump yaml uses block literal for multiline</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.4 tests/TestPreInstallCleanup.py</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-019</td><td><code>test_pre_install_cleanup_uses_volumes_flag</code></td><td>Pre install cleanup uses volumes flag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-020</td><td><code>test_pre_install_cleanup_force_removes_stale_udp_orphans</code></td><td>Pre install cleanup force removes stale udp orphans</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-021</td><td><code>test_pre_install_cleanup_is_best_effort</code></td><td>Pre install cleanup is best effort</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.5 tests/TestPromoteInstructions.py</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-022</td><td><code>test_references_correct_lock_path</code></td><td>References correct lock path</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-023</td><td><code>test_default_version_bump_pattern</code></td><td>Default version bump pattern</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-024</td><td><code>test_custom_version_bump</code></td><td>Custom version bump</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-025</td><td><code>test_certified_at_value_included</code></td><td>Certified at value included</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-026</td><td><code>test_status_transition_described</code></td><td>Status transition described</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-027</td><td><code>test_promote_commit_message_template</code></td><td>Promote commit message template</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.6 tests/TestTeardown.py</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-028</td><td><code>test_docker_compose_down_falls_back_to_project_level_when_no_compose_file</code></td><td>Docker compose down falls back to project level when no compose file</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-029</td><td><code>test_docker_compose_down_invokes_correct_argv</code></td><td>Docker compose down invokes correct argv</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-030</td><td><code>test_docker_compose_down_swallows_exceptions</code></td><td>Docker compose down swallows exceptions</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-031</td><td><code>test_remove_install_dir_is_no_op_on_missing_path</code></td><td>Remove install dir is no op on missing path</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-032</td><td><code>test_remove_install_dir_actually_removes</code></td><td>Remove install dir actually removes</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-033</td><td><code>test_remove_install_dir_refuses_non_directory</code></td><td>Remove install dir refuses non directory</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-034</td><td><code>test_teardown_runs_in_finally_when_install_task_raises</code></td><td>Teardown runs in finally when install task raises</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-035</td><td><code>test_no_destructive_flags_in_any_compose_argv</code></td><td>No destructive flags in any compose argv</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.7 tests/test_ai_component_recommendation.py — Unit + route tests for backend/ai_assistant.py per-component recommendation.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-036</td><td><code>test_request_model_requires_component_id</code></td><td>component_id is mandatory (no default).</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-037</td><td><code>test_request_model_rejects_notes_over_600_chars</code></td><td>notes field is capped at 600 chars by the model validator.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-038</td><td><code>test_request_model_accepts_notes_exactly_600_chars</code></td><td>The boundary itself (600 chars) is valid — only OVER 600 is rejected.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-039</td><td><code>test_request_model_rejects_unknown_size_tier</code></td><td>size_tier is a closed Literal — bogus values must be rejected.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-040</td><td><code>test_request_model_accepts_known_size_tier</code></td><td>A valid Literal value passes.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-041</td><td><code>test_response_model_rejects_unknown_verdict</code></td><td>verdict is a closed Literal — invented values must be rejected.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-042</td><td><code>test_response_model_rejects_unknown_confidence</code></td><td>confidence is a closed Literal — invented values must be rejected.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-043</td><td><code>test_siblings_returns_same_category_components_only</code></td><td>`trino` lives in &#x27;processing&#x27;; siblings must all share that category.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-044</td><td><code>test_siblings_excludes_the_target_component_itself</code></td><td>Self should never appear in its own siblings list.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-045</td><td><code>test_siblings_for_unknown_component_returns_empty_pair</code></td><td>Unknown id -&gt; (None, []) — no exception.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-046</td><td><code>test_strip_tag_strips_image_tag_suffix</code></td><td>_strip_tag(&#x27;trino:475&#x27;) -&gt; &#x27;trino&#x27; so combo entries match bare ids.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-047</td><td><code>test_strip_tag_handles_bare_id</code></td><td>A bare id (no &#x27;:&#x27;) passes through unchanged.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-048</td><td><code>test_incompat_lookup_surfaces_trino_combinations</code></td><td>`trino` has incompatibility entries in udp-trino-local-v0.1.lock.yaml (combinations include `trino:latest` and `trino:475`). The helper must surface at least one.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-049</td><td><code>test_incompat_lookup_empty_for_component_with_no_combinations</code></td><td>An unknown component has no combinations anywhere -&gt; empty list.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-050</td><td><code>test_build_prompt_passes_notes_through_unmodified</code></td><td>A `notes` value free of secret-shaped tokens must appear verbatim in the assembled system prompt (after redact(), which is a no-op for plain descriptive text).</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-051</td><td><code>test_build_prompt_includes_sibling_component_in_siblings_block</code></td><td>For component `trino`, the prompt&#x27;s siblings block must mention `spark-iceberg` (the other certified processing engine).</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-052</td><td><code>test_build_prompt_does_not_include_unrelated_category_components</code></td><td>The siblings block is scoped to one category. A component from an UNRELATED category (e.g. `minio` from object_storage) must NOT appear in the siblings block when we ask about `trino` (processing). We assert this by chec</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-053</td><td><code>test_build_prompt_renders_cart_when_provided</code></td><td>When the user has 3 items in their cart, the cart line must list them.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-054</td><td><code>test_build_prompt_renders_empty_cart_marker_when_absent</code></td><td>No cart -&gt; the prompt&#x27;s cart line says &#x27;(empty)&#x27; so the LLM knows.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-055</td><td><code>test_recommend_returns_disabled_shape_when_api_key_absent</code></td><td>No ANTHROPIC_API_KEY -&gt; graceful &#x27;disabled&#x27; recommendation (not raise, not 5xx), verdict==&#x27;unknown&#x27;, headline mentions disabled.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-056</td><td><code>test_recommend_unknown_component_returns_unknown_verdict_when_ai_enabled</code></td><td>With AI enabled, an unknown component_id must short-circuit BEFORE the LLM call and return verdict=&#x27;unknown&#x27;. We install a fake anthropic whose `messages.create` would raise if called, proving the short-circuit fired.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-057</td><td><code>test_recommend_unknown_component_headline_names_the_id</code></td><td>With AI enabled, the headline for an unknown component should include the id so the operator can see which spelling failed.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-058</td><td><code>test_recommend_unknown_component_headline_names_id_even_when_ai_disabled</code></td><td>Diagnostic should be specific even when the AI is unavailable — catalog lookup needs no API key.</td><td class="c st-skip">SKIP</td></tr>
+<tr><td class='c'>TC-059</td><td><code>test_recommend_returns_good_fit_when_model_says_good_fit</code></td><td>A clean LLM response with verdict=good_fit must be parsed and surfaced unchanged. We use a component (`minio`) with no lock incompatibilities.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-060</td><td><code>test_recommend_returns_warn_when_model_says_warn</code></td><td>A &#x27;warn&#x27; verdict from the model (e.g. because of a known lock-file incompatibility) must be passed through.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-061</td><td><code>test_recommend_returns_consider_alternate_when_model_says_so</code></td><td>A &#x27;consider_alternate&#x27; verdict from the model surfaces unchanged.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-062</td><td><code>test_recommend_keeps_only_alternates_that_are_real_siblings</code></td><td>The implementation guards against the model inventing a fake alternate id: only alternates whose component_id is in the catalog&#x27;s sibling set survive. We feed one real sibling + one made-up id and assert only the real on</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-063</td><td><code>test_recommend_returns_unknown_when_model_returns_malformed_json</code></td><td>If the model returns text that can&#x27;t be parsed as JSON the recommender must degrade to verdict=&#x27;unknown&#x27; rather than raise.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-064</td><td><code>test_recommend_low_confidence_when_disabled</code></td><td>Disabled path explicitly sets confidence=&#x27;low&#x27;.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-065</td><td><code>test_route_returns_200_with_well_formed_response_for_known_component</code></td><td>Happy path: known component + mocked Anthropic + a valid JSON response yields a 200 and a body that validates as ComponentRecommendation.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-066</td><td><code>test_route_response_validates_against_ComponentRecommendation_schema</code></td><td>The route&#x27;s response body must round-trip through the response model.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-067</td><td><code>test_route_returns_200_with_unknown_verdict_for_missing_component</code></td><td>An unknown component is NOT a 404 by design — the AI surface degrades gracefully (verdict=&#x27;unknown&#x27;, headline names the id). This is a deliberate design choice in recommend_component().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-068</td><td><code>test_route_returns_400_when_path_and_body_component_id_mismatch</code></td><td>The route&#x27;s mismatch guard is a 400, not a 500.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-069</td><td><code>test_route_accepts_empty_body_and_defaults_to_path_component_id</code></td><td>When the request body is omitted entirely, the handler reuses the path&#x27;s component_id and proceeds. We verify by mocking Anthropic and asserting the response carries the path&#x27;s component_id.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-070</td><td><code>test_route_disabled_ai_returns_disabled_shape_not_500</code></td><td>No API key -&gt; the route returns 200 with the disabled-shape body (NOT 5xx). UI must degrade cleanly.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-071</td><td><code>test_route_disabled_ai_rationale_mentions_anthropic_api_key</code></td><td>When AI is disabled, the rationale must clearly tell the operator which env var to set — that&#x27;s the whole point of the graceful path.</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.8 tests/test_api_versioning.py — Tests for the `/api/v1/` alias middleware.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-072</td><td><code>test_auth_status_alias_returns_identical_body</code></td><td>GET /api/auth/status and GET /api/v1/auth/status must be byte-identical.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-073</td><td><code>test_cart_validate_v1_echoes_validation_response</code></td><td>POST /api/v1/cart/validate must return the same validation envelope as the un-versioned route — proves the alias works for POST + JSON body, not just GET.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-074</td><td><code>test_v1_nonexistent_returns_404_not_redirect</code></td><td>An unknown path under /api/v1/ must surface FastAPI&#x27;s standard 404 JSON envelope — never a 3xx redirect to /api/. The rewrite happens inside the ASGI scope, not as an HTTP redirect, so the client only ever sees the final</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-075</td><td><code>test_v1_alias_registers_zero_extra_routes</code></td><td>The middleware must not register any /api/v1/* route. If a future change accidentally bolts on a v1 router, this guard fires.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-076</td><td><code>test_openapi_doc_still_reflects_canonical_paths</code></td><td>OpenAPI doc should still describe the un-versioned canonical paths. v1 is an alias, not a separately documented surface — the spec stays small and the contract stays single-sourced.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-077</td><td><code>test_websocket_v1_alias_receives_initial_frame</code></td><td>A client connecting to /api/v1/installs/{id}/logs must reach the same handler as /api/installs/{id}/logs. We seed one historical event into the bus first, then connect via the v1 path and assert the handler replays that </td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.9 tests/test_audit_log.py — Unit tests for backend.audit_log.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-078</td><td><code>test_is_enabled_defaults_false</code></td><td>An unset env var must yield False so v0.4 behaviour is unchanged.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-079</td><td><code>test_is_enabled_truthy_values</code></td><td>Is enabled truthy values</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-080</td><td><code>test_is_enabled_falsy_values</code></td><td>Is enabled falsy values</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-081</td><td><code>test_write_and_query_round_trip</code></td><td>A written entry must be retrievable by every filter dimension.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-082</td><td><code>test_query_when_db_missing_returns_empty</code></td><td>Query must NOT crash if the DB file has not been created yet.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-083</td><td><code>test_retention_prune_deletes_old_entries</code></td><td>Rows whose ts is older than the cutoff must be removed; newer rows kept.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-084</td><td><code>test_retention_prune_zero_days_rejected</code></td><td>older_than_days must be &gt; 0 — protects against accidental nuke.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-085</td><td><code>test_subscriber_redacts_secrets_before_write</code></td><td>End-to-end: publish a LogEvent that carries a secret in the line and payload, then verify the persisted row has the secret scrubbed.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-086</td><td><code>test_subscriber_skips_uninteresting_kinds</code></td><td>`log` events are the firehose — they must NOT be persisted, only the audited kinds (state / error / step_start / step_end) make it through.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-087</td><td><code>test_is_scheduler_enabled</code></td><td>Is scheduler enabled</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-088</td><td><code>test_scheduler_lifecycle_and_prune</code></td><td>Scheduler must register a task, call prune at interval, and stop cleanly.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-089</td><td><code>test_scheduler_survives_exception</code></td><td>An exception in prune must not crash the loop.</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.10 tests/test_cli.py — CLI tests using click.testing.CliRunner + httpx.MockTransport.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-090</td><td><code>test_root_help_lists_command_groups</code></td><td>Root help lists command groups</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-091</td><td><code>test_catalog_list_table</code></td><td>Catalog list table</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-092</td><td><code>test_stacks_list_json_mode</code></td><td>Stacks list json mode</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-093</td><td><code>test_install_create_posts_body</code></td><td>Install create posts body</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-094</td><td><code>test_404_becomes_click_error</code></td><td>404 becomes click error</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-095</td><td><code>test_install_status_steps_table</code></td><td>Install status steps table</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-096</td><td><code>test_retry_passes_step_id</code></td><td>Retry passes step id</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-097</td><td><code>test_export_writes_file</code></td><td>Export writes file</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.11 tests/test_compat_check.py — Unit tests for backend.compat_check (cart marriage check).</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-098</td><td><code>test_empty_cart_returns_verdict_with_explanations</code></td><td>Empty cart returns verdict with explanations</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-099</td><td><code>test_none_cart_is_treated_as_empty</code></td><td>None cart is treated as empty</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-100</td><td><code>test_udp_cart_matches_pilot_stable_with_high_score</code></td><td>Udp cart matches pilot stable with high score</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-101</td><td><code>test_udp_cart_returns_explanations_naming_stack</code></td><td>Udp cart returns explanations naming stack</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-102</td><td><code>test_nessie_cart_matches_candidate_stack</code></td><td>Nessie cart matches candidate stack</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-103</td><td><code>test_nessie_cart_scores_lower_than_udp_cart</code></td><td>Nessie cart scores lower than udp cart</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-104</td><td><code>test_obvious_udp_marriage_is_compatible</code></td><td>Obvious udp marriage is compatible</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-105</td><td><code>test_obvious_nessie_marriage_matches_correctly</code></td><td>Obvious nessie marriage matches correctly</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-106</td><td><code>test_hudi_plus_iceberg_rest_has_no_marriage</code></td><td>Hudi plus iceberg rest has no marriage</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-107</td><td><code>test_hudi_plus_iceberg_rest_suggest_swap_is_non_null</code></td><td>Hudi plus iceberg rest suggest swap is non null</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-108</td><td><code>test_happy_cart_returns_no_swap_suggestion</code></td><td>Happy cart returns no swap suggestion</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-109</td><td><code>test_readiness_score_clamped_to_unit_range[cart0]</code></td><td>Readiness score clamped to unit range</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-110</td><td><code>test_readiness_score_clamped_to_unit_range[cart1]</code></td><td>Readiness score clamped to unit range</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-111</td><td><code>test_readiness_score_clamped_to_unit_range[cart2]</code></td><td>Readiness score clamped to unit range</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-112</td><td><code>test_readiness_score_clamped_to_unit_range[cart3]</code></td><td>Readiness score clamped to unit range</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-113</td><td><code>test_readiness_score_clamped_to_unit_range[cart4]</code></td><td>Readiness score clamped to unit range</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-114</td><td><code>test_readiness_score_clamped_to_unit_range[cart5]</code></td><td>Readiness score clamped to unit range</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-115</td><td><code>test_readiness_score_clamped_to_unit_range[cart6]</code></td><td>Readiness score clamped to unit range</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-116</td><td><code>test_readiness_score_clamped_to_unit_range[cart7]</code></td><td>Readiness score clamped to unit range</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-117</td><td><code>test_verdict_is_json_serializable[cart0]</code></td><td>Verdict is json serializable</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-118</td><td><code>test_verdict_is_json_serializable[cart1]</code></td><td>Verdict is json serializable</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-119</td><td><code>test_verdict_is_json_serializable[cart2]</code></td><td>Verdict is json serializable</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-120</td><td><code>test_verdict_is_json_serializable[cart3]</code></td><td>Verdict is json serializable</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-121</td><td><code>test_verdict_has_only_basic_python_types</code></td><td>Verdict has only basic python types</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-122</td><td><code>test_check_cart_runs_well_under_100ms</code></td><td>Check cart runs well under 100ms</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-123</td><td><code>test_duplicate_cart_entries_do_not_affect_match</code></td><td>Duplicate cart entries do not affect match</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.12 tests/test_compat_explainer.py — Tests for backend.compat_explainer — the cart compatibility explainer.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-124</td><td><code>test_canonical_cart_matches_correct_stack_with_will_work[cart0-udp-local-v0.2]</code></td><td>Canonical cart matches correct stack with will work</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-125</td><td><code>test_canonical_cart_matches_correct_stack_with_will_work[cart1-udp-trino-local-v0.1]</code></td><td>Canonical cart matches correct stack with will work</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-126</td><td><code>test_canonical_cart_matches_correct_stack_with_will_work[cart2-iceberg-nessie-trino-local-v0.1]</code></td><td>Canonical cart matches correct stack with will work</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-127</td><td><code>test_canonical_cart_matches_correct_stack_with_will_work[cart3-hudi-hms-spark-local-v0.1]</code></td><td>Canonical cart matches correct stack with will work</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-128</td><td><code>test_canonical_cart_matches_correct_stack_with_will_work[cart4-delta-hms-spark-trino-local-v0.1]</code></td><td>Canonical cart matches correct stack with will work</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-129</td><td><code>test_canonical_cart_matches_correct_stack_with_will_work[cart5-iceberg-polaris-spark-local-v0.1]</code></td><td>Canonical cart matches correct stack with will work</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-130</td><td><code>test_will_work_includes_marriage_proven_reasons</code></td><td>Will work includes marriage proven reasons</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-131</td><td><code>test_hudi_plus_iceberg_rest_is_wont_work</code></td><td>Hudi plus iceberg rest is wont work</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-132</td><td><code>test_hudi_plus_iceberg_rest_headline_is_specific</code></td><td>Hudi plus iceberg rest headline is specific</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-133</td><td><code>test_empty_cart_is_untested_with_specific_headline</code></td><td>Empty cart is untested with specific headline</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-134</td><td><code>test_none_cart_is_treated_as_empty</code></td><td>None cart is treated as empty</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-135</td><td><code>test_alternative_carts_non_empty_when_one_swap_away</code></td><td>Alternative carts non empty when one swap away</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-136</td><td><code>test_alternative_carts_proposes_known_stack_for_partial_cart</code></td><td>Alternative carts proposes known stack for partial cart</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-137</td><td><code>test_graduation_path_non_empty_for_candidate_match[cart0-udp-trino-local-v0.1]</code></td><td>Graduation path non empty for candidate match</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-138</td><td><code>test_graduation_path_non_empty_for_candidate_match[cart1-iceberg-nessie-trino-local-v0.1]</code></td><td>Graduation path non empty for candidate match</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-139</td><td><code>test_graduation_path_non_empty_for_candidate_match[cart2-hudi-hms-spark-local-v0.1]</code></td><td>Graduation path non empty for candidate match</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-140</td><td><code>test_graduation_path_non_empty_for_candidate_match[cart3-delta-hms-spark-trino-local-v0.1]</code></td><td>Graduation path non empty for candidate match</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-141</td><td><code>test_graduation_path_non_empty_for_candidate_match[cart4-iceberg-polaris-spark-local-v0.1]</code></td><td>Graduation path non empty for candidate match</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-142</td><td><code>test_graduation_path_empty_for_pilot_stable_match</code></td><td>Graduation path empty for pilot stable match</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-143</td><td><code>test_explanation_round_trips_through_json[cart0]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-144</td><td><code>test_explanation_round_trips_through_json[cart1]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-145</td><td><code>test_explanation_round_trips_through_json[cart2]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-146</td><td><code>test_explanation_round_trips_through_json[cart3]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-147</td><td><code>test_explanation_round_trips_through_json[cart4]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-148</td><td><code>test_explanation_round_trips_through_json[cart5]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-149</td><td><code>test_explanation_round_trips_through_json[cart6]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-150</td><td><code>test_explanation_round_trips_through_json[cart7]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-151</td><td><code>test_explanation_round_trips_through_json[cart8]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-152</td><td><code>test_explanation_round_trips_through_json[cart9]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-153</td><td><code>test_explanation_round_trips_through_json[cart10]</code></td><td>Explanation round trips through json</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-154</td><td><code>test_explanation_contains_only_basic_python_types</code></td><td>Explanation contains only basic python types</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-155</td><td><code>test_single_component_cart_is_untested</code></td><td>Single component cart is untested</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-156</td><td><code>test_only_optional_cart_is_untested_or_wont_work_but_not_will_work</code></td><td>Only optional cart is untested or wont work but not will work</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-157</td><td><code>test_delta_plus_polaris_flagged_as_no_overlap</code></td><td>Delta plus polaris flagged as no overlap</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-158</td><td><code>test_hms_without_postgres_surfaces_needs_auxiliary_reason</code></td><td>Hms without postgres surfaces needs auxiliary reason</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-159</td><td><code>test_polaris_without_postgres_surfaces_needs_auxiliary_reason</code></td><td>Polaris without postgres surfaces needs auxiliary reason</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-160</td><td><code>test_explain_cart_runs_well_under_100ms</code></td><td>Explain cart runs well under 100ms</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-161</td><td><code>test_duplicate_cart_entries_are_deduped</code></td><td>Duplicate cart entries are deduped</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-162</td><td><code>test_will_work_always_has_at_least_one_reason</code></td><td>Will work always has at least one reason</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-163</td><td><code>test_wont_work_always_has_at_least_one_reason</code></td><td>Wont work always has at least one reason</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-164</td><td><code>test_will_work_reports_no_extras_for_canonical_cart</code></td><td>Will work reports no extras for canonical cart</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-165</td><td><code>test_will_work_reports_missing_when_cart_is_strict_subset</code></td><td>Will work reports missing when cart is strict subset</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.13 tests/test_compatibility.py — Unit tests for backend.compatibility.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-166</td><td><code>test_load_lock_returns_dict_with_version_id</code></td><td>Load lock returns dict with version id</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-167</td><td><code>test_load_lock_returns_none_for_unknown_stack</code></td><td>Load lock returns none for unknown stack</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-168</td><td><code>test_list_locks_includes_udp_local_v02</code></td><td>List locks includes udp local v02</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-169</td><td><code>test_validate_against_catalog_clean_when_aligned</code></td><td>Validate against catalog clean when aligned</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-170</td><td><code>test_safe_image_ref_accepts_valid_refs[minio/minio-RELEASE.2025-04-22T22-12-26Z]</code></td><td>Safe image ref accepts valid refs</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-171</td><td><code>test_safe_image_ref_accepts_valid_refs[starrocks/fe-ubuntu-3.3.13]</code></td><td>Safe image ref accepts valid refs</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-172</td><td><code>test_safe_image_ref_rejects_bad_refs[--rm-1.0]</code></td><td>Safe image ref rejects bad refs</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-173</td><td><code>test_safe_image_ref_rejects_bad_refs[img-../../etc/passwd]</code></td><td>Safe image ref rejects bad refs</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-174</td><td><code>test_safe_image_ref_rejects_bad_refs[img; rm -rf /-1.0]</code></td><td>Safe image ref rejects bad refs</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-175</td><td><code>test_safe_image_ref_rejects_bad_refs[-1.0]</code></td><td>Safe image ref rejects bad refs</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-176</td><td><code>test_safe_image_ref_rejects_bad_refs[img-]</code></td><td>Safe image ref rejects bad refs</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-177</td><td><code>test_load_upgrades_returns_dict_with_candidates</code></td><td>Load upgrades returns dict with candidates</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-178</td><td><code>test_list_upgrade_candidates_includes_starrocks_fe_bump</code></td><td>List upgrade candidates includes starrocks fe bump</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-179</td><td><code>test_simulate_upgrade_flags_known_incompatible_spark_tag</code></td><td>Simulate upgrade flags known incompatible spark tag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-180</td><td><code>test_simulate_upgrade_starrocks_fe_minor_bump_is_not_incompatible</code></td><td>Simulate upgrade starrocks fe minor bump is not incompatible</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-181</td><td><code>test_simulate_upgrade_rejects_unknown_component</code></td><td>Simulate upgrade rejects unknown component</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-182</td><td><code>test_lock_summary_includes_evidence_entries</code></td><td>Lock summary includes evidence entries</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-183</td><td><code>test_lock_summary_components_pinned_is_six</code></td><td>Lock summary components pinned is six</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-184</td><td><code>test_precheck_image_availability_reports_missing_docker</code></td><td>Precheck image availability reports missing docker</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-185</td><td><code>test_validate_against_catalog_detects_tag_drift</code></td><td>Validate against catalog detects tag drift</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-186</td><td><code>test_load_upgrades_returns_none_for_unknown_stack</code></td><td>Load upgrades returns none for unknown stack</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.14 tests/test_data_quality.py — Unit tests for backend.data_quality.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-187</td><td><code>test_create_no_nulls_requires_column</code></td><td>Create no nulls requires column</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-188</td><td><code>test_create_row_count_min_requires_expected</code></td><td>Create row count min requires expected</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-189</td><td><code>test_create_rejects_sql_injection_in_column</code></td><td>Create rejects sql injection in column</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-190</td><td><code>test_run_check_no_nulls_builds_expected_sql</code></td><td>Run check no nulls builds expected sql</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-191</td><td><code>test_run_check_persists_result_and_returns_it</code></td><td>Run check persists result and returns it</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-192</td><td><code>test_list_checks_filters_by_install_id</code></td><td>List checks filters by install id</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-193</td><td><code>test_sql_builders_per_kind</code></td><td>Sql builders per kind</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.15 tests/test_data_sources_mysql.py — Unit tests for the MySQL data-source path.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-194</td><td><code>test_create_mysql_source_rejects_weak_credential</code></td><td>Create mysql source rejects weak credential</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-195</td><td><code>test_create_and_list_mysql_source_round_trips</code></td><td>Create and list mysql source round trips</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-196</td><td><code>test_test_source_mysql_returns_expected_shape</code></td><td>Source mysql returns expected shape</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-197</td><td><code>test_kick_off_mysql_ingest_without_jdbc_extras_fails_with_actionable_message</code></td><td>Kick off mysql ingest without jdbc extras fails with actionable message</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.16 tests/test_destinations.py — Unit tests for backend/destinations.py + backend/insyght_connector.py.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-198</td><td><code>test_create_insyght_destination_sql_pull_round_trips</code></td><td>Create insyght destination sql pull round trips</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-199</td><td><code>test_credentials_encrypted_at_rest_and_never_returned</code></td><td>Credentials encrypted at rest and never returned</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-200</td><td><code>test_test_destination_sql_pull_mocks_pymysql</code></td><td>Destination sql pull mocks pymysql</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-201</td><td><code>test_test_destination_push_api_mocks_httpx</code></td><td>Destination push api mocks httpx</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-202</td><td><code>test_provision_sql_pull_builds_create_user_and_grant</code></td><td>Provision sql pull builds create user and grant</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-203</td><td><code>test_connection_payload_omits_plaintext_credentials</code></td><td>Connection payload omits plaintext credentials</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-204</td><td><code>test_delete_destination_removes_record</code></td><td>Delete destination removes record</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-205</td><td><code>test_unknown_destination_id_raises_not_found</code></td><td>Unknown destination id raises not found</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-206</td><td><code>test_route_test_refuses_if_install_not_ready</code></td><td>The /test route is supposed to refuse sql_pull destinations whose install isn&#x27;t in READY state. We invoke the route handler directly (TestClient has a starlette/httpx version mismatch on this env) and expect HTTPExceptio</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-207</td><td><code>test_bad_kind_or_mode_rejected</code></td><td>Bad kind or mode rejected</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-208</td><td><code>test_insyght_provisioner_refuses_dangerous_password_chars</code></td><td>Insyght provisioner refuses dangerous password chars</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.17 tests/test_expanded_catalog.py — Tests for the v0.6 catalog + stack expansion.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-209</td><td><code>test_new_component_exists_in_catalog[hudi]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-210</td><td><code>test_new_component_exists_in_catalog[delta]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-211</td><td><code>test_new_component_exists_in_catalog[nessie]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-212</td><td><code>test_new_component_exists_in_catalog[hive-metastore]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-213</td><td><code>test_new_component_exists_in_catalog[polaris]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-214</td><td><code>test_new_component_exists_in_catalog[spark-hudi]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-215</td><td><code>test_new_component_exists_in_catalog[spark-delta]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-216</td><td><code>test_new_component_exists_in_catalog[airflow]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-217</td><td><code>test_new_component_exists_in_catalog[dagster]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-218</td><td><code>test_new_component_exists_in_catalog[superset]</code></td><td>New component exists in catalog</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-219</td><td><code>test_new_component_has_name_logo_tagline[hudi]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-220</td><td><code>test_new_component_has_name_logo_tagline[delta]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-221</td><td><code>test_new_component_has_name_logo_tagline[nessie]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-222</td><td><code>test_new_component_has_name_logo_tagline[hive-metastore]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-223</td><td><code>test_new_component_has_name_logo_tagline[polaris]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-224</td><td><code>test_new_component_has_name_logo_tagline[spark-hudi]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-225</td><td><code>test_new_component_has_name_logo_tagline[spark-delta]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-226</td><td><code>test_new_component_has_name_logo_tagline[airflow]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-227</td><td><code>test_new_component_has_name_logo_tagline[dagster]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-228</td><td><code>test_new_component_has_name_logo_tagline[superset]</code></td><td>Every promoted component must have the cart-UX fields per validate_catalog().</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-229</td><td><code>test_new_component_marked_candidate[hudi]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-230</td><td><code>test_new_component_marked_candidate[delta]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-231</td><td><code>test_new_component_marked_candidate[nessie]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-232</td><td><code>test_new_component_marked_candidate[hive-metastore]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-233</td><td><code>test_new_component_marked_candidate[polaris]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-234</td><td><code>test_new_component_marked_candidate[spark-hudi]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-235</td><td><code>test_new_component_marked_candidate[spark-delta]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-236</td><td><code>test_new_component_marked_candidate[airflow]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-237</td><td><code>test_new_component_marked_candidate[dagster]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-238</td><td><code>test_new_component_marked_candidate[superset]</code></td><td>Promotion contract: new components ship as candidate (no end-to-end evidence in a stack lock yet). Mirrors Trino&#x27;s pattern.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-239</td><td><code>test_new_components_compatible_with_references_resolve</code></td><td>Every id in `compatible_with` must point at an actual catalog component.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-240</td><td><code>test_bi_optional_category_exists</code></td><td>Bi optional category exists</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-241</td><td><code>test_bi_optional_category_is_optional</code></td><td>Bi optional category is optional</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-242</td><td><code>test_bi_optional_contains_superset</code></td><td>Bi optional contains superset</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-243</td><td><code>test_new_stack_manifest_loads[iceberg-nessie-trino-local-v0.1]</code></td><td>New stack manifest loads</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-244</td><td><code>test_new_stack_manifest_loads[hudi-hms-spark-local-v0.1]</code></td><td>New stack manifest loads</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-245</td><td><code>test_new_stack_manifest_loads[delta-hms-spark-trino-local-v0.1]</code></td><td>New stack manifest loads</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-246</td><td><code>test_new_stack_manifest_loads[iceberg-polaris-spark-local-v0.1]</code></td><td>New stack manifest loads</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-247</td><td><code>test_new_stack_has_required_commands[iceberg-nessie-trino-local-v0.1]</code></td><td>New stack has required commands</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-248</td><td><code>test_new_stack_has_required_commands[hudi-hms-spark-local-v0.1]</code></td><td>New stack has required commands</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-249</td><td><code>test_new_stack_has_required_commands[delta-hms-spark-trino-local-v0.1]</code></td><td>New stack has required commands</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-250</td><td><code>test_new_stack_has_required_commands[iceberg-polaris-spark-local-v0.1]</code></td><td>New stack has required commands</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-251</td><td><code>test_new_stack_maturity_is_candidate[iceberg-nessie-trino-local-v0.1]</code></td><td>New stack maturity is candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-252</td><td><code>test_new_stack_maturity_is_candidate[hudi-hms-spark-local-v0.1]</code></td><td>New stack maturity is candidate</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-253</td><td><code>test_new_stack_maturity_is_candidate[delta-hms-spark-trino-local-v0.1]</code></td><td>New stack maturity is candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-254</td><td><code>test_new_stack_maturity_is_candidate[iceberg-polaris-spark-local-v0.1]</code></td><td>New stack maturity is candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-255</td><td><code>test_new_stack_certification_block[iceberg-nessie-trino-local-v0.1]</code></td><td>Promotion contract: smoke and bootstrap are required for promotion; evidence_dir must be set so install runs have a deterministic place to capture artifacts.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-256</td><td><code>test_new_stack_certification_block[hudi-hms-spark-local-v0.1]</code></td><td>Promotion contract: smoke and bootstrap are required for promotion; evidence_dir must be set so install runs have a deterministic place to capture artifacts.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-257</td><td><code>test_new_stack_certification_block[delta-hms-spark-trino-local-v0.1]</code></td><td>Promotion contract: smoke and bootstrap are required for promotion; evidence_dir must be set so install runs have a deterministic place to capture artifacts.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-258</td><td><code>test_new_stack_certification_block[iceberg-polaris-spark-local-v0.1]</code></td><td>Promotion contract: smoke and bootstrap are required for promotion; evidence_dir must be set so install runs have a deterministic place to capture artifacts.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-259</td><td><code>test_new_lock_file_exists[iceberg-nessie-trino-local-v0.1]</code></td><td>New lock file exists</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-260</td><td><code>test_new_lock_file_exists[hudi-hms-spark-local-v0.1]</code></td><td>New lock file exists</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-261</td><td><code>test_new_lock_file_exists[delta-hms-spark-trino-local-v0.1]</code></td><td>New lock file exists</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-262</td><td><code>test_new_lock_file_exists[iceberg-polaris-spark-local-v0.1]</code></td><td>New lock file exists</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-263</td><td><code>test_new_lock_status_is_candidate[iceberg-nessie-trino-local-v0.1]</code></td><td>New lock status is candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-264</td><td><code>test_new_lock_status_is_candidate[hudi-hms-spark-local-v0.1]</code></td><td>New lock status is candidate</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-265</td><td><code>test_new_lock_status_is_candidate[delta-hms-spark-trino-local-v0.1]</code></td><td>New lock status is candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-266</td><td><code>test_new_lock_status_is_candidate[iceberg-polaris-spark-local-v0.1]</code></td><td>New lock status is candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-267</td><td><code>test_new_lock_evidence_is_empty[iceberg-nessie-trino-local-v0.1]</code></td><td>The candidate contract: status: candidate iff evidence is empty. Any first evidence entry should flip the status to pilot-stable in the same commit, with a corresponding bump to certified_at + version_id.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-268</td><td><code>test_new_lock_evidence_is_empty[hudi-hms-spark-local-v0.1]</code></td><td>The candidate contract: status: candidate iff evidence is empty. Any first evidence entry should flip the status to pilot-stable in the same commit, with a corresponding bump to certified_at + version_id.</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-269</td><td><code>test_new_lock_evidence_is_empty[delta-hms-spark-trino-local-v0.1]</code></td><td>The candidate contract: status: candidate iff evidence is empty. Any first evidence entry should flip the status to pilot-stable in the same commit, with a corresponding bump to certified_at + version_id.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-270</td><td><code>test_new_lock_evidence_is_empty[iceberg-polaris-spark-local-v0.1]</code></td><td>The candidate contract: status: candidate iff evidence is empty. Any first evidence entry should flip the status to pilot-stable in the same commit, with a corresponding bump to certified_at + version_id.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-271</td><td><code>test_new_lock_has_required_fields[iceberg-nessie-trino-local-v0.1]</code></td><td>New lock has required fields</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-272</td><td><code>test_new_lock_has_required_fields[hudi-hms-spark-local-v0.1]</code></td><td>New lock has required fields</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-273</td><td><code>test_new_lock_has_required_fields[delta-hms-spark-trino-local-v0.1]</code></td><td>New lock has required fields</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-274</td><td><code>test_new_lock_has_required_fields[iceberg-polaris-spark-local-v0.1]</code></td><td>New lock has required fields</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-275</td><td><code>test_new_lock_components_all_have_image_and_tag[iceberg-nessie-trino-local-v0.1]</code></td><td>New lock components all have image and tag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-276</td><td><code>test_new_lock_components_all_have_image_and_tag[hudi-hms-spark-local-v0.1]</code></td><td>New lock components all have image and tag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-277</td><td><code>test_new_lock_components_all_have_image_and_tag[delta-hms-spark-trino-local-v0.1]</code></td><td>New lock components all have image and tag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-278</td><td><code>test_new_lock_components_all_have_image_and_tag[iceberg-polaris-spark-local-v0.1]</code></td><td>New lock components all have image and tag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-279</td><td><code>test_lock_components_avoid_floating_tags[iceberg-nessie-trino-local-v0.1]</code></td><td>Lock components avoid floating tags</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-280</td><td><code>test_lock_components_avoid_floating_tags[hudi-hms-spark-local-v0.1]</code></td><td>Lock components avoid floating tags</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-281</td><td><code>test_lock_components_avoid_floating_tags[delta-hms-spark-trino-local-v0.1]</code></td><td>Lock components avoid floating tags</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-282</td><td><code>test_lock_components_avoid_floating_tags[iceberg-polaris-spark-local-v0.1]</code></td><td>Lock components avoid floating tags</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-283</td><td><code>test_total_stack_count_matches_expectation</code></td><td>Total stack count matches expectation</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-284</td><td><code>test_every_stack_has_a_lock_file</code></td><td>No stack manifest should ship without a compatibility lock — even candidates need one to record the image tags being shipped.</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-285</td><td><code>test_validate_catalog_only_warns_about_known_candidate_recommended_sets</code></td><td>Validate catalog only warns about known candidate recommended sets</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-286</td><td><code>test_runner_has_script_set_for_new_stack[iceberg-nessie-trino-local-v0.1]</code></td><td>Runner has script set for new stack</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-287</td><td><code>test_runner_has_script_set_for_new_stack[hudi-hms-spark-local-v0.1]</code></td><td>Runner has script set for new stack</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-288</td><td><code>test_runner_has_script_set_for_new_stack[delta-hms-spark-trino-local-v0.1]</code></td><td>Runner has script set for new stack</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-289</td><td><code>test_runner_has_script_set_for_new_stack[iceberg-polaris-spark-local-v0.1]</code></td><td>Runner has script set for new stack</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-290</td><td><code>test_runner_script_filenames_match_manifest[iceberg-nessie-trino-local-v0.1]</code></td><td>The runner writes scripts under the filenames in the dispatch dict; the manifest&#x27;s commands.bootstrap/smoke argv reference those filenames. They MUST match or bash will look for the wrong file.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-291</td><td><code>test_runner_script_filenames_match_manifest[hudi-hms-spark-local-v0.1]</code></td><td>The runner writes scripts under the filenames in the dispatch dict; the manifest&#x27;s commands.bootstrap/smoke argv reference those filenames. They MUST match or bash will look for the wrong file.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-292</td><td><code>test_runner_script_filenames_match_manifest[delta-hms-spark-trino-local-v0.1]</code></td><td>The runner writes scripts under the filenames in the dispatch dict; the manifest&#x27;s commands.bootstrap/smoke argv reference those filenames. They MUST match or bash will look for the wrong file.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-293</td><td><code>test_runner_script_filenames_match_manifest[iceberg-polaris-spark-local-v0.1]</code></td><td>The runner writes scripts under the filenames in the dispatch dict; the manifest&#x27;s commands.bootstrap/smoke argv reference those filenames. They MUST match or bash will look for the wrong file.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-294</td><td><code>test_recommended_sets_cover_all_new_stacks</code></td><td>Recommended sets cover all new stacks</td><td class="c st-fail">FAIL</td></tr>
+</table>
+<h3>3.18 tests/test_gitops_import.py</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-295</td><td><code>test_rejects_env_as_directory</code></td><td>Codex-flagged: a tarball whose .env is a directory bypasses the `&lt;rotate-me&gt;` placeholder check because the body is empty.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-296</td><td><code>test_rejects_windows_ads_member_name</code></td><td>Codex-flagged: member names with `:` (NTFS alternate data streams) can write hidden disk state on Windows. Reject at validation.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-297</td><td><code>test_materialize_rejects_symlink_target_dir</code></td><td>Codex-flagged: `target_dir` as a symlink to an empty directory passes the empty-check and extracts into the link target — escaping the intended import root. Reject any symlink target outright.</td><td class="c st-skip">SKIP</td></tr>
+<tr><td class='c'>TC-298</td><td><code>test_validate_tarball_returns_import_plan_for_export_shape</code></td><td>Validate tarball returns import plan for export shape</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-299</td><td><code>test_materialize_import_requires_explicit_placeholder_opt_in</code></td><td>Materialize import requires explicit placeholder opt in</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-300</td><td><code>test_validate_tarball_rejects_unsafe_member_paths[../escape.txt]</code></td><td>Validate tarball rejects unsafe member paths</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-301</td><td><code>test_validate_tarball_rejects_unsafe_member_paths[safe/../../escape.txt]</code></td><td>Validate tarball rejects unsafe member paths</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-302</td><td><code>test_validate_tarball_rejects_unsafe_member_paths[/absolute.txt]</code></td><td>Validate tarball rejects unsafe member paths</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-303</td><td><code>test_validate_tarball_rejects_unsafe_member_paths[C:\\absolute-ish.txt]</code></td><td>Validate tarball rejects unsafe member paths</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-304</td><td><code>test_validate_tarball_rejects_links</code></td><td>Validate tarball rejects links</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-305</td><td><code>test_validate_tarball_rejects_missing_required_member</code></td><td>Validate tarball rejects missing required member</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-306</td><td><code>test_validate_tarball_rejects_unknown_stack_id</code></td><td>Validate tarball rejects unknown stack id</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-307</td><td><code>test_materialize_import_refuses_non_empty_target</code></td><td>Materialize import refuses non empty target</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.19 tests/test_jdbc_extras.py — Unit tests for backend.jdbc_extras.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-308</td><td><code>test_enable_writes_override_with_expected_content</code></td><td>Enable writes override with expected content</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-309</td><td><code>test_enable_postgres_only_omits_mysql</code></td><td>Confirm the include flags actually gate which jar URL appears.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-310</td><td><code>test_disable_removes_override_file</code></td><td>Disable removes override file</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-311</td><td><code>test_disable_when_not_enabled_is_idempotent</code></td><td>Calling disable on a non-enabled install reports disabled=False but does not raise -- matches the idempotency contract of caddy_tls / monitoring.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-312</td><td><code>test_is_jdbc_enabled_reflects_state</code></td><td>Is jdbc enabled reflects state</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-313</td><td><code>test_is_jdbc_enabled_unknown_install_returns_false</code></td><td>Unknown install_ids never raise from the status check -- callers use this for UI state and would crash on a 404.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-314</td><td><code>test_jdbc_activate_command_shape</code></td><td>Jdbc activate command shape</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-315</td><td><code>test_enable_rejects_empty_profile</code></td><td>include_postgres=False AND include_mysql=False would write a no-op override -- enable refuses with a clear ValueError.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-316</td><td><code>test_driver_version_rejects_shell_meta</code></td><td>The version is spliced into a Maven URL + YAML; reject anything that could break either.</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.20 tests/test_observability_overlay.py — v0.6.2 — tests for the Prometheus + Grafana + Loki observability overlay.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-317</td><td><code>test_env_flag_constant</code></td><td>runner._write_optional_overlays reads ENV_FLAG to know what env var to check before invoking the writer. Must match the docs exactly.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-318</td><td><code>test_overlay_filename_constant</code></td><td>runner appends this via `-f &lt;filename&gt;` to the compose argv.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-319</td><td><code>test_services_list_constant</code></td><td>runner appends these to the `docker compose up -d &lt;services&gt;` argv. Order matches the founding architecture doc § 5.6.1.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-320</td><td><code>test_services_are_all_non_empty_strings</code></td><td>Empty / None entries would corrupt the runner&#x27;s compose argv.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-321</td><td><code>test_writer_returns_none_when_flag_unset</code></td><td>Default behavior: no flag → no write → no overlay file appears in install_dir. This is the stable-path guarantee that mirrors the airflow/dagster/superset overlays.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-322</td><td><code>test_writer_returns_none_when_flag_explicitly_false[]</code></td><td>Explicit falsy values still no-op. Mirrors the runner._is_truthy contract — anything other than {1, true, yes, on} stays off.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-323</td><td><code>test_writer_returns_none_when_flag_explicitly_false[false]</code></td><td>Explicit falsy values still no-op. Mirrors the runner._is_truthy contract — anything other than {1, true, yes, on} stays off.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-324</td><td><code>test_writer_returns_none_when_flag_explicitly_false[False]</code></td><td>Explicit falsy values still no-op. Mirrors the runner._is_truthy contract — anything other than {1, true, yes, on} stays off.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-325</td><td><code>test_writer_returns_none_when_flag_explicitly_false[0]</code></td><td>Explicit falsy values still no-op. Mirrors the runner._is_truthy contract — anything other than {1, true, yes, on} stays off.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-326</td><td><code>test_writer_returns_none_when_flag_explicitly_false[no]</code></td><td>Explicit falsy values still no-op. Mirrors the runner._is_truthy contract — anything other than {1, true, yes, on} stays off.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-327</td><td><code>test_writer_returns_none_when_flag_explicitly_false[off]</code></td><td>Explicit falsy values still no-op. Mirrors the runner._is_truthy contract — anything other than {1, true, yes, on} stays off.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-328</td><td><code>test_writer_returns_none_when_flag_explicitly_false[disabled]</code></td><td>Explicit falsy values still no-op. Mirrors the runner._is_truthy contract — anything other than {1, true, yes, on} stays off.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-329</td><td><code>test_writer_returns_path_when_flag_set[1]</code></td><td>Truthy flag → writer returns the overlay Path and the file exists.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-330</td><td><code>test_writer_returns_path_when_flag_set[true]</code></td><td>Truthy flag → writer returns the overlay Path and the file exists.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-331</td><td><code>test_writer_returns_path_when_flag_set[True]</code></td><td>Truthy flag → writer returns the overlay Path and the file exists.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-332</td><td><code>test_writer_returns_path_when_flag_set[TRUE]</code></td><td>Truthy flag → writer returns the overlay Path and the file exists.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-333</td><td><code>test_writer_returns_path_when_flag_set[yes]</code></td><td>Truthy flag → writer returns the overlay Path and the file exists.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-334</td><td><code>test_writer_returns_path_when_flag_set[on]</code></td><td>Truthy flag → writer returns the overlay Path and the file exists.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-335</td><td><code>test_writer_creates_observability_config_directory</code></td><td>All three config files (prometheus.yml, grafana-datasources.yml, loki-config.yaml) must be written to the observability/ subdir so the services have something to mount.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-336</td><td><code>test_writer_is_idempotent</code></td><td>Re-running with the same install_dir overwrites every file. Same contract as the sibling overlays — runner.py calls this on every install, so non-idempotent writes would accumulate cruft.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-337</td><td><code>test_rendered_compose_mentions_every_service</code></td><td>SERVICES is the contract runner.py uses; the rendered compose file MUST define each one or the `compose up -d &lt;svc&gt;` will fail. Regression guard: nobody can rename a service without bumping SERVICES too.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-338</td><td><code>test_rendered_compose_pins_image_tags</code></td><td>No `:latest` — every image must carry an explicit version tag, in line with the certified-stack philosophy that nothing floats.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-339</td><td><code>test_rendered_compose_uses_external_network</code></td><td>The overlay must attach to the base stack&#x27;s existing network so Prometheus can scrape trino/starrocks/minio by service name. Creating a second network would isolate the observability containers.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-340</td><td><code>test_grafana_datasources_point_at_prometheus_and_loki</code></td><td>Grafana is pre-provisioned with both datasources so first-time operators see working data sources on login — the whole point of the &#x27;pre-configure&#x27; acceptance criterion in the task spec.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-341</td><td><code>test_prometheus_scrapes_lakehouse_components</code></td><td>Acceptance criterion from the task spec: pre-configure Prometheus to scrape MinIO, Trino, StarRocks endpoints. Targets that don&#x27;t exist in the cart will show as &#x27;down&#x27; — that&#x27;s expected.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-342</td><td><code>test_validate_overlay_returns_empty_list_when_not_enabled</code></td><td>No overlay file → validation has nothing to check → empty list.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-343</td><td><code>test_validate_overlay_returns_list_shape_when_overlay_missing_config</code></td><td>Overlay file exists but observability/ folder missing → must report problems. Shape contract: list of strings, non-empty.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-344</td><td><code>test_validate_overlay_after_clean_write_returns_empty_list</code></td><td>Round-trip: write the overlay then validate — should be clean.</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.21 tests/test_rbac.py — Tests for the opt-in RBAC layer.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-345</td><td><code>test_rbac_disabled_by_default</code></td><td>Rbac disabled by default</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-346</td><td><code>test_rbac_enabled_when_flag_truthy[1]</code></td><td>Rbac enabled when flag truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-347</td><td><code>test_rbac_enabled_when_flag_truthy[true]</code></td><td>Rbac enabled when flag truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-348</td><td><code>test_rbac_enabled_when_flag_truthy[TRUE]</code></td><td>Rbac enabled when flag truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-349</td><td><code>test_rbac_enabled_when_flag_truthy[yes]</code></td><td>Rbac enabled when flag truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-350</td><td><code>test_rbac_enabled_when_flag_truthy[on]</code></td><td>Rbac enabled when flag truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-351</td><td><code>test_create_user_returns_plaintext_once_and_stores_hash</code></td><td>Create user returns plaintext once and stores hash</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-352</td><td><code>test_create_user_rejects_unknown_role</code></td><td>Create user rejects unknown role</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-353</td><td><code>test_create_user_rejects_invalid_email</code></td><td>Create user rejects invalid email</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-354</td><td><code>test_authenticate_succeeds_with_bearer_header</code></td><td>Authenticate succeeds with bearer header</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-355</td><td><code>test_authenticate_succeeds_with_x_studio_token</code></td><td>Authenticate succeeds with x studio token</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-356</td><td><code>test_authenticate_rejects_unknown_token</code></td><td>Authenticate rejects unknown token</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-357</td><td><code>test_authenticate_rejects_missing_header</code></td><td>Authenticate rejects missing header</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-358</td><td><code>test_require_permission_owner_passes_protected_route</code></td><td>Require permission owner passes protected route</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-359</td><td><code>test_require_permission_viewer_blocked_on_install_create</code></td><td>Require permission viewer blocked on install create</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-360</td><td><code>test_require_permission_unmapped_route_passes</code></td><td>Require permission unmapped route passes</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-361</td><td><code>test_bootstrap_creates_first_user_and_refuses_second</code></td><td>Bootstrap creates first user and refuses second</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-362</td><td><code>test_app_main_imports_rbac_module</code></td><td>Smoke test: backend.main wires backend.rbac_auth and exposes the 4 RBAC routes regardless of whether the flag is on.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-363</td><td><code>test_app_rbac_disabled_me_returns_503</code></td><td>With RBAC off, /api/rbac/me returns 503 (the gate fires before auth).</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-364</td><td><code>test_app_rbac_enabled_me_returns_caller_identity</code></td><td>With RBAC on + a bootstrapped user, /api/rbac/me returns that user.</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.22 tests/test_runner_overlays.py — v0.6.1 — tests for runner.py&#x27;s opt-in compose overlay wiring.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-365</td><td><code>test_is_truthy[true-True]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-366</td><td><code>test_is_truthy[True-True0]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-367</td><td><code>test_is_truthy[TRUE-True]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-368</td><td><code>test_is_truthy[1-True]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-369</td><td><code>test_is_truthy[yes-True]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-370</td><td><code>test_is_truthy[on-True]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-371</td><td><code>test_is_truthy[enabled-True]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-372</td><td><code>test_is_truthy[foo-True]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-373</td><td><code>test_is_truthy[false-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-374</td><td><code>test_is_truthy[False-False0]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-375</td><td><code>test_is_truthy[FALSE-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-376</td><td><code>test_is_truthy[0-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-377</td><td><code>test_is_truthy[no-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-378</td><td><code>test_is_truthy[off-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-379</td><td><code>test_is_truthy[disable-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-380</td><td><code>test_is_truthy[disabled-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-381</td><td><code>test_is_truthy[-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-382</td><td><code>test_is_truthy[   -False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-383</td><td><code>test_is_truthy[None-False]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-384</td><td><code>test_is_truthy[False-False1]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-385</td><td><code>test_is_truthy[True-True1]</code></td><td>Is truthy</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-386</td><td><code>test_overlay_module_exports_runner_contract[backend.airflow_overlay-LHS_AIRFLOW_ENABLED-docker-compose.airflow.yml-4]</code></td><td>Overlay module exports runner contract</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-387</td><td><code>test_overlay_module_exports_runner_contract[backend.dagster_overlay-LHS_DAGSTER_ENABLED-docker-compose.dagster.yml-3]</code></td><td>Overlay module exports runner contract</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-388</td><td><code>test_overlay_module_exports_runner_contract[backend.superset_overlay-LHS_SUPERSET_ENABLED-docker-compose.superset.yml-4]</code></td><td>Overlay module exports runner contract</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-389</td><td><code>test_overlay_module_exports_runner_contract[backend.observability_overlay-LHS_OBSERVABILITY_ENABLED-docker-compose.observability.yml-3]</code></td><td>Overlay module exports runner contract</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-390</td><td><code>test_write_optional_overlays_noop_when_all_flags_unset</code></td><td>Write optional overlays noop when all flags unset</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-391</td><td><code>test_write_optional_overlays_noop_when_flag_explicitly_false</code></td><td>Write optional overlays noop when flag explicitly false</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-392</td><td><code>test_write_optional_overlays_calls_airflow_when_enabled</code></td><td>Write optional overlays calls airflow when enabled</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-393</td><td><code>test_write_optional_overlays_handles_writer_returning_none</code></td><td>Write optional overlays handles writer returning none</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-394</td><td><code>test_write_optional_overlays_swallows_writer_exception</code></td><td>Write optional overlays swallows writer exception</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-395</td><td><code>test_write_optional_overlays_all_three_enabled</code></td><td>Write optional overlays all three enabled</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-396</td><td><code>test_write_optional_overlays_calls_observability_when_enabled</code></td><td>v0.6.2 — observability overlay (Prometheus + Grafana + Loki). Same wiring contract as the airflow/dagster/superset overlays.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-397</td><td><code>test_write_optional_overlays_all_four_enabled</code></td><td>v0.6.2 — all four overlays enabled simultaneously must produce four entries in self._overlays in the documented order.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-398</td><td><code>test_parent_env_enables_overlay_even_when_merged_env_unset</code></td><td>Parent env enables overlay even when merged env unset</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.23 tests/test_service_logs.py — Unit tests for the per-service docker log viewer (backend/service_logs.py).</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-399</td><td><code>test_validate_service_name_accepts_known_names</code></td><td>Validate service name accepts known names</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-400</td><td><code>test_validate_service_name_accepts_alnum_and_dash_underscore</code></td><td>Validate service name accepts alnum and dash underscore</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-401</td><td><code>test_validate_service_name_rejects_unsafe_characters[../etc/passwd]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-402</td><td><code>test_validate_service_name_rejects_unsafe_characters[../../root]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-403</td><td><code>test_validate_service_name_rejects_unsafe_characters[spark;rm -rf /]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-404</td><td><code>test_validate_service_name_rejects_unsafe_characters[spark | cat]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-405</td><td><code>test_validate_service_name_rejects_unsafe_characters[spark`whoami`]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-406</td><td><code>test_validate_service_name_rejects_unsafe_characters[spark$(id)]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-407</td><td><code>test_validate_service_name_rejects_unsafe_characters[spark service]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-408</td><td><code>test_validate_service_name_rejects_unsafe_characters[spark\nminio]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-409</td><td><code>test_validate_service_name_rejects_unsafe_characters[spark&#x27;inj]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-410</td><td><code>test_validate_service_name_rejects_unsafe_characters[spark&quot;inj]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-411</td><td><code>test_validate_service_name_rejects_unsafe_characters[--malicious]</code></td><td>Validate service name rejects unsafe characters</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-412</td><td><code>test_validate_service_name_rejects_name_not_in_manifest</code></td><td>Validate service name rejects name not in manifest</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-413</td><td><code>test_validate_service_name_rejects_empty_string</code></td><td>Validate service name rejects empty string</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-414</td><td><code>test_validate_service_name_rejects_non_string</code></td><td>Validate service name rejects non string</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-415</td><td><code>test_get_service_logs_builds_expected_argv</code></td><td>Mock subprocess and assert the argv we pass to docker compose.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-416</td><td><code>test_get_service_logs_no_since_omits_flag</code></td><td>Get service logs no since omits flag</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-417</td><td><code>test_get_service_logs_tail_capped_at_max</code></td><td>Caller asks for 5000 lines -&gt; we ask docker for MAX_TAIL and flag truncated.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-418</td><td><code>test_get_service_logs_output_capped_at_max</code></td><td>Even if docker returns more than MAX_TAIL lines, we trim and flag.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-419</td><td><code>test_get_service_logs_returns_error_when_docker_missing</code></td><td>Get service logs returns error when docker missing</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-420</td><td><code>test_get_service_logs_rejects_bad_since</code></td><td>Free-form since strings must be rejected before docker is ever spawned.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-421</td><td><code>test_build_logs_argv_stream_includes_follow</code></td><td>Build logs argv stream includes follow</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h3>3.24 tests/test_stack_compose_fragments.py — v0.6.1 — tests for backend/stack_compose_fragments.py.</h3>
+<table><tr><th style='width:7%'>TC#</th><th style='width:33%'>Test Case</th><th>Description / Expected Result</th><th style='width:7%' class='c'>Status</th></tr>
+<tr><td class='c'>TC-422</td><td><code>test_write_fragment_returns_none_for_stable_udp_stack</code></td><td>udp-local-v0.2 is the stable stack — UDP&#x27;s upstream compose ships every service it needs, so no fragment is required. The runner relies on the None return to skip overlay injection for stable installs.</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-423</td><td><code>test_write_fragment_returns_none_for_unknown_stack</code></td><td>Write fragment returns none for unknown stack</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-424</td><td><code>test_write_fragment_writes_file_for_candidate[udp-trino-local-v0.1]</code></td><td>Write fragment writes file for candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-425</td><td><code>test_write_fragment_writes_file_for_candidate[iceberg-nessie-trino-local-v0.1]</code></td><td>Write fragment writes file for candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-426</td><td><code>test_write_fragment_writes_file_for_candidate[hudi-hms-spark-local-v0.1]</code></td><td>Write fragment writes file for candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-427</td><td><code>test_write_fragment_writes_file_for_candidate[delta-hms-spark-trino-local-v0.1]</code></td><td>Write fragment writes file for candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-428</td><td><code>test_write_fragment_writes_file_for_candidate[iceberg-polaris-spark-local-v0.1]</code></td><td>Write fragment writes file for candidate</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-429</td><td><code>test_written_yaml_parses_cleanly[udp-trino-local-v0.1]</code></td><td>Written yaml parses cleanly</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-430</td><td><code>test_written_yaml_parses_cleanly[iceberg-nessie-trino-local-v0.1]</code></td><td>Written yaml parses cleanly</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-431</td><td><code>test_written_yaml_parses_cleanly[hudi-hms-spark-local-v0.1]</code></td><td>Written yaml parses cleanly</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-432</td><td><code>test_written_yaml_parses_cleanly[delta-hms-spark-trino-local-v0.1]</code></td><td>Written yaml parses cleanly</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-433</td><td><code>test_written_yaml_parses_cleanly[iceberg-polaris-spark-local-v0.1]</code></td><td>Written yaml parses cleanly</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-434</td><td><code>test_fragment_services_match_rendered_services[udp-trino-local-v0.1]</code></td><td>The runner extends the `docker compose up -d &lt;services&gt;` argv with FRAGMENT_SERVICES[stack_id]. If those names don&#x27;t actually exist as top-level keys in the rendered YAML, compose will reject the command with `no such se</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-435</td><td><code>test_fragment_services_match_rendered_services[iceberg-nessie-trino-local-v0.1]</code></td><td>The runner extends the `docker compose up -d &lt;services&gt;` argv with FRAGMENT_SERVICES[stack_id]. If those names don&#x27;t actually exist as top-level keys in the rendered YAML, compose will reject the command with `no such se</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-436</td><td><code>test_fragment_services_match_rendered_services[hudi-hms-spark-local-v0.1]</code></td><td>The runner extends the `docker compose up -d &lt;services&gt;` argv with FRAGMENT_SERVICES[stack_id]. If those names don&#x27;t actually exist as top-level keys in the rendered YAML, compose will reject the command with `no such se</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-437</td><td><code>test_fragment_services_match_rendered_services[delta-hms-spark-trino-local-v0.1]</code></td><td>The runner extends the `docker compose up -d &lt;services&gt;` argv with FRAGMENT_SERVICES[stack_id]. If those names don&#x27;t actually exist as top-level keys in the rendered YAML, compose will reject the command with `no such se</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-438</td><td><code>test_fragment_services_match_rendered_services[iceberg-polaris-spark-local-v0.1]</code></td><td>The runner extends the `docker compose up -d &lt;services&gt;` argv with FRAGMENT_SERVICES[stack_id]. If those names don&#x27;t actually exist as top-level keys in the rendered YAML, compose will reject the command with `no such se</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-439</td><td><code>test_each_service_has_required_keys[udp-trino-local-v0.1]</code></td><td>Every fragment service MUST declare: - image: (otherwise compose can&#x27;t pull it) - container_name: (so the runner&#x27;s logs and `docker exec` work) - healthcheck: (so downstream services can `depends_on: condition: service_h</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-440</td><td><code>test_each_service_has_required_keys[iceberg-nessie-trino-local-v0.1]</code></td><td>Every fragment service MUST declare: - image: (otherwise compose can&#x27;t pull it) - container_name: (so the runner&#x27;s logs and `docker exec` work) - healthcheck: (so downstream services can `depends_on: condition: service_h</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-441</td><td><code>test_each_service_has_required_keys[hudi-hms-spark-local-v0.1]</code></td><td>Every fragment service MUST declare: - image: (otherwise compose can&#x27;t pull it) - container_name: (so the runner&#x27;s logs and `docker exec` work) - healthcheck: (so downstream services can `depends_on: condition: service_h</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-442</td><td><code>test_each_service_has_required_keys[delta-hms-spark-trino-local-v0.1]</code></td><td>Every fragment service MUST declare: - image: (otherwise compose can&#x27;t pull it) - container_name: (so the runner&#x27;s logs and `docker exec` work) - healthcheck: (so downstream services can `depends_on: condition: service_h</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-443</td><td><code>test_each_service_has_required_keys[iceberg-polaris-spark-local-v0.1]</code></td><td>Every fragment service MUST declare: - image: (otherwise compose can&#x27;t pull it) - container_name: (so the runner&#x27;s logs and `docker exec` work) - healthcheck: (so downstream services can `depends_on: condition: service_h</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-444</td><td><code>test_specific_services_present_per_stack[udp-trino-local-v0.1-expected0]</code></td><td>Pin the exact service names the spec called for so a future rename of an internal helper can&#x27;t silently change the contract.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-445</td><td><code>test_specific_services_present_per_stack[iceberg-nessie-trino-local-v0.1-expected1]</code></td><td>Pin the exact service names the spec called for so a future rename of an internal helper can&#x27;t silently change the contract.</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-446</td><td><code>test_specific_services_present_per_stack[hudi-hms-spark-local-v0.1-expected2]</code></td><td>Pin the exact service names the spec called for so a future rename of an internal helper can&#x27;t silently change the contract.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-447</td><td><code>test_specific_services_present_per_stack[delta-hms-spark-trino-local-v0.1-expected3]</code></td><td>Pin the exact service names the spec called for so a future rename of an internal helper can&#x27;t silently change the contract.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-448</td><td><code>test_specific_services_present_per_stack[iceberg-polaris-spark-local-v0.1-expected4]</code></td><td>Pin the exact service names the spec called for so a future rename of an internal helper can&#x27;t silently change the contract.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-449</td><td><code>test_write_fragment_is_idempotent</code></td><td>Re-running with the same install_dir overwrites the fragment atomically without leaving .tmp files behind.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-450</td><td><code>test_fragment_attaches_to_default_network[udp-trino-local-v0.1]</code></td><td>Every fragment service joins `default`. Per Codex P0 review (2026-05-17) the network is NO LONGER declared `external: true` — that required a pre-created network and broke first-time installs. The new contract: fragment </td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-451</td><td><code>test_fragment_attaches_to_default_network[iceberg-nessie-trino-local-v0.1]</code></td><td>Every fragment service joins `default`. Per Codex P0 review (2026-05-17) the network is NO LONGER declared `external: true` — that required a pre-created network and broke first-time installs. The new contract: fragment </td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-452</td><td><code>test_fragment_attaches_to_default_network[hudi-hms-spark-local-v0.1]</code></td><td>Every fragment service joins `default`. Per Codex P0 review (2026-05-17) the network is NO LONGER declared `external: true` — that required a pre-created network and broke first-time installs. The new contract: fragment </td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-453</td><td><code>test_fragment_attaches_to_default_network[delta-hms-spark-trino-local-v0.1]</code></td><td>Every fragment service joins `default`. Per Codex P0 review (2026-05-17) the network is NO LONGER declared `external: true` — that required a pre-created network and broke first-time installs. The new contract: fragment </td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-454</td><td><code>test_fragment_attaches_to_default_network[iceberg-polaris-spark-local-v0.1]</code></td><td>Every fragment service joins `default`. Per Codex P0 review (2026-05-17) the network is NO LONGER declared `external: true` — that required a pre-created network and broke first-time installs. The new contract: fragment </td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-455</td><td><code>test_postgres_services_use_named_volumes[hudi-hms-spark-local-v0.1]</code></td><td>DB backing services (postgres-* OR mysql-*) must use named volumes — bind mounts to install_dir/data/ would leak across re-installs and cause permission grief on Windows + macOS. Refactored 2026-05-17: HMS stacks now use</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-456</td><td><code>test_postgres_services_use_named_volumes[delta-hms-spark-trino-local-v0.1]</code></td><td>DB backing services (postgres-* OR mysql-*) must use named volumes — bind mounts to install_dir/data/ would leak across re-installs and cause permission grief on Windows + macOS. Refactored 2026-05-17: HMS stacks now use</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-457</td><td><code>test_postgres_services_use_named_volumes[iceberg-polaris-spark-local-v0.1]</code></td><td>DB backing services (postgres-* OR mysql-*) must use named volumes — bind mounts to install_dir/data/ would leak across re-installs and cause permission grief on Windows + macOS. Refactored 2026-05-17: HMS stacks now use</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-458</td><td><code>test_fragment_filename_constant</code></td><td>Fragment filename constant</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-459</td><td><code>test_fragment_services_covers_all_renderers</code></td><td>Every stack_id with a renderer MUST have a FRAGMENT_SERVICES entry so the runner knows which services to include in `up -d`.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-460</td><td><code>test_hms_fragment_uses_compose_interpolation_for_password</code></td><td>The HMS_DB_PASSWORD should be wired via compose&#x27;s `${VAR:-default}` syntax so the operator can override it via the install&#x27;s .env without re-rendering the fragment.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-461</td><td><code>test_polaris_fragment_uses_compose_interpolation_for_password</code></td><td>Polaris fragment uses compose interpolation for password</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-462</td><td><code>test_default_network_has_no_external_or_name_override</code></td><td>Per Codex P0 fix (2026-05-17): the fragment defines `default: {}` (empty mapping) and lets `docker compose -f base -f fragment` merge the networks naturally. Explicit `name:` or `external: true` here would either (a) col</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-463</td><td><code>test_trino_service_present_in_trino_stacks[udp-trino-local-v0.1]</code></td><td>Bug fix 2026-05-17: UDP&#x27;s upstream docker-compose.yml does NOT ship a `trino` service definition. Every stack whose `start` step references trino must get a Trino service via the fragment.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-464</td><td><code>test_trino_service_present_in_trino_stacks[iceberg-nessie-trino-local-v0.1]</code></td><td>Bug fix 2026-05-17: UDP&#x27;s upstream docker-compose.yml does NOT ship a `trino` service definition. Every stack whose `start` step references trino must get a Trino service via the fragment.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-465</td><td><code>test_trino_service_present_in_trino_stacks[delta-hms-spark-trino-local-v0.1]</code></td><td>Bug fix 2026-05-17: UDP&#x27;s upstream docker-compose.yml does NOT ship a `trino` service definition. Every stack whose `start` step references trino must get a Trino service via the fragment.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-466</td><td><code>test_trino_service_absent_from_non_trino_stacks[hudi-hms-spark-local-v0.1]</code></td><td>Hudi (Spark-only) and Polaris (Spark-only) stacks must NOT get a Trino service — that would burn ~3 GB of RAM for no reason and publish port 8080 they don&#x27;t use.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-467</td><td><code>test_trino_service_absent_from_non_trino_stacks[iceberg-polaris-spark-local-v0.1]</code></td><td>Hudi (Spark-only) and Polaris (Spark-only) stacks must NOT get a Trino service — that would burn ~3 GB of RAM for no reason and publish port 8080 they don&#x27;t use.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-468</td><td><code>test_udp_trino_fragment_is_trino_only</code></td><td>udp-trino-local-v0.1 uses the upstream iceberg-rest catalog — its fragment supplies ONLY the missing Trino service (no Nessie, no HMS).</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-469</td><td><code>test_nessie_fragment_includes_nessie_and_trino</code></td><td>iceberg-nessie-trino-local-v0.1 needs BOTH services from its fragment because UDP ships neither.</td><td class="c st-fail">FAIL</td></tr>
+<tr><td class='c'>TC-470</td><td><code>test_delta_fragment_includes_hms_pair_and_trino</code></td><td>delta-hms-spark-trino-local-v0.1 needs HMS + MySQL backing + Trino — three services, all missing from UDP&#x27;s upstream compose.</td><td class="c st-pass">PASS</td></tr>
+<tr><td class='c'>TC-471</td><td><code>test_trino_service_env_uses_compose_interpolation</code></td><td>JVM/memory caps must be wired via `${VAR:-default}` so the operator can tune via the install&#x27;s .env without re-rendering the fragment.</td><td class="c st-pass">PASS</td></tr>
+</table>
+<h2>4. Failure Analysis (22 failed tests)</h2>
+<table><tr><th style='width:22%'>Category</th><th>Analysis</th><th style='width:20%'>Remediation</th><th style='width:8%' class='c'>Risk</th></tr>
+<tr><td><b>Stale expectations — stack promotions</b></td><td>8 tests in test_expanded_catalog.py / test_compat_explainer.py assert hudi-hms-spark-local-v0.1 is still &#x27;candidate&#x27; with empty evidence. The stack was promoted to pilot-stable on 2026-05-17 with a verified Linux install; the tests were never updated.</td><td>Update test expectations</td><td class='c'><span class='sev-Low'>Low</span></td></tr>
+<tr><td><b>Stale expectations — catalog growth</b></td><td>test_total_stack_count_matches_expectation expects 6 stacks; the catalog now ships 10 (streaming, enterprise-hadoop, fintech-compliance, techsophy-sdp added). Related recommended-set coverage assertions fail for the same reason.</td><td>Bump EXPECTED_TOTAL_STACKS and extend coverage lists</td><td class='c'><span class='sev-Low'>Low</span></td></tr>
+<tr><td><b>Missing lock files — certification gap</b></td><td>test_every_stack_has_a_lock_file correctly flags that enterprise-hadoop-v1.0 and fintech-compliance-local-v0.1 ship WITHOUT compatibility locks. This is a genuine product invariant violation (&#x27;the matrix is the moat&#x27;), not a stale test.</td><td>Author lock files or mark the stacks explicitly uncertified</td><td class='c'><span class='sev-Medium'>Medium</span></td></tr>
+<tr><td><b>Nessie cart matching regression</b></td><td>test_compat_check + test_stack_compose_fragments (7 tests): after Airflow was added to the &#x27;production-lakehouse&#x27; recommended_set and the Nessie fragment, compat_check.check_cart() no longer matches the Nessie cart to iceberg-nessie-trino-local-v0.1 (matched_stack=None). The UI compatibility pill for the Production Lakehouse template shows &#x27;untested&#x27; instead of matching the certified stack. USER-FACING regression.</td><td>Add airflow to the stack&#x27;s lock vocabulary or relax the marriage-fraction threshold</td><td class='c'><span class='sev-High'>High</span></td></tr>
+</table>
+<h2>5. Known Defects (open)</h2>
+<table><tr><th style='width:7%'>ID</th><th style='width:24%'>Location</th><th>Description</th><th style='width:9%' class='c'>Severity</th></tr>
+<tr><td class='c'><b>DEF-1</b></td><td><code>backend/runner.py</code></td><td>RemoteClusterRunner calls bus.emit / store.step_start / store.step_end / store.append_log — none of these methods exist. Any mode:remote-cluster install (techsophy-sdp-hadoop-v1.0) crashes at the first step.</td><td class='c'><span class='sev-High'>High</span></td></tr>
+<tr><td class='c'><b>DEF-2</b></td><td><code>backend/ai_provisioner.py</code></td><td>_phase_install calls store.get_state() (method does not exist); the exception is swallowed and success is assumed. Provisioner installs also never call store.create(), so they are invisible to the installs list and all day-2 ops.</td><td class='c'><span class='sev-High'>High</span></td></tr>
+<tr><td class='c'><b>DEF-3</b></td><td><code>backend/custom_stack_runner.py</code></td><td>Stack Builder jobs are in-memory only (_CUSTOM_JOBS): lost on restart, never create an InstallRecord — so backups/health/ingest/success-screen do not apply to the path Quick-Install templates use.</td><td class='c'><span class='sev-High'>High</span></td></tr>
+<tr><td class='c'><b>DEF-4</b></td><td><code>backend/compat_check.py</code></td><td>Nessie cart no longer matches its certified stack after airflow joined the recommended_set (see failure analysis). Compatibility pill regression.</td><td class='c'><span class='sev-Medium'>Medium</span></td></tr>
+<tr><td class='c'><b>DEF-5</b></td><td><code>stacks/</code></td><td>enterprise-hadoop-v1.0 and fintech-compliance-local-v0.1 are installable but have no compatibility lock files (uncertified stacks presented alongside certified ones).</td><td class='c'><span class='sev-Medium'>Medium</span></td></tr>
+<tr><td class='c'><b>DEF-6</b></td><td><code>backend/catalog.py / component_registry.py / version_fetcher.py</code></td><td>Minor hygiene: categories() defined twice; kafka entry has a duplicate depends_on key; polaris version source registered twice.</td><td class='c'><span class='sev-Low'>Low</span></td></tr>
+</table>
+<h2>6. Security Findings</h2>
+<table><tr><th style='width:7%'>ID</th><th>Finding</th><th style='width:9%' class='c'>Severity</th></tr>
+<tr><td class='c'><b>SEC-1</b></td><td>A live LITELLM_API_KEY is committed in plaintext in the project root .env. Rotate the key and exclude .env from any distribution.</td><td class='c'><span class='sev-Critical'>Critical</span></td></tr>
+<tr><td class='c'><b>SEC-2</b></td><td>Default credentials (admin / udp_admin_12345, streaming123, hive_password_pilot…) are hardcoded across bootstrap scripts, the component registry, compose fragments and LLM prompts. Acceptable for local pilots; must be generated per-install before sale.</td><td class='c'><span class='sev-High'>High</span></td></tr>
+<tr><td class='c'><b>SEC-3</b></td><td>The project directory is not a git repository — no version control, no change audit trail, no rollback for source fixes.</td><td class='c'><span class='sev-High'>High</span></td></tr>
+<tr><td class='c'><b>SEC-4</b></td><td>Auth is off by default (LHS_AUTH_TOKEN unset). run.ps1/run.sh warn on non-loopback binds, which mitigates; RBAC exists but is opt-in.</td><td class='c'><span class='sev-Medium'>Medium</span></td></tr>
+<tr><td class='c'><b>SEC-5</b></td><td>Remote SSH installs pass the password via sshpass -p on the command line (visible in process lists on the Studio host).</td><td class='c'><span class='sev-Medium'>Medium</span></td></tr>
+<tr><td class='c'><b>SEC-6</b></td><td>Stack credentials are embedded in prompts sent to the external LiteLLM endpoint during AI config generation.</td><td class='c'><span class='sev-Medium'>Medium</span></td></tr>
+</table>
+<h2>7. Defects Fixed During This Validation Cycle</h2>
+<table><tr><th style='width:34%'>Location</th><th>Fix (verified live)</th></tr>
+<tr><td><code>stacks/streaming/scripts/lhs-doctor.sh</code></td><td>Doctor failed re-installs because ports held by the stack&#x27;s OWN containers were treated as conflicts. Now recognises own sl-* containers as reusable.</td></tr>
+<tr><td><code>stacks/streaming/docker/flink/Dockerfile</code></td><td>Invalid multi-line RUN (bare python heredoc) broke the sl-flink image build; converted to BuildKit heredoc and added the missing python3 layer.</td></tr>
+<tr><td><code>stacks/streaming/docker/flink/Dockerfile + lhs-bootstrap.sh</code></td><td>Flink→Iceberg sink crashed with &#x27;No FileSystem for scheme s3&#x27; (HadoopFileIO). Switched to native S3FileIO via iceberg-aws-bundle — same FileIO Spark uses.</td></tr>
+<tr><td><code>stacks/streaming/scripts/lhs-bootstrap.sh</code></td><td>Flink checkpointing was disabled so the Iceberg sink never committed rows. Added execution.checkpointing.interval=10s; verified 60 rows committed and readable from StarRocks.</td></tr>
+<tr><td><code>backend/runner.py (udp-local-v0.2 scripts)</code></td><td>Bootstrap/smoke hard-required Superset, which the current UDP compose no longer ships. Superset init/check is now conditional on the container existing.</td></tr>
+<tr><td><code>backend/stack_compose_fragments.py</code></td><td>Airflow webserver died on cold start (gunicorn 4 sync workers, 120s master timeout). Fragments now render WORKERS=2 with 300s timeouts; verified healthy on a loaded host.</td></tr>
+</table>
+<h2>8. Recommendations</h2><table><tr><th style='width:6%'>#</th><th>Recommendation</th></tr>
+<tr><td class='c'>1</td><td>Initialise git with a .gitignore covering .env, work/, .venv/, server logs; rotate the leaked LiteLLM key (SEC-1/SEC-3).</td></tr>
+<tr><td class='c'>2</td><td>Fix the four High defects: RemoteClusterRunner event/store API (DEF-1), ai_provisioner state tracking (DEF-2), Stack Builder install persistence + InstallRecord integration (DEF-3), Nessie cart matching (DEF-4).</td></tr>
+<tr><td class='c'>3</td><td>Repair the 15 stale tests (promotions + stack count) so the suite is green and future regressions are visible.</td></tr>
+<tr><td class='c'>4</td><td>Author compatibility locks for enterprise-hadoop-v1.0 and fintech-compliance-local-v0.1, or gate them behind an &#x27;uncertified&#x27; badge in the picker.</td></tr>
+<tr><td class='c'>5</td><td>Generate per-install secrets instead of shipping shared defaults; keep the redaction layer as-is (it is solid).</td></tr>
+<tr><td class='c'>6</td><td>Add test coverage for the currently untested high-risk modules: runner.py pipeline branches, custom_stack_runner, ai_configurator/ai_provisioner parsing, ingest.py.</td></tr>
+<tr><td class='c'>7</td><td>Split frontend/index.html into modules (or adopt a build step) — 6,200 lines in one file blocks review and testing.</td></tr>
+</table>
+<h2>9. Test Environment &amp; Sign-off</h2>
+<table>
+<tr><th style='width:26%'>Item</th><th>Value</th></tr>
+<tr><td>Host OS</td><td>Windows 11 Home 10.0.26200 (Docker Desktop, WSL2 backend)</td></tr>
+<tr><td>Runtime</td><td>Python 3.13 (.venv), FastAPI + uvicorn on 127.0.0.1:7878</td></tr>
+<tr><td>Test runner</td><td>pytest 9.x, 471 tests, 47.0s wall clock</td></tr>
+<tr><td>Live-install verification</td><td>udp-local-v0.2 (READY), streaming-local-v1.0 (READY — Kafka→Flink→Iceberg→StarRocks pipeline verified with 60 committed rows), iceberg-nessie-trino-local-v0.1 (READY — Nessie + Trino + StarRocks + Airflow healthy)</td></tr>
+<tr><td>Result</td><td><b>447/471 automated tests passed.</b> 3 certified stacks verified end-to-end on live Docker. 6 defects and 6 security findings open — see sections 5–6. Recommended gate before external release: resolve DEF-1..DEF-4 and SEC-1..SEC-3.</td></tr>
+</table>
+<p class="note">Generated by static review of all source modules + executed pytest suite. Statuses in section 3 are actual run results, not projections.</p>
+</div></body></html>

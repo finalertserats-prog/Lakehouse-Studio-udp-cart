@@ -146,7 +146,7 @@ components:
     upstream_url: https://github.com/minio/mc
     notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
 
-  - id: postgres
+  - id: postgres-polaris
     name: PostgreSQL (Polaris backing DB)
     role: db_backing
     image: postgres
@@ -176,7 +176,7 @@ components:
       Iceberg-REST call will succeed. DO NOT use `apache/polaris:latest`
       — the lock-file contract requires a stable numeric tag.
 
-  - id: spark-iceberg
+  - id: spark
     name: Apache Spark + Iceberg
     role: processing
     image: tabulario/spark-iceberg

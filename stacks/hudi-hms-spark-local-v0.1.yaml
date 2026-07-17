@@ -34,7 +34,7 @@ version: "0.1"
 mode: docker-compose
 maturity: pilot-stable
 description: >
-  CANDIDATE stack — Apache Hudi tables registered in a Postgres-backed
+  CANDIDATE stack — Apache Hudi tables registered in a MySQL-backed
   Hive Metastore, written and read via Spark. Tuned for write-heavy
   / streaming-ingest workloads where Hudi's upsert + incremental
   pull model is the differentiator. Intentionally ships WITHOUT a
@@ -74,10 +74,10 @@ components:
   - id: mysql-hms
     name: MySQL 8 (Hive Metastore backing DB)
     category: metastore_db
-    # mysql:8.0 — smallest stable Postgres 15 image, ample
-    # for the metastore's tiny schema. Bumping to 16 would require
-    # re-validating bitsondatadev/hive-metastore JDBC driver compat.
-    version: "15-alpine"
+    # mysql:8.0 — stable LTS MySQL release; ample for the metastore's
+    # tiny schema. bitsondatadev/hive-metastore bundles the MySQL JDBC
+    # driver specifically; do not swap for Postgres without revalidating.
+    version: "8.0"
     image: mysql:8.0
     service_name: mysql-hms
     ports: [3306]
@@ -108,8 +108,8 @@ components:
     # validated against Spark 3.5.x line. lakehousestudio/spark-hudi
     # is Studio's own image (vs tabulario/spark-iceberg) because no
     # community image bundles Hudi 0.15.0 against Spark 3.5.0.
-    version: 3.5.0_0.15.0
-    image: lakehousestudio/spark-hudi:3.5.0_0.15.0
+    version: 3.5.5_1.2.0
+    image: lakehousestudio/spark-hudi:3.5.5_1.2.0
     service_name: spark
     ports: [8888, 4040]
     resource_profiles:
@@ -126,7 +126,7 @@ requirements:
   docker_compose: required
   bash: required
   # No Trino/StarRocks here, so the floor is Spark 4 GB + HMS 1 GB +
-  # Postgres 1 GB + MinIO + OS headroom. 10 GB gives a comfortable
+  # MySQL 1 GB + MinIO + OS headroom. 10 GB gives a comfortable
   # buffer for the JVM-on-Docker steady state.
   minimum_ram_gb: 10
   recommended_ram_gb: 16
@@ -175,7 +175,9 @@ commands:
   start:
     type: docker_compose_up
     extra_services: [create-bucket]
-    timeout: 600
+    # 1800s, not 600s — cold image pulls (Spark+Hudi + Hive Metastore + MySQL)
+    # routinely exceed 10 minutes on a non-trivial connection.
+    timeout: 1800
   bootstrap: { argv: ["bash", "scripts/lhs-hudi-bootstrap.sh"], timeout: 900 }
   smoke:     { argv: ["bash", "scripts/lhs-hudi-smoke.sh"],     timeout: 600 }
   status:    { argv: ["./udp", "status"],     timeout: 30 }
@@ -189,7 +191,7 @@ outputs:
     spark_ui:       { url: "http://{host}:4040", label: "Spark UI" }
   connections:
     hms_thrift:      "thrift://{host}:9083"
-    postgres_hms:    "psql -h {host} -p 5432 -U hive -d metastore"
+    mysql_hms:       "mysql -h {host} -P 3306 -u hive -p metastore"
 
 certification:
   # Both flags true — promotion REQUIRES a passing smoke + a real

@@ -230,7 +230,9 @@ def test_lock_components_avoid_floating_tags(stack_id):
 # during refactors. Bump this constant when adding a new stack.
 # ---------------------------------------------------------------------------
 
-EXPECTED_TOTAL_STACKS = 6  # 2 existing (udp-local-v0.2, udp-trino) + 4 new
+EXPECTED_TOTAL_STACKS = 12  # udp-local-v0.2, udp-trino, 4 candidate stacks,
+# streaming-local-v1.0, enterprise-hadoop-v1.0, fintech-compliance-local-v0.1,
+# techsophy-sdp-hadoop-v1.0, startup-analytics-local-v0.1, ai-ml-research-local-v0.1
 
 
 def test_total_stack_count_matches_expectation():

@@ -1,0 +1,87 @@
+schema_version: "1.0"
+stack_id: streaming-local-v1.0
+version_id: "1.0.0"
+certified_at: "2026-07-01T00:00:00+05:30"
+certified_by: gundimedamanaskiran@gmail.com
+certified_on:
+  os: "Windows 11 + Docker Desktop"
+  docker: "28.x"
+  docker_compose: "v2.x"
+status: "pilot"
+
+components:
+  - id: minio
+    name: MinIO
+    role: object_storage
+    image: minio/minio
+    tag: "RELEASE.2025-04-22T22-12-26Z"
+
+  - id: minio-client
+    name: MinIO Client (init)
+    role: object_storage_bootstrap
+    image: minio/mc
+    tag: "RELEASE.2025-04-16T18-13-26Z"
+
+  - id: iceberg-rest
+    name: Iceberg REST Catalog
+    role: catalog
+    image: tabulario/iceberg-rest
+    tag: "1.6.0"
+
+  - id: kafka
+    name: Apache Kafka (KRaft)
+    role: streaming
+    image: apache/kafka
+    tag: "3.8.0"
+    notes: KRaft mode — no Zookeeper. Official Apache image; bitnami/kafka:3.8.1 tag does not exist on Docker Hub.
+
+  - id: flink
+    name: Apache Flink + Iceberg + Kafka connectors
+    role: streaming_compute
+    image: sl-flink
+    tag: "1.20-iceberg"
+    notes: |
+      Custom image built from flink:1.20.1-scala_2.12-java11.
+      JARs added: iceberg-flink-runtime-1.20-1.8.1.jar (Iceberg 1.6.x
+      did not ship a Flink 1.20 runtime; 1.7+ required),
+      flink-connector-kafka-3.3.0-1.20.jar,
+      flink-s3-fs-presto-1.20.1.jar (plugin).
+
+  - id: spark
+    name: Apache Spark + Iceberg
+    role: processing
+    image: tabulario/spark-iceberg
+    tag: "3.5.5_1.8.1"
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    image: starrocks/fe-ubuntu
+    tag: "3.3.12"
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    image: starrocks/be-ubuntu
+    tag: "3.3.12"
+
+constraints:
+  - between: [flink, iceberg-rest]
+    rule: "Flink 1.20 requires Iceberg 1.7+ runtime; iceberg-rest:1.6.0 is the catalog server (REST protocol is version-independent)"
+    verified: "iceberg-flink-runtime-1.20-1.8.1.jar + iceberg-rest:1.6.0 — runtime and catalog versions are independent"
+
+  - between: [flink, kafka]
+    rule: "flink-connector-kafka 3.3.0-1.20 targets Kafka 3.x with Flink 1.20 API"
+    verified: "flink-connector-kafka:3.3.0-1.20 + bitnami/kafka:3.8.1"
+
+  - between: [starrocks-fe, iceberg-rest]
+    rule: "CREATE EXTERNAL CATALOG must set both aws.s3.* and unprefixed s3.* properties"
+    verified: "Bootstrap sets all required_keys per udp-local-v0.2 constraint pattern"
+
+host_requirements:
+  ram_min_gb: 8
+  ram_recommended_gb: 16
+  disk_min_gb: 30
+  ports_required: [9010, 9011, 8282, 9092, 8083, 8890, 8034, 9034]
+
+evidence: []

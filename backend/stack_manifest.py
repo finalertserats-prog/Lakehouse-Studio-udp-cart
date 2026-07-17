@@ -36,6 +36,14 @@ class StackManifest:
         return {k: str(v) for k, v in self.data.get("env_defaults", {}).items()}
 
     @property
+    def mode(self) -> str:
+        return self.data.get("mode", "docker-compose")
+
+    @property
+    def is_remote_cluster(self) -> bool:
+        return self.mode == "remote-cluster"
+
+    @property
     def components(self) -> list[dict[str, Any]]:
         return list(self.data.get("components", []))
 

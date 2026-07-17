@@ -131,7 +131,7 @@ components:
     name: Trino
     role: processing
     image: trinodb/trino
-    tag: "475"
+    tag: "481"
     registry_url: https://hub.docker.com/r/trinodb/trino/tags
     upstream_url: https://trino.io/docs/current/connector/iceberg.html
     notes: |

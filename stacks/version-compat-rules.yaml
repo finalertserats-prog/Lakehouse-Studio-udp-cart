@@ -1,0 +1,167 @@
+# Version Compatibility Rules
+#
+# These rules drive the cascade picker in the UI:
+# when the user selects a version for an "anchor" component,
+# dependent components filter to only compatible versions.
+#
+# anchor_pattern uses fnmatch-style wildcards:
+#   3.4.*  matches 3.4.0, 3.4.1, 3.4.2, …
+#   46*    matches 460, 461, 462, …
+#   *      matches anything
+#
+# For compound version strings (e.g. spark-iceberg "3.5.5_1.8.1"),
+# only the BASE version (before the first _ or +) is matched against patterns.
+#
+# compat values are lists of patterns applied to the target component's
+# base version. ALL listed patterns are OR-ed together.
+
+rules:
+
+  # ── HDFS / Hadoop anchor ──────────────────────────────────────────────────
+  # Hadoop version drives: Hive, Spark, Tez, Hudi, Trino
+
+  - anchor: hdfs
+    anchor_pattern: "3.5.*"
+    label: "HDFS 3.5.x series"
+    compat:
+      hive-metastore:         ["4.*"]
+      hive-metastore-hadoop:  ["4.*"]
+      spark-iceberg:          ["3.5.*", "4.*"]
+      spark-hudi:             ["3.5.*"]
+      spark-delta:            ["3.5.*"]
+      spark-hadoop:           ["3.5.*", "3.4.*"]
+      tez:                    ["0.10.*"]
+      hudi:                   ["1.*"]
+      hudi-v1:                ["1.*"]
+      trino:                  ["48*", "49*", "50*", "51*"]
+      trino-enterprise:       ["48*", "49*", "50*", "51*"]
+
+  - anchor: hdfs
+    anchor_pattern: "3.4.*"
+    label: "HDFS 3.4.x series"
+    compat:
+      hive-metastore:         ["4.*", "3.1.*", "3.0.*"]
+      hive-metastore-hadoop:  ["4.*"]
+      spark-iceberg:          ["3.4.*", "3.5.*"]
+      spark-hudi:             ["3.4.*", "3.5.*"]
+      spark-delta:            ["3.4.*", "3.5.*"]
+      spark-hadoop:           ["3.4.*"]
+      tez:                    ["0.10.*"]
+      hudi:                   ["0.15.*", "1.*"]
+      hudi-v1:                ["1.*"]
+      trino:                  ["46*", "47*", "48*"]
+      trino-enterprise:       ["46*", "47*", "48*"]
+
+  - anchor: hdfs
+    anchor_pattern: "3.3.*"
+    label: "HDFS 3.3.x series"
+    compat:
+      hive-metastore:         ["3.1.*", "3.0.*", "4.*"]
+      hive-metastore-hadoop:  ["3.1.*", "4.*"]
+      spark-iceberg:          ["3.3.*", "3.4.*", "3.5.*"]
+      spark-hudi:             ["3.3.*", "3.4.*", "3.5.*"]
+      spark-delta:            ["3.3.*", "3.4.*", "3.5.*"]
+      spark-hadoop:           ["3.3.*", "3.4.*"]
+      tez:                    ["0.10.*"]
+      hudi:                   ["0.14.*", "0.15.*", "1.*"]
+      trino:                  ["43*", "44*", "45*", "46*", "47*"]
+      trino-enterprise:       ["43*", "44*", "45*", "46*"]
+
+  # ── Apache Spark anchor (drives Iceberg / Hudi / Delta version choice) ─────
+  # spark-iceberg versions are compound: "3.5.5_1.8.1" → base "3.5.5"
+
+  - anchor: spark-iceberg
+    anchor_pattern: "4.*"
+    label: "Spark 4.x"
+    compat:
+      iceberg:   ["1.8.*", "1.9.*", "2.*"]
+      delta:     ["4.*", "3.*"]
+      hudi:      ["1.*"]
+
+  - anchor: spark-iceberg
+    anchor_pattern: "3.5.*"
+    label: "Spark 3.5.x"
+    compat:
+      iceberg:   ["1.5.*", "1.6.*", "1.7.*", "1.8.*", "1.9.*"]
+      hudi:      ["0.15.*", "1.*"]
+      delta:     ["3.*"]
+
+  - anchor: spark-iceberg
+    anchor_pattern: "3.4.*"
+    label: "Spark 3.4.x"
+    compat:
+      iceberg:   ["1.4.*", "1.5.*", "1.6.*"]
+      hudi:      ["1.*"]
+      delta:     ["2.*", "3.*"]
+
+  - anchor: spark-iceberg
+    anchor_pattern: "3.3.*"
+    label: "Spark 3.3.x"
+    compat:
+      iceberg:   ["1.1.*", "1.2.*", "1.3.*", "1.4.*"]
+      hudi:      ["0.13.*", "0.14.*", "0.15.*"]
+      delta:     ["2.*"]
+
+  # ── Trino anchor (drives Iceberg + Hudi connector compat) ─────────────────
+
+  - anchor: trino
+    anchor_pattern: "4[89]*"
+    label: "Trino 480-499"
+    compat:
+      iceberg:   ["1.5.*", "1.6.*", "1.7.*", "1.8.*", "1.9.*"]
+      hudi:      ["0.15.*", "1.*"]
+      delta:     ["3.*"]
+
+  - anchor: trino
+    anchor_pattern: "4[5-7]*"
+    label: "Trino 450-479"
+    compat:
+      iceberg:   ["1.3.*", "1.4.*", "1.5.*", "1.6.*"]
+      hudi:      ["0.14.*", "0.15.*"]
+      delta:     ["2.*", "3.*"]
+
+  - anchor: trino-enterprise
+    anchor_pattern: "4[89]*"
+    label: "Trino Enterprise 480+"
+    compat:
+      iceberg:   ["1.5.*", "1.6.*", "1.7.*", "1.8.*"]
+      hudi:      ["0.15.*", "1.*"]
+      hdfs:      ["3.3.*", "3.4.*", "3.5.*"]
+
+  - anchor: trino-enterprise
+    anchor_pattern: "4[5-7]*"
+    label: "Trino Enterprise 450-479"
+    compat:
+      iceberg:   ["1.3.*", "1.4.*", "1.5.*"]
+      hudi:      ["0.14.*", "0.15.*"]
+      hdfs:      ["3.3.*", "3.4.*"]
+
+  # ── Hive Metastore anchor ─────────────────────────────────────────────────
+
+  - anchor: hive-metastore
+    anchor_pattern: "4.*"
+    label: "Hive 4.x"
+    compat:
+      hdfs:          ["3.3.*", "3.4.*", "3.5.*"]
+      spark-iceberg: ["3.4.*", "3.5.*", "4.*"]
+      spark-hadoop:  ["3.4.*", "3.5.*"]
+      tez:           ["0.10.*"]
+
+  - anchor: hive-metastore
+    anchor_pattern: "3.1.*"
+    label: "Hive 3.1.x"
+    compat:
+      hdfs:          ["3.1.*", "3.2.*", "3.3.*", "3.4.*"]
+      spark-iceberg: ["3.1.*", "3.2.*", "3.3.*", "3.4.*", "3.5.*"]
+      spark-hadoop:  ["3.3.*", "3.4.*"]
+      hudi:          ["0.12.*", "0.13.*", "0.14.*", "0.15.*"]
+      tez:           ["0.9.*", "0.10.*"]
+
+  - anchor: hive-metastore-hadoop
+    anchor_pattern: "4.*"
+    label: "Hive Metastore (Hadoop) 4.x"
+    compat:
+      hdfs:         ["3.3.*", "3.4.*", "3.5.*"]
+      spark-hadoop: ["3.4.*", "3.5.*"]
+      tez:          ["0.10.*"]
+      hudi-v1:      ["1.*"]

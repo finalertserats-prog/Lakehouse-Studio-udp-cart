@@ -1,0 +1,312 @@
+# Streaming Lakehouse — streaming-local-v1.0
+# Kafka → Flink → Iceberg pipeline with MinIO + Spark + StarRocks
+# Container prefix: sl-   Ports shifted to avoid conflicts with enterprise-hadoop / udp stacks
+#
+# Port map (host → container):
+#   MinIO API:        9010 → 9000   MinIO Console: 9011 → 9001
+#   Iceberg REST:     8282 → 8181
+#   Kafka:            9092 → 9092
+#   Flink JM REST:    8083 → 8081
+#   Spark Notebook:   8890 → 8888   Spark UI:  4041 → 4040
+#   StarRocks FE:     8034 → 8030   SR MySQL:  9034 → 9030
+
+x-flink-env: &flink-env
+  FLINK_PROPERTIES: |
+    jobmanager.rpc.address: sl-flink-jobmanager
+    taskmanager.numberOfTaskSlots: 4
+    blob.server.port: 6124
+    query.server.port: 6125
+    taskmanager.memory.process.size: 2048m
+    s3.access-key: ${MINIO_ROOT_USER:-admin}
+    s3.secret-key: ${MINIO_ROOT_PASSWORD:-streaming123}
+    s3.endpoint: http://sl-minio:9000
+    s3.path.style.access: true
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-admin}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-streaming123}
+  AWS_REGION: us-east-1
+
+services:
+
+  # ── Object Storage ──────────────────────────────────────────────────────────
+  sl-minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: sl-minio
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-streaming123}
+    command: server /data --console-address ":9001"
+    volumes:
+      - sl-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [sl-net]
+
+  sl-minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    container_name: sl-minio-init
+    depends_on:
+      sl-minio:
+        condition: service_healthy
+    # MinIO's healthcheck can report healthy a beat before the S3 API accepts
+    # connections, so retry `mc alias set` until it succeeds instead of racing
+    # once and masking the failure with a trailing `echo`. Without the retry the
+    # bucket is silently never created and Iceberg table writes 404 later.
+    entrypoint: >
+      /bin/sh -c "
+        until mc alias set local http://sl-minio:9000 ${MINIO_ROOT_USER:-admin} ${MINIO_ROOT_PASSWORD:-streaming123}; do
+          echo 'waiting for MinIO S3 API...'; sleep 2;
+        done;
+        mc mb local/${MINIO_BUCKET:-streaming-lake} --ignore-existing || exit 1;
+        echo 'bucket ready';
+      "
+    networks: [sl-net]
+
+  # ── Table Catalog ───────────────────────────────────────────────────────────
+  sl-iceberg-rest:
+    image: tabulario/iceberg-rest:1.6.0
+    container_name: sl-iceberg-rest
+    ports:
+      - "8282:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://${MINIO_BUCKET:-streaming-lake}/warehouse
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://sl-minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-admin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-streaming123}
+      AWS_REGION: us-east-1
+    depends_on:
+      sl-minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8181' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [sl-net]
+
+  # ── Event Bus (KRaft — no Zookeeper) ───────────────────────────────────────
+  sl-kafka:
+    image: apache/kafka:3.8.0
+    container_name: sl-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@localhost:9093"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://sl-kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: "24"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    volumes:
+      - sl-kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks: [sl-net]
+
+  # ── Kafka Web Console ───────────────────────────────────────────────────────
+  # Kafka is a broker with no built-in web UI; this gives a browsable console
+  # (topics, live messages, partitions, consumer groups) so the event bus isn't
+  # a blank spot in the Studio "Service URLs" panel. Listens on 8080 internally.
+  sl-kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: sl-kafka-ui
+    ports:
+      - "8085:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: streaming-lakehouse
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: sl-kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    depends_on:
+      sl-kafka:
+        condition: service_healthy
+    networks: [sl-net]
+
+  # ── Flink Stream Processor ──────────────────────────────────────────────────
+  sl-flink-jobmanager:
+    build:
+      context: docker/flink
+      dockerfile: Dockerfile
+    image: sl-flink:1.20-iceberg
+    container_name: sl-flink-jobmanager
+    ports:
+      - "8083:8081"
+    command: jobmanager
+    environment:
+      <<: *flink-env
+    depends_on:
+      sl-kafka:
+        condition: service_healthy
+      sl-iceberg-rest:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/overview"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+    networks: [sl-net]
+
+  sl-flink-taskmanager:
+    image: sl-flink:1.20-iceberg
+    container_name: sl-flink-taskmanager
+    command: taskmanager
+    environment:
+      <<: *flink-env
+    depends_on:
+      sl-flink-jobmanager:
+        condition: service_healthy
+    networks: [sl-net]
+
+  # ── Batch Processing & Notebooks ────────────────────────────────────────────
+  sl-spark:
+    image: tabulario/spark-iceberg:3.5.5_1.8.1
+    container_name: sl-spark
+    ports:
+      - "8890:8888"
+      - "4041:4040"
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-admin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-streaming123}
+      AWS_REGION: us-east-1
+      AWS_S3_ENDPOINT: http://sl-minio:9000
+      ICEBERG_REST_URI: http://sl-iceberg-rest:8181
+      SPARK_CATALOG_TYPE: rest
+    depends_on:
+      sl-iceberg-rest:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8888' 2>/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+    networks: [sl-net]
+
+  # ── Analytics / Serving ─────────────────────────────────────────────────────
+  sl-starrocks-fe:
+    image: starrocks/fe-ubuntu:3.3.12
+    container_name: sl-starrocks-fe
+    ports:
+      - "8034:8030"
+      - "9034:9030"
+      - "9024:9020"
+    command: >
+      /bin/bash -c "
+        /opt/starrocks/fe/bin/start_fe.sh --host_type FQDN &
+        until mysql -h 127.0.0.1 -P 9030 -u root -e 'SELECT 1' >/dev/null 2>&1; do sleep 3; done;
+        mysql -h 127.0.0.1 -P 9030 -u root -e \"ALTER SYSTEM ADD BACKEND 'sl-starrocks-be:9050'\" 2>/dev/null || true;
+        wait
+      "
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-admin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-streaming123}
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL_S3: http://sl-minio:9000
+      AWS_S3_US_EAST_1_REGIONAL_ENDPOINT: regional
+    volumes:
+      - sl-starrocks-fe-data:/opt/starrocks/fe/meta
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -P 9030 -u root -e 'SELECT 1' 2>/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+    networks: [sl-net]
+
+  sl-starrocks-be:
+    image: starrocks/be-ubuntu:3.3.12
+    container_name: sl-starrocks-be
+    command: >
+      /bin/bash -c "
+        /opt/starrocks/be/bin/start_be.sh &
+        wait
+      "
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-admin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-streaming123}
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT_URL_S3: http://sl-minio:9000
+      AWS_S3_US_EAST_1_REGIONAL_ENDPOINT: regional
+    volumes:
+      - sl-starrocks-be-data:/opt/starrocks/be/storage
+    depends_on:
+      sl-starrocks-fe:
+        condition: service_healthy
+    networks: [sl-net]
+
+  # ── Hive Metastore (ADDITIVE feature — enables Hudi + Delta catalogs) ────────
+  # NOT part of the Kafka→Flink→Iceberg streaming pipeline. Added so this stack
+  # supports all three table-format catalogs: iceberg via the REST catalog,
+  # hudi/delta via this HMS. The streaming build above is completely untouched.
+  mysql-hms:
+    image: mysql:8.0
+    container_name: sl-mysql-hms
+    restart: unless-stopped
+    # MySQL 8 defaults to caching_sha2_password, which the old Hive Metastore
+    # 3.0 JDBC driver can't negotiate over non-SSL. Force native password.
+    command: ["--default-authentication-plugin=mysql_native_password"]
+    environment:
+      MYSQL_DATABASE: metastore
+      MYSQL_USER: hive
+      MYSQL_PASSWORD: ${HMS_DB_PASSWORD:-hive}
+      MYSQL_ROOT_PASSWORD: ${HMS_DB_ROOT_PASSWORD:-root_password_pilot}
+    volumes:
+      - sl-mysql-hms-data:/var/lib/mysql
+    expose:
+      - "3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uhive -p$${MYSQL_PASSWORD} -D metastore -e \"SELECT 1\" >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks: [sl-net]
+
+  hive-metastore:
+    image: bitsondatadev/hive-metastore:latest
+    container_name: sl-hive-metastore
+    # Clean hostname so HMS's self-resolved canonical name has no underscore
+    # (illegal URI host char that breaks StarRocks getAllDatabases). sl-net is
+    # already hyphenated, and StarRocks reaches HMS as `hive-metastore`.
+    hostname: hive-metastore
+    restart: unless-stopped
+    depends_on:
+      mysql-hms:
+        condition: service_started
+    environment:
+      METASTORE_DB_HOSTNAME: mysql-hms
+    volumes:
+      - ./hive-metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro
+    expose:
+      - "9083"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9083'"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks: [sl-net]
+
+networks:
+  sl-net:
+    name: sl-net
+
+volumes:
+  sl-minio-data:
+  sl-kafka-data:
+  sl-starrocks-fe-data:
+  sl-starrocks-be-data:
+  sl-mysql-hms-data:

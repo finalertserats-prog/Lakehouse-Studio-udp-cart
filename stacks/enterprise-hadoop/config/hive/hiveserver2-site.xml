@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+
+  <!-- No Kerberos — plain auth for Docker dev environment -->
+  <property>
+    <name>hive.server2.authentication</name>
+    <value>NONE</value>
+  </property>
+
+  <!-- Allow all users — dev only -->
+  <property>
+    <name>hive.server2.enable.doAs</name>
+    <value>false</value>
+  </property>
+
+  <property>
+    <name>hive.server2.thrift.port</name>
+    <value>10000</value>
+  </property>
+
+  <property>
+    <name>hive.server2.webui.port</name>
+    <value>10002</value>
+  </property>
+
+  <property>
+    <name>hive.server2.thrift.bind.host</name>
+    <value>0.0.0.0</value>
+  </property>
+
+</configuration>

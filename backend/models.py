@@ -83,6 +83,13 @@ class InstallRequest(BaseModel):
     # environments can co-exist on the same host without container or
     # volume collisions. None = single-environment install (legacy default).
     environment: Optional[EnvironmentTier] = None
+    # SSH credentials for remote installs. When host is not localhost/127.0.0.1
+    # and ssh_user is set, the runner SSHes into the target and runs all steps
+    # there instead of locally.
+    ssh_user: Optional[str] = Field(default=None, max_length=64)
+    ssh_key_path: Optional[str] = Field(default=None, max_length=4096)
+    ssh_password: Optional[str] = Field(default=None, max_length=256)
+    ssh_port: int = Field(default=22, ge=1, le=65535)
 
     @field_validator("cart")
     @classmethod
@@ -117,6 +124,10 @@ class InstallRecord(BaseModel):
     goal: Optional[str] = None
     cart: list[str] = Field(default_factory=list)
     environment: Optional[EnvironmentTier] = None
+    # SSH metadata for remote installs (no password — key-path auth only for retry)
+    ssh_user: Optional[str] = None
+    ssh_key_path: Optional[str] = None
+    ssh_port: int = 22
 
 
 class LogEvent(BaseModel):

@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<!--
+  Mirrored from live techsophy.com dev cluster (sdpdevstg01, scanned 2026-05-21).
+  Source: /opt/apache-hive-4.0.1-bin/conf/hive-site.xml
+  Templating:
+    - JDBC pw → ${HMS_DB_PASSWORD} from .env
+    - JDBC host `sdpdevstg01.techsophy.com` → `pgbouncer` (docker service)
+    - warehouse `hdfs://sdpdevnn01:9820/tmp/hive/warehouse` → `hdfs://namenode:9820/tmp/hive/warehouse`
+    - keep /tmp/hive/warehouse path as on live (flagged in scan as an anti-pattern but
+      reproducing live faithfully is the goal of this stack)
+-->
+<configuration>
+
+  <!-- ── Metastore DB: Postgres via PgBouncer (live: stg01:6432) ──────────── -->
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:postgresql://pgbouncer:6432/metastore?prepareThreshold=0</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionDriverName</name>
+    <value>org.postgresql.Driver</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>hive</value>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionPassword</name>
+    <value>HiveAdmin</value>
+  </property>
+
+  <!-- ── HikariCP connection pool (live tuning) ──────────────────────────── -->
+  <property>
+    <name>datanucleus.connectionPoolingType</name>
+    <value>HikariCP</value>
+  </property>
+  <property>
+    <name>datanucleus.hikari.maximumPoolSize</name>
+    <value>80</value>
+  </property>
+  <property>
+    <name>datanucleus.hikari.minimumIdle</name>
+    <value>2</value>
+  </property>
+  <property>
+    <name>datanucleus.hikari.maxLifetime</name>
+    <value>540000</value>
+  </property>
+  <property>
+    <name>datanucleus.hikari.keepaliveTime</name>
+    <value>60000</value>
+  </property>
+  <property>
+    <name>datanucleus.hikari.connectionTimeout</name>
+    <value>60000</value>
+  </property>
+  <property>
+    <name>datanucleus.hikari.idleTimeout</name>
+    <value>300000</value>
+  </property>
+  <property>
+    <name>datanucleus.rdbms.statementCacheSize</name>
+    <value>0</value>
+  </property>
+  <property>
+    <name>datanucleus.rdbms.useBatching</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>datanucleus.rdbms.usePreparedStatements</name>
+    <value>false</value>
+  </property>
+
+  <!-- ── Schema bootstrap ──────────────────────────────────────────────────── -->
+  <property>
+    <name>datanucleus.schema.autoCreateAll</name>
+    <value>true</value>
+  </property>
+  <property>
+    <name>datanucleus.schema.autoCreateTables</name>
+    <value>true</value>
+  </property>
+  <property>
+    <name>hive.metastore.schema.verification</name>
+    <value>false</value>
+  </property>
+
+  <!-- ── Metastore endpoints (live: thrift bound 127.0.0.1:9083) ──────────── -->
+  <property>
+    <name>hive.metastore.uris</name>
+    <value>thrift://hive-metastore:9083</value>
+  </property>
+  <property>
+    <name>hive.metastore.warehouse.dir</name>
+    <value>hdfs://namenode:9820/tmp/hive/warehouse</value>
+  </property>
+  <property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://namenode:9820</value>
+  </property>
+  <property>
+    <name>hive.exec.scratchdir</name>
+    <value>/tmp/hive</value>
+  </property>
+
+  <!-- ── HiveServer2 (live: bound to 127.0.0.1 only — docker exposes externally) -->
+  <property>
+    <name>hive.server2.thrift.http.path</name>
+    <value>/cliservice</value>
+  </property>
+  <property>
+    <name>hive.server2.enable.doAs</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hive.server.read.socket.timeout</name>
+    <value>120000</value>
+  </property>
+
+  <!-- ── Execution engine: Tez ────────────────────────────────────────────── -->
+  <property>
+    <name>hive.execution.engine</name>
+    <value>tez</value>
+  </property>
+  <property>
+    <name>hive.execution.mode</name>
+    <value>client</value>
+  </property>
+  <property>
+    <name>hive.tez.container.size</name>
+    <value>512</value>
+  </property>
+  <property>
+    <name>hive.tez.java.opts</name>
+    <value>-Xmx768m</value>
+  </property>
+  <property>
+    <name>hive.tez.cpu.vcores</name>
+    <value>1</value>
+  </property>
+  <property>
+    <name>hive.tez.auto.reducer.parallelism</name>
+    <value>true</value>
+  </property>
+
+  <!-- ── Reducer sizing (live) ────────────────────────────────────────────── -->
+  <property>
+    <name>mapreduce.job.reduces</name>
+    <value>2</value>
+  </property>
+  <property>
+    <name>hive.exec.reducers.bytes.per.reducer</name>
+    <value>256000000</value>
+  </property>
+
+  <!-- ── Hudi input formats (MoR + CoW) ──────────────────────────────────── -->
+  <property>
+    <name>hive.input.format</name>
+    <value>org.apache.hudi.hadoop.hive.HoodieCombineHiveInputFormat</value>
+  </property>
+  <property>
+    <name>hive.tez.input.format</name>
+    <value>org.apache.hudi.hadoop.hive.HoodieCombineHiveInputFormat</value>
+  </property>
+
+  <!-- ── HMS event listeners — enables incremental sync to StarRocks ──────── -->
+  <property>
+    <name>hive.metastore.transactional.event.listeners</name>
+    <value>org.apache.hive.hcatalog.listener.DbNotificationListener</value>
+  </property>
+  <property>
+    <name>hive.metastore.event.db.notification.api.auth</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hive.metastore.dml.events</name>
+    <value>true</value>
+  </property>
+
+  <!-- ── Hudi compatibility ────────────────────────────────────────────────── -->
+  <property>
+    <name>hive.vectorized.execution.enabled</name>
+    <value>false</value>
+  </property>
+  <property>
+    <name>hive.fetch.task.conversion</name>
+    <value>none</value>
+  </property>
+
+  <property>
+    <name>hive.metastore.disallow.incompatible.col.type.changes</name>
+    <value>false</value>
+  </property>
+
+  <!-- ── HMS thrift server tuning (live: 100/10/20) ───────────────────────── -->
+  <property>
+    <name>hive.metastore.server.max.threads</name>
+    <value>100</value>
+  </property>
+  <property>
+    <name>hive.metastore.server.min.threads</name>
+    <value>10</value>
+  </property>
+  <property>
+    <name>hive.metastore.connect.retries</name>
+    <value>20</value>
+  </property>
+
+  <!-- ── Spark event log (live) ───────────────────────────────────────────── -->
+  <property>
+    <name>spark.eventLog.enabled</name>
+    <value>true</value>
+  </property>
+
+</configuration>

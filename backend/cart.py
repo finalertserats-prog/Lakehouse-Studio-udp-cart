@@ -6,9 +6,7 @@ cart, returns:
   - live score (0-100; grows as required categories fill)
   - missing required categories
   - one-at-a-time recommendation (the next required pick)
-  - warnings for any component not in the catalog or not in the UDP set
-
-For the v0.3 pilot the only valid combination is the UDP recommended set.
+  - warnings for any component not in the catalog or not in any certified set
 """
 from __future__ import annotations
 from typing import Optional
@@ -16,12 +14,19 @@ from typing import Optional
 from .catalog import categories, required_category_ids, component_index, recommended_sets
 
 
-# The pilot's known-good combination. Anything outside this is "experimental"
-# in the warning sense — we can let the user *see* the alternates as
-# coming-soon, but a cart with non-UDP components scores 0 for compatibility.
+# The pilot's known-good UDP combination (used for recommendations).
 UDP_RECOMMENDED_SET: frozenset[str] = frozenset({
     "iceberg", "iceberg-rest", "minio", "spark-iceberg", "starrocks",
 })
+
+
+def _all_certified_component_ids() -> frozenset[str]:
+    """All component IDs that belong to at least one certified recommended set."""
+    ids: set[str] = set(UDP_RECOMMENDED_SET)
+    for set_data in recommended_sets().values():
+        for cid in set_data.get("components", []):
+            ids.add(cid)
+    return frozenset(ids)
 
 
 def validate_cart(cart: list[str]) -> dict:
@@ -49,10 +54,11 @@ def validate_cart(cart: list[str]) -> dict:
     for cid in unknown:
         warnings.append(f"'{cid}' is not in the catalog")
 
-    not_in_udp = [cid for cid in cart if cid in idx and cid not in UDP_RECOMMENDED_SET]
+    all_certified = _all_certified_component_ids()
+    not_in_udp = [cid for cid in cart if cid in idx and cid not in all_certified]
     for cid in not_in_udp:
         comp = idx.get(cid, {})
-        warnings.append(f"'{comp.get('name', cid)}' is not part of the certified UDP set (v0.3 pilot ships UDP only)")
+        warnings.append(f"'{comp.get('name', cid)}' is not part of any certified stack (experimental)")
 
     # Multiple components in the same required category — flag
     for cat_id, items in by_category.items():

@@ -141,6 +141,9 @@ class StateStore:
         goal: Optional[str] = None,
         cart: Optional[list[str]] = None,
         environment: Optional[str] = None,
+        ssh_user: Optional[str] = None,
+        ssh_key_path: Optional[str] = None,
+        ssh_port: int = 22,
     ) -> InstallRecord:
         with self._lock:
             now = time.time()
@@ -158,6 +161,9 @@ class StateStore:
                 goal=goal,
                 cart=cart or [],
                 environment=environment,  # type: ignore[arg-type]
+                ssh_user=ssh_user,
+                ssh_key_path=ssh_key_path,
+                ssh_port=ssh_port,
             )
             self._records[install_id] = record
             self._persist_locked()

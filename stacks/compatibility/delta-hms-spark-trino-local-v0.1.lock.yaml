@@ -126,18 +126,17 @@ components:
     upstream_url: https://github.com/minio/mc
     notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
 
-  - id: postgres
+  - id: mysql-hms
     name: MySQL 8 (Hive Metastore backing DB)
     role: db_backing
     image: mysql
     tag: "8.0"
-    registry_url: https://hub.docker.com/_/postgres/tags
-    upstream_url: https://www.postgresql.org/
+    registry_url: https://hub.docker.com/_/mysql/tags
+    upstream_url: https://dev.mysql.com/
     notes: |
       Backing store for the Hive Metastore's relational schema. Same
-      pin as hudi-hms-spark-local-v0.1 — 15-alpine chosen for small
-      footprint and stable schema-init behavior. Do not use the
-      floating `postgres:latest` tag.
+      pin as hudi-hms-spark-local-v0.1 — MySQL 8.0 chosen for HMS
+      JDBC driver compatibility. Do not use the floating `mysql:latest` tag.
 
   - id: hive-metastore
     name: Hive Metastore (standalone)
@@ -158,7 +157,7 @@ components:
     name: Apache Spark + Delta Lake (Studio-built)
     role: processing
     image: lakehousestudio/spark-delta
-    tag: "3.5.0_3.2.1"
+    tag: "3.5.5_3.3.2"
     registry_url: https://hub.docker.com/r/lakehousestudio/spark-delta/tags
     upstream_url: https://docs.delta.io/latest/index.html
     notes: |
@@ -174,7 +173,7 @@ components:
     name: Trino
     role: processing
     image: trinodb/trino
-    tag: "475"
+    tag: "481"
     registry_url: https://hub.docker.com/r/trinodb/trino/tags
     upstream_url: https://trino.io/docs/current/connector/delta-lake.html
     notes: |

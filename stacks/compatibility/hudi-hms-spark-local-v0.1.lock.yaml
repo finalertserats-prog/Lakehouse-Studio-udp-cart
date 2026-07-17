@@ -134,19 +134,19 @@ components:
     upstream_url: https://github.com/minio/mc
     notes: One-shot bootstrap — creates the `datalake` bucket on MinIO startup. Same as v0.2.
 
-  - id: postgres
+  - id: mysql-hms
     name: MySQL 8 (Hive Metastore backing DB)
     role: db_backing
     image: mysql
     tag: "8.0"
-    registry_url: https://hub.docker.com/_/postgres/tags
-    upstream_url: https://www.postgresql.org/
+    registry_url: https://hub.docker.com/_/mysql/tags
+    upstream_url: https://dev.mysql.com/
     notes: |
       Backing store for the Hive Metastore's relational schema (DBS,
-      TBLS, SDS, PARTITIONS, etc.). 15-alpine chosen for small footprint;
-      HMS's schema initialization runs against it at first start. Do not
-      use the floating `postgres:latest` tag — the schema-init step is
-      sensitive to major-version bumps and must be re-verified on bump.
+      TBLS, SDS, PARTITIONS, etc.). MySQL 8.0 chosen for HMS JDBC driver
+      compatibility; HMS's schema initialization runs against it at first
+      start. Do not use the floating `mysql:latest` tag — the schema-init
+      step is sensitive to major-version bumps and must be re-verified on bump.
 
   - id: hive-metastore
     name: Hive Metastore (standalone)
@@ -168,7 +168,7 @@ components:
     name: Apache Spark + Apache Hudi (Studio-built)
     role: processing
     image: lakehousestudio/spark-hudi
-    tag: "3.5.0_0.15.0"
+    tag: "3.5.5_1.2.0"
     registry_url: https://hub.docker.com/r/lakehousestudio/spark-hudi/tags
     upstream_url: https://hudi.apache.org/
     notes: |

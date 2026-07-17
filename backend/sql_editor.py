@@ -7,8 +7,10 @@ the frontend can render results identically.
 """
 from __future__ import annotations
 import asyncio
+import json
 import re
 import shutil
+from pathlib import Path
 from typing import Any
 
 
@@ -123,7 +125,63 @@ def validate_sql(sql: str) -> tuple[bool, str]:
     return True, ""
 
 
-async def run_user_sql(sql: str, timeout: int = DEFAULT_TIMEOUT_SEC) -> dict[str, Any]:
+async def resolve_container(install_dir: "Path | str | None", name_contains: str,
+                            timeout: float = 10.0) -> str | None:
+    """Resolve the running container Name for the compose service whose name
+    matches `name_contains`, scoped to this install's compose project.
+
+    Generic across container-naming schemes — udp-starrocks-fe (UDP base),
+    sl-starrocks-fe (streaming), <project>-starrocks-fe-1 (compose default) —
+    so post-install actions work on every stack, not just the UDP one.
+    Returns None if docker is unavailable or no matching container exists.
+    """
+    if not install_dir:
+        return None
+    d = Path(install_dir)
+    if shutil.which("docker") is None or not d.exists():
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "compose", "ps", "--format", "json", "--all",
+            cwd=str(d),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except Exception:
+        return None
+    text = out_b.decode("utf-8", "replace").strip()
+    if not text:
+        return None
+    rows: list = []
+    if text.startswith("["):
+        try:
+            rows = json.loads(text)
+        except json.JSONDecodeError:
+            rows = []
+    else:
+        for ln in text.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rows.append(json.loads(ln))
+            except json.JSONDecodeError:
+                continue
+    fallback: str | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        svc = row.get("Service") or ""
+        nm = row.get("Name") or ""
+        if name_contains in svc or name_contains in nm:
+            if (row.get("State") or "").lower().startswith("run"):
+                return nm or None
+            fallback = fallback or (nm or None)
+    return fallback
+
+
+async def run_user_sql(sql: str, install_dir: "Path | str | None" = None,
+                       timeout: int = DEFAULT_TIMEOUT_SEC) -> dict[str, Any]:
     ok, why = validate_sql(sql)
     if not ok:
         return {"sql": sql, "error": f"rejected: {why}"}
@@ -131,8 +189,12 @@ async def run_user_sql(sql: str, timeout: int = DEFAULT_TIMEOUT_SEC) -> dict[str
     if shutil.which("docker") is None:
         return {"sql": sql, "error": "docker CLI not on PATH (this Studio host can't reach docker)"}
 
+    # Resolve THIS install's StarRocks container rather than assuming the UDP
+    # container name. Falls back to udp-starrocks-fe for older udp installs
+    # where compose-ps resolution isn't available.
+    container = await resolve_container(install_dir, "starrocks-fe") or "udp-starrocks-fe"
     cmd = [
-        "docker", "exec", "-i", "udp-starrocks-fe",
+        "docker", "exec", "-i", container,
         "mysql", "-h", "127.0.0.1", "-P", "9030", "-u", "root",
         "--batch", "--raw", "-e", sql,
     ]
@@ -156,7 +218,11 @@ async def run_user_sql(sql: str, timeout: int = DEFAULT_TIMEOUT_SEC) -> dict[str
     err = stderr_b.decode("utf-8", "replace")
 
     if proc.returncode != 0:
-        return {"sql": sql, "error": err.strip() or out.strip() or f"mysql exited {proc.returncode}"}
+        raw = err.strip() or out.strip() or f"mysql exited {proc.returncode}"
+        if "No such container" in raw:
+            raw = (f"StarRocks isn't running for this install (container '{container}' not found). "
+                   "Start the stack before running SQL.")
+        return {"sql": sql, "error": raw}
 
     # Skip MySQL warning lines before parsing
     lines = [ln for ln in out.splitlines()

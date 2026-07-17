@@ -1,0 +1,227 @@
+# LAKEHOUSE STUDIO COMPATIBILITY LOCK
+# =====================================
+# TechSophy SDP — Hadoop + Hudi + StarRocks + Trino + Ranger
+#
+# This is a REMOTE-CLUSTER lock. There are no Docker images to pin.
+# The lock records the exact software versions in this stack and the
+# known-good inter-service compatibility constraints.
+#
+# "Do not upgrade anything" — this lock captures the current state.
+# Any proposed upgrade must produce a new lock entry with fresh evidence.
+
+schema_version: "1.0"
+stack_id: techsophy-sdp-hadoop-v1.0
+version_id: "1.0.0"
+certified_at: "2026-05-19T00:00:00+05:30"
+certified_on:
+  deployment: "bare-metal Linux (6 nodes)"
+  cluster_type: "remote-cluster (no Docker)"
+status: "pilot-stable"
+
+status_notes: |
+  pilot-stable: cluster is operational and in daily use.
+  All versions verified on the running cluster. No changes made —
+  this lock documents the existing deployment as found.
+
+# ---------------------------------------------------------------------------
+# Component versions — exact software versions on the bare-metal cluster.
+# ---------------------------------------------------------------------------
+components:
+  - id: hdfs
+    name: HDFS NameNode
+    role: storage
+    version: "3.4.1"
+    notes: |
+      NameNode ports: 9820 (RPC), 9870 (UI).
+      Replication factor: 3.
+
+  - id: hdfs-datanode
+    name: HDFS DataNode
+    role: storage
+    version: "3.4.1"
+    notes: |
+      3 DataNodes. Port 9866 (data transfer), 9867 (IPC).
+      All DataNodes registered to the NameNode.
+
+  - id: yarn
+    name: YARN ResourceManager + NodeManagers
+    role: compute
+    version: "3.4.1"
+    notes: |
+      ResourceManager UI: 8088. MapReduce History Server: 19890.
+      NodeManagers run on all datanode hosts.
+
+  - id: hive-metastore
+    name: Hive Metastore
+    role: catalog
+    version: "4.0.1"
+    notes: |
+      Thrift port 9083. PgBouncer connection pool on 6432.
+      Backend: PostgreSQL 14 (database: metastore).
+
+  - id: hiveserver2
+    name: HiveServer2
+    role: serving
+    version: "4.0.1"
+    notes: |
+      JDBC port 10000. Uses Tez as the execution engine.
+
+  - id: tez
+    name: Apache Tez
+    role: processing
+    version: "0.10.4"
+    notes: |
+      DAG execution engine for Hive. Runs as YARN containers.
+      tez.lib.uris points to HDFS at /apps/tez/tez-0.10.4.tar.gz.
+      Configured via hive.execution.engine=tez.
+
+  - id: spark
+    name: Apache Spark
+    role: processing
+    version: "3.4.4"
+    notes: |
+      spark.master=yarn. Hudi bundle JAR in the shared libs path
+      (hudi-spark3.4-bundle_2.12-*.jar).
+
+  - id: hudi
+    name: Apache Hudi
+    role: table_format
+    version: "1.0.1"
+    notes: |
+      Hudi 1.0.1 bundle used by Spark for CoW/MoR table writes.
+      Note: a separate hudi-cli 0.14.1 is installed on the app node —
+      version skew exists. Do not use the older CLI against 1.0.1 tables.
+
+  - id: starrocks-fe
+    name: StarRocks Frontend
+    role: serving
+    version: "4.0.0-rc01"
+    notes: |
+      MySQL protocol 9030, HTTP API 8030, RPC 9020.
+      Hive catalog configured pointing at HMS on 9083.
+
+  - id: starrocks-be
+    name: StarRocks Backend
+    role: serving
+    version: "4.0.0-rc01"
+    notes: |
+      BE runs on 2 nodes. Ports: heartbeat 9050, Thrift 9060,
+      HTTP 8050, brpc 8060.
+
+  - id: trino
+    name: Trino Coordinator
+    role: processing
+    version: "479"
+    notes: |
+      HTTPS-only on port 3000. Ranger plugin for access control.
+      Catalogs: mysql (→ StarRocks 9030), starrocks.
+
+  - id: ranger
+    name: Apache Ranger Admin
+    role: security
+    version: "3.0.0-SNAPSHOT"
+    notes: |
+      HTTP 6080, HTTPS 6182.
+      Plugins active: HDFS, Hive, YARN, Trino.
+      Policy store: PostgreSQL 14 (database: ranger).
+
+  - id: airflow
+    name: Apache Airflow
+    role: orchestration
+    version: "2.x"
+    notes: |
+      Web UI port 8080. Celery executor with RabbitMQ broker (25672).
+      PostgreSQL metadata backend.
+
+  - id: prometheus
+    name: Prometheus
+    role: observability
+    version: "3.4.1"
+    notes: |
+      Port 9090. Scrapes node-exporters on all active nodes (9100).
+      Loki log aggregator co-located on the same host.
+
+  - id: grafana
+    name: Grafana
+    role: observability
+    version: "12.0.1"
+    notes: |
+      Port 3000. Datasources: Prometheus (metrics) + Loki (logs).
+      Dashboards: HDFS, YARN, node metrics.
+
+  - id: postgresql
+    name: PostgreSQL
+    role: metadata_store
+    version: "14"
+    notes: |
+      Two logical databases: metastore (Hive HMS) and ranger (Ranger policy store).
+      PgBouncer connection pool on 6432 handles HMS connections.
+      Direct connections on 5432.
+
+# ---------------------------------------------------------------------------
+# Compatibility constraints — known inter-service dependencies.
+# ---------------------------------------------------------------------------
+constraints:
+  - between: [spark, hudi]
+    rule: "Spark 3.4.x must use the hudi-spark3.4 bundle JAR — not hudi-spark3.5 or generic"
+    verified: "hudi-spark3.4-bundle_2.12-*.jar confirmed in shared libs path"
+
+  - between: [hiveserver2, tez]
+    rule: "Hive 4.0.1 requires Tez 0.10.x; 0.10.4 is the certified version in this stack"
+    verified: "tez-0.10.4.tar.gz in HDFS /apps/tez/ matches hive-site.xml config"
+
+  - between: [starrocks-fe, starrocks-be]
+    rule: "FE and BE must match the same 4.0.0-rc01 build exactly"
+    verified: "both nodes confirmed on 4.0.0-rc01"
+
+  - between: [ranger, trino]
+    rule: "Trino 479 uses the Ranger 3.0 plugin — do not upgrade either independently"
+    verified: "Trino ranger plugin config verified"
+
+  - between: [hive-metastore, postgresql]
+    rule: "Hive Metastore 4.0.1 requires PostgreSQL 14+ as its backend"
+    verified: "HMS connected to PostgreSQL 14 metastore database"
+
+  - between: [ranger, postgresql]
+    rule: "Ranger policy store uses a separate database on the same PostgreSQL 14 instance"
+    verified: "ranger database confirmed on same PostgreSQL host"
+
+  - between: [hudi-cli, spark-hudi-bundle]
+    rule: "The app node has an older hudi-cli; the Spark bundle is 1.0.1 — they are NOT interchangeable"
+    known_issue: "Version skew — do not run hudi-cli commands against tables written by the 1.0.1 bundle"
+
+# ---------------------------------------------------------------------------
+# Host requirements — for Studio itself (not the cluster).
+# ---------------------------------------------------------------------------
+host_requirements:
+  docker_min: "not-required"
+  os_verified:
+    - "Linux (Ubuntu 22.04)"
+  ram_min_gb: 1
+  ram_recommended_gb: 4
+  disk_min_gb: 1
+  network: "TCP connectivity to cluster nodes required (VPN may be needed)"
+
+# ---------------------------------------------------------------------------
+# Evidence — append new records after each verification run.
+# ---------------------------------------------------------------------------
+evidence:
+  - id: "initial-verification"
+    timestamp: "2026-05-19T00:00:00+05:30"
+    result:
+      cluster_topology: confirmed
+      all_services_found: true
+      inter_service_communication: verified
+    no_changes_made: true
+
+# ---------------------------------------------------------------------------
+# Known issues / do-not-change notes.
+# ---------------------------------------------------------------------------
+incompatible:
+  - combination: ["hudi-cli 0.14.1 + Hudi 1.0.1 tables"]
+    reason: "Older CLI predates the Spark bundle version. Table metadata format may differ."
+    workaround: "Use Spark shell / PySpark for Hudi table operations instead of the CLI."
+
+  - combination: ["Trino + StarRocks independent upgrade"]
+    reason: "Trino 479 connector for StarRocks is version-sensitive. Upgrading either independently risks query regressions."
+    workaround: "Keep both frozen at 479 / 4.0.0-rc01 until end-to-end regression testing is complete."

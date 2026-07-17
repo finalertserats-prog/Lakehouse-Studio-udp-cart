@@ -174,6 +174,37 @@ def explain(failed_step: Optional[str], log_tail: list[str], exit_code: Optional
     'check the logs' messaging)."""
     blob = "\n".join(log_tail[-200:])  # last 200 lines is plenty
 
+    # exit_code 124 is runner._run_bash's own timeout marker (see
+    # "[timeout after Ns; killing]" in the log) — check it directly rather
+    # than via regex, since the cause (step ran out of time) is unambiguous
+    # regardless of what was printed right before the kill.
+    if exit_code == 124:
+        if failed_step in ("start", "bootstrap"):
+            why = (
+                f"The '{failed_step}' step ran out of time before finishing. On a "
+                "fresh host this is almost always a cold Docker image pull — several "
+                "of this stack's images are multiple GB — still in progress when the "
+                "timeout fired, not a real failure."
+            )
+            fix = (
+                "Click Retry. Docker caches layers already pulled, so the retry "
+                "resumes instead of starting over and should finish well inside the "
+                "timeout. If it keeps timing out, check `docker images` to see "
+                "what's missing and pull it manually to gauge your connection speed."
+            )
+        else:
+            why = f"The '{failed_step or 'unknown'}' step ran out of time before finishing."
+            fix = "Click Retry. If it times out repeatedly, check the live logs for what it was waiting on."
+        return {
+            "category": "timeout",
+            "title": "Step timed out",
+            "why": why,
+            "fix": fix,
+            "retryable": True,
+            "failed_step": failed_step,
+            "exit_code": exit_code,
+        }
+
     for pat in _PATTERNS:
         m = pat["match"].search(blob)
         if not m:
