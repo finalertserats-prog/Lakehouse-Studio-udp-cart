@@ -14,8 +14,8 @@
 
 schema_version: "1.0"
 stack_id: delta-hms-spark-trino-local-v0.1
-version_id: "0.1.0"
-certified_at: "2026-05-17T00:00:00+05:30"
+version_id: "0.1.1"
+certified_at: "2026-07-17T11:20:40+00:00"
 certified_by: vishnu.wildeagle@gmail.com
 certified_on:
   os: "TBD — no install evidence yet"
@@ -24,7 +24,7 @@ certified_on:
 # IMPORTANT: status is `candidate`, NOT `pilot-stable`. Studio's compatibility
 # loader exposes this verbatim through /api/stacks/{id}/lock-summary so the UI
 # can warn before showing the option.
-status: "candidate"
+status: "pilot-stable"
 
 # Maturity grades:
 #   candidate       — tags verified present on registry; combination NOT installed end-to-end
@@ -299,7 +299,31 @@ host_requirements:
 # Append a record after every install attempt (including failed ones) so
 # the failure mode is documented for the next contributor to pick up.
 # ---------------------------------------------------------------------------
-evidence: []  # no evidence yet — candidate status
+evidence:
+  - id: "2026-07-17-srv1541349-c8ea44aa83"
+    timestamp: "2026-07-17T11:20:40.093101+00:00"
+    operator: root
+    install_id: "inst_c8ea44aa83"
+    host:
+      os: "Linux-5.15.0-177-generic-x86_64-with-glibc2.35"
+      docker: "29.5.0"
+      ram_gb: 31.3
+      cpu_cores: 8
+    via: "install_harness.py on Finalert VPS srv1541349"
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: passed
+      finalize: passed
+    proof:
+      - "all 8 pipeline steps passed (terminal state READY, 3m38s)"
+      - "[delta-smoke] spark raw=5 curated=4; trino raw=5 curated=4 (row-count parity OK)"
+      - "[etl-verify] PASSED — 1 format(s) x 3 pipelines, all >= 1000 rows"
+    notes: "Certified after fixing the multi-format-refactor regression (commits c7f1472 + ab3e721): --packages hadoop-aws/delta + spark.sql.defaultCatalog=spark_catalog for the s3a/HMS write path, and removed the disabled Trino register_table calls (Spark saveAsTable already registers in HMS; Trino reads them directly)."
 
 # ---------------------------------------------------------------------------
 # Known-incompatible — combinations we know DO NOT work.
