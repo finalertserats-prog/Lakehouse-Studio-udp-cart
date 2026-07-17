@@ -15,6 +15,7 @@ import yaml
 
 from .component_registry import COMPONENTS, resolve_dependencies
 from .config import ROOT
+from . import compose_safety
 
 
 def _will_be_generated(local_path: str, resolved: list[str]) -> bool:
@@ -180,6 +181,12 @@ def compose(
     if named_volumes:
         doc["volumes"] = {v: {} for v in sorted(named_volumes)}
 
+    # Host-escape safety gate (P0.1). The composed doc is assembled from
+    # registry components + AI/user selections and is then `docker compose up`'d,
+    # so scan it for privileged/host-mount/socket/host-namespace constructs.
+    # Reported here for the preview; write_compose() blocks the install on any.
+    safety_violations = [str(v) for v in compose_safety.scan_compose_doc(doc)]
+
     compose_yaml = yaml.dump(
         doc,
         default_flow_style=False,
@@ -205,6 +212,7 @@ def compose(
         "config_files_needed":    deduped_cfg,
         "port_map":               port_map,
         "warnings":               warnings,
+        "safety_violations":      safety_violations,
     }
 
 
@@ -217,6 +225,13 @@ def write_compose(
     """Write docker-compose.yml to *output_dir*. Returns compose plan + output_path."""
     output_dir.mkdir(parents=True, exist_ok=True)
     plan = compose(selected, version_overrides, include_experimental, output_dir=output_dir)
+    # Block the install if the composed stack contains a host-escape construct.
+    if plan.get("safety_violations"):
+        lines = "\n  ".join(plan["safety_violations"])
+        raise compose_safety.ComposeSafetyError(
+            f"refusing to write an unsafe docker-compose.yml — "
+            f"{len(plan['safety_violations'])} construct(s):\n  {lines}"
+        )
     path = output_dir / "docker-compose.yml"
     path.write_text(plan["compose_yaml"], encoding="utf-8")
     plan["output_path"] = str(path)
