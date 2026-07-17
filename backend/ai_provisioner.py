@@ -28,6 +28,7 @@ load_dotenv()
 import litellm
 
 from . import compat_ai
+from . import ai_safety
 from .stack_manifest import load_manifest, StackManifest
 
 log = logging.getLogger("lhs.ai_provisioner")
@@ -343,6 +344,12 @@ def _run_post_start_commands(commands: list[dict], emit_log: Callable) -> None:
         cmd  = item.get("cmd", "")
         if not cmd:
             continue
+        # LLM output is untrusted — gate every command before it reaches a shell.
+        ok, reason = ai_safety.vet_provisioning_command(cmd)
+        if not ok:
+            emit_log(f"  ⛔ refused unsafe AI command ({reason}): {cmd[:120]}")
+            log.warning("refused unsafe AI post-start command (%s): %s", reason, cmd)
+            continue
         emit_log(f"  running: {desc or cmd}")
         try:
             result = subprocess.run(
@@ -359,18 +366,33 @@ def _run_post_start_commands(commands: list[dict], emit_log: Callable) -> None:
 
 
 def _inject_trino_catalogs(catalog_files: dict[str, str], emit_log: Callable) -> None:
-    for name, content in catalog_files.items():
-        if not name.endswith(".properties"):
-            name = name + ".properties"
+    for raw_name, content in catalog_files.items():
+        # LLM output is untrusted — strict-validate the filename (it becomes a
+        # path segment) and pass content over stdin so it is NEVER interpolated
+        # into a shell string. No shell=True; argv only.
+        try:
+            name = ai_safety.validate_catalog_filename(raw_name)
+        except ValueError as e:
+            emit_log(f"  ⛔ refused unsafe catalog filename {raw_name!r}: {e}")
+            log.warning("refused unsafe AI catalog filename: %r", raw_name)
+            continue
+        if not isinstance(content, str):
+            emit_log(f"  ⚠ {name}: skipped (content is not text)")
+            continue
         emit_log(f"  writing Trino catalog: {name}")
         try:
-            escaped = content.replace("'", "'\"'\"'")
-            cmd = (
-                f"docker exec udp-trino mkdir -p /data/trino/etc/catalog && "
-                f"docker exec -i udp-trino bash -c 'cat > /data/trino/etc/catalog/{name}' "
-                f"<<'__TRINOEOF__'\n{content}\n__TRINOEOF__"
+            subprocess.run(
+                ["docker", "exec", "udp-trino", "mkdir", "-p",
+                 "/data/trino/etc/catalog"],
+                capture_output=True, text=True, timeout=30,
             )
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            # `sh -c 'cat > <validated-path>'` inside the container; the payload
+            # arrives on stdin, so its bytes are never parsed by any shell.
+            result = subprocess.run(
+                ["docker", "exec", "-i", "udp-trino", "sh", "-c",
+                 f"cat > /data/trino/etc/catalog/{name}"],
+                input=content, capture_output=True, text=True, timeout=30,
+            )
             if result.returncode == 0:
                 emit_log(f"  ✓ {name} written")
             else:
@@ -394,6 +416,13 @@ def _run_connectivity_checks(checks: list[dict], emit_log: Callable) -> list[dic
         name = check.get("name", "?")
         cmd  = check.get("cmd", "")
         if not cmd:
+            continue
+        # LLM output is untrusted — gate the probe command before running it.
+        safe, reason = ai_safety.vet_provisioning_command(cmd)
+        if not safe:
+            emit_log(f"  ⛔ {name}: refused unsafe check ({reason})")
+            log.warning("refused unsafe AI connectivity check (%s): %s", reason, cmd)
+            results.append({"name": name, "ok": False})
             continue
         try:
             r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)

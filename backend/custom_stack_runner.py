@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 from .component_registry import COMPONENTS, resolve_dependencies, get_live_versions
-from . import stack_composer, ai_configurator, version_fetcher, compat_ai
+from . import stack_composer, ai_configurator, version_fetcher, compat_ai, ai_safety
 from .config import WORK_DIR
 from .state import store
 from .models import StepStatus
@@ -1192,6 +1192,12 @@ class CustomStackJob:
             name = check.get("name", "check")
             command = check.get("command", "")
             if not command:
+                continue
+            # connectivity_checks come from the AI config plan — untrusted.
+            # Gate each command before it reaches a (local or remote) shell.
+            safe, reason = ai_safety.vet_provisioning_command(command)
+            if not safe:
+                self._log(f"  ⛔ {name}: refused unsafe check ({reason})")
                 continue
             if self.is_remote:
                 rc, _out2 = await self._exec_capture(self._wrap_remote(command))
