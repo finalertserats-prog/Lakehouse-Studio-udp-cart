@@ -7,25 +7,25 @@
 # This is a DOCKER lock — image tags are pinned below. Versions and layout
 # mirror the 2026-05-21 live-cluster scan (see stacks/enterprise-hadoop-v1.0.yaml).
 #
-# STATUS: candidate. No end-to-end install evidence has been captured in
-# Studio yet, so per the certification contract (status: candidate iff
-# evidence is empty) this ships as candidate. The first passing
-# install -> bootstrap -> smoke run captured under evidence[] flips this to
-# pilot-stable in the same commit, with a bump to version_id + certified_at.
+# STATUS: pilot-stable. Full end-to-end install captured on the Finalert VPS
+# (srv1541349) on 2026-07-17 — see the evidence[] record at the bottom.
 
 schema_version: "1.0"
 stack_id: enterprise-hadoop-v1.0
-version_id: "1.0.0"
-certified_at: "2026-07-17T00:00:00+05:30"
+version_id: "1.0.1"
+certified_at: "2026-07-17T09:55:55.755319+00:00"
 certified_on:
   deployment: "single-host Docker (docker-compose)"
   cluster_type: "local-docker"
-status: "candidate"
+status: "pilot-stable"
 
 status_notes: |
-  candidate: image tags are pinned and mirror the live techsophy cluster
-  scan, but no end-to-end install has been captured as evidence in Studio.
-  Do not advertise as pilot-stable until an evidence[] record exists.
+  pilot-stable: full end-to-end install captured on the Finalert VPS
+  (srv1541349, 2026-07-17, install_id inst_e328be66b2) — all 8 pipeline steps
+  passed (prepare/clone/env/doctor/start/bootstrap/smoke/finalize). Non-fatal
+  WARNs at smoke time: Loki + Ranger-admin still warming; the optional
+  3-catalog multi-format add-on verification did not fully pass. Image tags
+  mirror the 2026-05-21 live techsophy cluster scan.
 
 # ---------------------------------------------------------------------------
 # Component versions — image tags pinned to the enterprise-hadoop-v1.0 stack.
@@ -207,7 +207,30 @@ host_requirements:
 # Evidence — EMPTY until the first passing install/bootstrap/smoke run.
 # Appending the first record must flip status -> pilot-stable in the same commit.
 # ---------------------------------------------------------------------------
-evidence: []
+evidence:
+  - id: "2026-07-17-srv1541349-e328be66b2"
+    timestamp: "2026-07-17T09:55:55.755319+00:00"
+    operator: root
+    install_id: "inst_e328be66b2"
+    host:
+      os: "Linux-5.15.0-177-generic-x86_64-with-glibc2.35"
+      docker: "29.5.0"
+      ram_gb: 31.3
+      cpu_cores: 8
+    via: "install_harness.py on Finalert VPS srv1541349"
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: passed
+      finalize: passed
+    proof:
+      - "all 8 pipeline steps passed (prepare/clone/env/doctor/start/bootstrap/smoke/finalize)"
+      - "[ehd-smoke] passed — HDFS/YARN/Hive/Spark/StarRocks/Trino/Airflow up; Tez on HDFS; curated data present"
+    notes: "Core datalake smoke passed. Non-fatal WARNs: Loki + Ranger-admin still warming at smoke time; 3-catalog multi-format add-on not fully passed."
 
 # ---------------------------------------------------------------------------
 # Known issues / do-not-change notes.

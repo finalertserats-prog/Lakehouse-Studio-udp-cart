@@ -1,13 +1,13 @@
 schema_version: "1.0"
 stack_id: streaming-local-v1.0
-version_id: "1.0.0"
-certified_at: "2026-07-01T00:00:00+05:30"
+version_id: "1.0.1"
+certified_at: "2026-07-17T09:48:21.261755+00:00"
 certified_by: gundimedamanaskiran@gmail.com
 certified_on:
   os: "Windows 11 + Docker Desktop"
   docker: "28.x"
   docker_compose: "v2.x"
-status: "pilot"
+status: "pilot-stable"
 
 components:
   - id: minio
@@ -84,4 +84,27 @@ host_requirements:
   disk_min_gb: 30
   ports_required: [9010, 9011, 8282, 9092, 8083, 8890, 8034, 9034]
 
-evidence: []
+evidence:
+  - id: "2026-07-17-srv1541349-f4d1db4a95"
+    timestamp: "2026-07-17T09:48:21.261755+00:00"
+    operator: root
+    install_id: "inst_f4d1db4a95"
+    host:
+      os: "Linux-5.15.0-177-generic-x86_64-with-glibc2.35"
+      docker: "29.5.0"
+      ram_gb: 31.3
+      cpu_cores: 8
+    via: "install_harness.py on Finalert VPS srv1541349"
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: passed
+      finalize: passed
+    proof:
+      - "all 8 pipeline steps passed (prepare/clone/env/doctor/start/bootstrap/smoke/finalize)"
+      - "[sl-smoke] passed — Kafka -> Flink -> Iceberg -> StarRocks pipeline up and verified"
+    notes: "Core streaming smoke passed. The optional 3-catalog multi-format add-on check did not fully pass (non-blocking)."

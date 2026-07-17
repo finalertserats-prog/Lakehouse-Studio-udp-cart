@@ -8,14 +8,14 @@
 
 schema_version: "1.0"
 stack_id: ai-ml-research-local-v0.1
-version_id: "0.1.0"
-certified_at: "2026-07-08T15:45:00+05:30"
+version_id: "0.1.1"
+certified_at: "2026-07-17T09:29:59.363835+00:00"
 certified_by: gundimedamanaskiran@gmail.com
 certified_on:
   os: "Windows 11 + Docker Desktop"
   docker: "29.5.2"
   docker_compose: "v2"
-status: "candidate"
+status: "pilot-stable"
 
 status_notes: |
   candidate: the lakehouse core (MinIO + Iceberg REST + Spark + Trino +
@@ -131,7 +131,29 @@ host_requirements:
   ports_required: [9000, 9001, 8181, 8888, 8080, 8030, 9030, 8889]
 
 # Append the first end-to-end run here, then flip status to pilot-stable.
-evidence: []
+evidence:
+  - id: "2026-07-17-srv1541349-3c59e5b18e"
+    timestamp: "2026-07-17T09:29:59.363835+00:00"
+    operator: root
+    install_id: "inst_3c59e5b18e"
+    host:
+      os: "Linux-5.15.0-177-generic-x86_64-with-glibc2.35"
+      docker: "29.5.0"
+      ram_gb: 31.3
+      cpu_cores: 8
+    via: "install_harness.py on Finalert VPS srv1541349"
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: passed
+      finalize: passed
+    proof:
+      - "all 8 pipeline steps passed (prepare/clone/env/doctor/start/bootstrap/smoke/finalize)"
+      - "[studio-trino-smoke] passed — ETL verify: iceberg x 3 pipelines all >= 1000 rows; Jupyter + Trino up"
 
 incompatible:
   - combination: [spark:3.5.1_1.5.2]

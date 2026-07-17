@@ -12,8 +12,8 @@
 
 schema_version: "1.0"
 stack_id: iceberg-nessie-trino-local-v0.1
-version_id: "0.1.0"
-certified_at: "2026-05-17T00:00:00+05:30"
+version_id: "0.1.1"
+certified_at: "2026-07-17T09:15:52.114101+00:00"
 certified_by: vishnu.wildeagle@gmail.com
 certified_on:
   os: "TBD — no install evidence yet"
@@ -22,7 +22,7 @@ certified_on:
 # IMPORTANT: status is `candidate`, NOT `pilot-stable`. Studio's compatibility
 # loader exposes this verbatim through /api/stacks/{id}/lock-summary so the UI
 # can warn before showing the option.
-status: "candidate"
+status: "pilot-stable"
 
 # Maturity grades:
 #   candidate       — tags verified present on registry; combination NOT installed end-to-end
@@ -278,7 +278,30 @@ host_requirements:
 # Append a record after every install attempt (including failed ones) so
 # the failure mode is documented for the next contributor to pick up.
 # ---------------------------------------------------------------------------
-evidence: []  # no evidence yet — candidate status
+evidence:
+  - id: "2026-07-17-srv1541349-87d2baaa07"
+    timestamp: "2026-07-17T09:15:52.114101+00:00"
+    operator: root
+    install_id: "inst_87d2baaa07"
+    host:
+      os: "Linux-5.15.0-177-generic-x86_64-with-glibc2.35"
+      docker: "29.5.0"
+      ram_gb: 31.3
+      cpu_cores: 8
+    via: "install_harness.py on Finalert VPS srv1541349"
+    result:
+      prepare: passed
+      clone: passed
+      env: passed
+      doctor: passed
+      start: passed
+      bootstrap: passed
+      smoke: passed
+      finalize: passed
+    proof:
+      - "all 8 pipeline steps passed (prepare/clone/env/doctor/start/bootstrap/smoke/finalize)"
+      - "[studio-nessie-smoke] passed — Iceberg + Nessie + Trino + StarRocks brought up and queried"
+    notes: "Core stack smoke passed. The optional 3-catalog multi-format (Delta/Hudi) add-on check did not fully pass (non-blocking)."
 
 # ---------------------------------------------------------------------------
 # Known-incompatible — combinations we know DO NOT work. Carried over from
