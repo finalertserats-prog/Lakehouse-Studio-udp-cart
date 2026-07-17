@@ -536,6 +536,10 @@ async def image_build_research(body: dict):
 @app.post("/api/image-build/start")
 async def image_build_start(body: dict):
     """Start an async build+push job. Returns {job_id}."""
+    # P0.3: AI-driven image builds are opt-in (default off).
+    _ai_ok, _ai_why = ai_prov.provisioning_status()
+    if not _ai_ok:
+        raise HTTPException(403, _ai_why)
     image_id = body.get("image_id", "")
     research  = body.get("research")
     if image_id not in img_bld.IMAGES or not research:
@@ -603,6 +607,10 @@ async def ai_provision_start(body: dict):
       }
     Returns: { "job_id": "prov_XXXXXXXXXX" }
     """
+    # P0.3: AI-driven provisioning is opt-in (default off).
+    _ai_ok, _ai_why = ai_prov.provisioning_status()
+    if not _ai_ok:
+        raise HTTPException(403, _ai_why)
     stack_id = body.get("stack_id", "")
     cart     = body.get("cart_selections", {})
     opts     = body.get("install_options", {})
@@ -612,6 +620,17 @@ async def ai_provision_start(body: dict):
         raise HTTPException(400, "cart_selections required")
     job_id = ai_prov.start_provision(stack_id, cart, opts)
     return {"job_id": job_id}
+
+
+@app.get("/api/ai-provision/availability")
+def ai_provision_availability():
+    """Public: is AI-driven provisioning enabled (opt-in)? No secrets returned.
+
+    Lets the UI disable the AI-Build action (and explain why) instead of
+    surfacing a 403 only after the user clicks.
+    """
+    enabled, reason = ai_prov.provisioning_status()
+    return {"enabled": enabled, "reason": reason}
 
 
 @app.get("/api/ai-provision/status/{job_id}")
@@ -762,6 +781,10 @@ async def stack_builder_build(body: dict):
       }
     Returns: { "job_id": "<uuid>" }
     """
+    # P0.3: AI-driven provisioning is opt-in (default off).
+    _ai_ok, _ai_why = ai_prov.provisioning_status()
+    if not _ai_ok:
+        raise HTTPException(403, _ai_why)
     selected: list[str] = body.get("selected", [])
     versions: dict = body.get("versions", {})
     stack_name: str = body.get("stack_name", "custom-lakehouse")

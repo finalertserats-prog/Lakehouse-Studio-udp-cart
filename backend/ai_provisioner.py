@@ -38,6 +38,38 @@ _BASE_URL = os.environ.get("LITELLM_BASE_URL", "")
 _API_KEY  = os.environ.get("LITELLM_API_KEY", "")
 _MODEL    = os.environ.get("LITELLM_MODEL", "gpt-4o-mini")
 
+# Env var an operator sets to opt IN to AI-driven provisioning (default off).
+PROVISION_ENABLE_ENV = "LHS_AI_PROVISION_ENABLED"
+_LLM_KEY_ENVS = ("LITELLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+
+
+def _is_truthy(value) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() not in ("", "0", "false", "no", "off", "disable", "disabled")
+
+
+def provisioning_status() -> tuple[bool, str]:
+    """AI-driven provisioning is OPT-IN (security default: off).
+
+    It lets an LLM generate configs + shell commands that then run against the
+    host's Docker — even with the ai_safety gate, that surface should not be
+    reachable unless an operator explicitly turns it on. Returns
+    (enabled, human-readable reason when disabled).
+    """
+    if not _is_truthy(os.environ.get(PROVISION_ENABLE_ENV)):
+        return False, (
+            "AI-driven provisioning is disabled by default. An operator must set "
+            f"{PROVISION_ENABLE_ENV}=1 to opt in — it lets an LLM generate configs "
+            "and commands that run against Docker."
+        )
+    if not any(os.environ.get(k) for k in _LLM_KEY_ENVS):
+        return False, (
+            f"{PROVISION_ENABLE_ENV} is set but no LLM API key is configured "
+            "(LITELLM_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY)."
+        )
+    return True, ""
+
 # Global job registry
 _PROV_JOBS: dict[str, "ProvisionJob"] = {}
 
