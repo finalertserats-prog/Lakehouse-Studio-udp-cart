@@ -1225,10 +1225,16 @@ PROPERTIES (
     -- token endpoint, not the base catalog URL.
     -- Ref: https://docs.starrocks.io/docs/external_table/iceberg_catalog/
     --      https://polaris.apache.org/docs/oauth
-    "iceberg.catalog.security" = "oauth2",
-    "iceberg.catalog.oauth2.server-uri" = "http://polaris:8181/api/catalog/v1/oauth/tokens",
-    "iceberg.catalog.oauth2.credential" = "${CLIENT_ID}:${CLIENT_SECRET}",
-    "iceberg.catalog.oauth2.scope" = "PRINCIPAL_ROLE:ALL",
+    -- StarRocks strips the `iceberg.catalog.` prefix and hands the rest to the
+    -- Iceberg REST client, which reads the RAW spec keys `credential`,
+    -- `oauth2-server-uri`, `scope`. The StarRocks-invented `oauth2.*` /
+    -- `security=oauth2` names are NOT recognised by that client, so StarRocks
+    -- skipped auth entirely and Polaris returned 401 (principal `-`). VPS-
+    -- verified: with the raw keys, StarRocks performs the OAuth2
+    -- client_credentials flow and lists the Polaris namespaces (200).
+    "iceberg.catalog.credential" = "${CLIENT_ID}:${CLIENT_SECRET}",
+    "iceberg.catalog.oauth2-server-uri" = "http://polaris:8181/api/catalog/v1/oauth/tokens",
+    "iceberg.catalog.scope" = "PRINCIPAL_ROLE:ALL",
     "iceberg.catalog.vended-credentials-enabled" = "true",
     -- Gemini Polaris 1.4.1 audit 2026-05-17: pin the realm via the
     -- StarRocks property convention (`iceberg.catalog.x-iceberg-realm`).
@@ -1238,7 +1244,7 @@ PROPERTIES (
     -- POLARIS_REALM_CONTEXT_REALMS) and rejects the request as
     -- wrong-realm -- StarRocks then sees zero tables in the catalog.
     -- Ref: https://polaris.apache.org/docs/configuration/#bootstrapping
-    "iceberg.catalog.x-iceberg-realm" = "default-realm",
+    "iceberg.catalog.header.X-Iceberg-Realm" = "default-realm",
     "aws.s3.endpoint" = "http://minio:9000",
     "aws.s3.enable_ssl" = "false",
     "aws.s3.enable_path_style_access" = "true",
