@@ -831,6 +831,14 @@ _ENV_ALLOW = {
     "COLUMNS", "LINES", "TERM",
     # systemroot is needed for various Windows shell utilities
     "SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC", "WINDIR", "PROGRAMFILES", "PROGRAMFILES(X86)",
+    # Compose-fragment host-port + tuning overrides (non-secret) that
+    # stack_compose_fragments.py interpolates as `${VAR:-default}`. Passing
+    # these through lets an operator dodge host-port conflicts (e.g. Marquez's
+    # 5000 colliding with another app) without editing any file. Credentials
+    # are still dropped — only ports/opts are whitelisted here.
+    "MARQUEZ_HTTP_PORT", "MARQUEZ_ADMIN_PORT", "MARQUEZ_WEB_PORT",
+    "TRINO_HTTP_PORT", "TRINO_JAVA_OPTS",
+    "TRINO_QUERY_MAX_MEMORY", "TRINO_QUERY_MAX_MEMORY_PER_NODE",
 }
 
 
