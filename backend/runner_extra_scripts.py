@@ -460,7 +460,11 @@ PYEOF
 
 echo "[studio-hudi-bootstrap] running pyspark Hudi seed job..."
 docker exec udp-spark spark-submit \
-  --packages org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 \
+  --packages org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+  --conf spark.sql.defaultCatalog=spark_catalog \
+  --conf spark.sql.warehouse.dir=s3a://datalake/warehouse \
+  --conf spark.hadoop.hive.metastore.warehouse.dir=s3a://datalake/warehouse \
+  --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
   --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
   --conf spark.hadoop.fs.s3a.access.key=admin \
   --conf spark.hadoop.fs.s3a.secret.key=udp_admin_12345 \
@@ -531,7 +535,11 @@ PYEOF
 
 echo "[studio-hudi-smoke] running pyspark Hudi smoke job..."
 docker exec udp-spark spark-submit \
-  --packages org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 \
+  --packages org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+  --conf spark.sql.defaultCatalog=spark_catalog \
+  --conf spark.sql.warehouse.dir=s3a://datalake/warehouse \
+  --conf spark.hadoop.hive.metastore.warehouse.dir=s3a://datalake/warehouse \
+  --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
   --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
   --conf spark.hadoop.fs.s3a.access.key=admin \
   --conf spark.hadoop.fs.s3a.secret.key=udp_admin_12345 \
@@ -550,7 +558,11 @@ docker exec \
   -e ETLV_WAREHOUSE=s3a://datalake/warehouse -e ETLV_HMS=thrift://hive-metastore:9083 \
   -e ETLV_S3_ENDPOINT=http://minio:9000 -e ETLV_S3_KEY=admin -e ETLV_S3_SECRET=udp_admin_12345 \
   udp-spark spark-submit \
-  --packages org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 \
+  --packages org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+  --conf spark.sql.defaultCatalog=spark_catalog \
+  --conf spark.sql.warehouse.dir=s3a://datalake/warehouse \
+  --conf spark.hadoop.hive.metastore.warehouse.dir=s3a://datalake/warehouse \
+  --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
   --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
   --conf spark.hadoop.fs.s3a.access.key=admin \
   --conf spark.hadoop.fs.s3a.secret.key=udp_admin_12345 \
