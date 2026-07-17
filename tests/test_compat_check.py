@@ -98,20 +98,22 @@ def test_udp_cart_returns_explanations_naming_stack():
 # 3. Nessie cart matches iceberg-nessie-trino-local-v0.1 (candidate).
 # ---------------------------------------------------------------------------
 
-def test_nessie_cart_matches_candidate_stack():
+def test_nessie_cart_matches_stack():
     verdict = compat_check.check_cart(NESSIE_CART)
     assert verdict["matched_stack"] == "iceberg-nessie-trino-local-v0.1"
-    assert verdict["matched_stack_status"] == "candidate"
-    # Candidate → "warning" verdict because there's no install evidence yet.
-    assert verdict["overall_verdict"] == "warning"
+    # Promoted to pilot-stable in the 2026-07-17 VPS campaign (has evidence),
+    # so it now reports pilot-stable + a "compatible" verdict.
+    assert verdict["matched_stack_status"] == "pilot-stable"
+    assert verdict["overall_verdict"] == "compatible"
 
 
-def test_nessie_cart_scores_lower_than_udp_cart():
+def test_nessie_and_udp_carts_both_score_high_pilot_stable():
     udp = compat_check.check_cart(UDP_CART)
     nessie = compat_check.check_cart(NESSIE_CART)
-    # candidate (30) + no_evidence (0) < pilot-stable (60) + evidence (20).
-    assert nessie["readiness_score"] < udp["readiness_score"]
-    # And the candidate must still be in the legal range.
+    # Both are now pilot-stable with evidence, so both clear the 80 bar
+    # (pilot-stable 60 + evidence 20 + constraint bonus).
+    assert nessie["readiness_score"] >= 80
+    assert udp["readiness_score"] >= 80
     assert 0 <= nessie["readiness_score"] <= 100
 
 
@@ -137,9 +139,9 @@ def test_obvious_nessie_marriage_matches_correctly():
     cart = ["iceberg", "nessie", "trino", "starrocks-fe", "starrocks-be", "minio"]
     verdict = compat_check.check_cart(cart)
     assert verdict["matched_stack"] == "iceberg-nessie-trino-local-v0.1"
-    # Candidate stack → "warning" but no incompatible hits.
+    # Pilot-stable stack → "compatible", no incompatible hits.
     assert verdict["incompatible_hits"] == []
-    assert verdict["overall_verdict"] == "warning"
+    assert verdict["overall_verdict"] == "compatible"
 
 
 # ---------------------------------------------------------------------------

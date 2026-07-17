@@ -237,6 +237,11 @@ def test_alternative_carts_proposes_known_stack_for_partial_cart():
 # and hudi-hms-spark-local-v0.1 were promoted to pilot-stable (their locks carry
 # evidence), so they graduate out of this parametrization — a pilot-stable match
 # has an empty graduation_path (asserted by test_graduation_path_empty_for_...).
+# Every formerly-candidate stack graduated to pilot-stable in the 2026-07-17 VPS
+# certification campaign, so there are no candidate stacks left: a matched cart
+# now points at a pilot-stable stack with an EMPTY graduation_path. This keeps
+# coverage that these carts still match + will_work; the candidate graduation
+# path is exercised only synthetically now (a candidate lock would re-enable it).
 @pytest.mark.parametrize(
     "cart, expected_stack",
     [
@@ -245,15 +250,12 @@ def test_alternative_carts_proposes_known_stack_for_partial_cart():
         (POLARIS_CART, "iceberg-polaris-spark-local-v0.1"),
     ],
 )
-def test_graduation_path_non_empty_for_candidate_match(cart, expected_stack):
+def test_matched_stacks_are_pilot_stable_with_empty_graduation_path(cart, expected_stack):
     explanation = compat_explainer.explain_cart(cart)
     assert explanation["verdict"] == "will_work"
-    assert explanation["matched_stack_status"] == "candidate"
-    assert explanation["graduation_path"], (
-        f"expected non-empty graduation_path for candidate stack {expected_stack}"
-    )
-    # And it should mention the stack id explicitly.
-    assert expected_stack in explanation["graduation_path"]
+    assert explanation["matched_stack"] == expected_stack
+    assert explanation["matched_stack_status"] == "pilot-stable"
+    assert explanation["graduation_path"] == ""
 
 
 def test_graduation_path_empty_for_pilot_stable_match():

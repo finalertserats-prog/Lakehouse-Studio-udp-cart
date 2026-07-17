@@ -126,7 +126,15 @@ NEW_STACK_IDS = [
 # empty) apply only to stacks that have NOT yet graduated. hudi-hms-spark
 # was promoted to pilot-stable (README + lock evidence), so it is excluded
 # here — its lock now carries an evidence[] record and status: pilot-stable.
-GRADUATED_STACK_IDS = {"hudi-hms-spark-local-v0.1"}
+# All four graduated to pilot-stable via the 2026-07-17 VPS certification
+# campaign (each lock carries an evidence[] record), so none of them satisfy
+# the candidate contract any more.
+GRADUATED_STACK_IDS = {
+    "hudi-hms-spark-local-v0.1",
+    "iceberg-nessie-trino-local-v0.1",
+    "delta-hms-spark-trino-local-v0.1",
+    "iceberg-polaris-spark-local-v0.1",
+}
 CANDIDATE_STACK_IDS = [s for s in NEW_STACK_IDS if s not in GRADUATED_STACK_IDS]
 
 
