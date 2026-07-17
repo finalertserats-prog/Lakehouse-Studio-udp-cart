@@ -1,0 +1,44 @@
+# gitleaks configuration for Lakehouse Studio (P0.4 secret-scan gate).
+#
+# Goal: catch REAL secrets accidentally committed (AWS keys, tokens, private
+# keys, high-entropy strings) — NOT the intentional demo/pilot placeholder
+# credentials that ship with the stacks. Those placeholders (s3cr3t,
+# udp_admin_12345, *_pilot, marquez) are documented, non-production defaults
+# and MUST be rotated before any exposed deployment (see docs enterprise
+# roadmap Phase 0). They are allowlisted below so the gate stays signal, not
+# noise.
+
+title = "Lakehouse Studio secret-scan"
+
+[extend]
+# Start from gitleaks' built-in ruleset (AWS/GCP keys, GitHub/Slack tokens,
+# PEM private keys, generic high-entropy assignments, etc.).
+useDefault = true
+
+[allowlist]
+description = "Documented demo/pilot placeholder credentials + fixture/prose paths (rotate before production)."
+# Files that legitimately reference the placeholder credentials by name:
+# test fixtures, compatibility-lock prose notes, docs, and the notebook.
+paths = [
+  '''tests/.*''',
+  '''.*\.lock\.yaml$''',
+  '''docs/.*''',
+  '''notebook/.*''',
+  '''.*\.md$''',
+  '''\.gitleaks\.toml$''',
+  # Not tracked by git (so out of CI scope), but skip them for a full-tree
+  # `--no-git` local scan too — third-party deps + runtime data, not our code.
+  '''(^|.*[\\/])\.venv[\\/].*''',
+  '''(^|.*[\\/])work[\\/].*''',
+  '''.*__pycache__.*''',
+]
+# The exact demo/pilot placeholder values (and their obvious patterns). A match
+# containing any of these is treated as a known non-secret.
+regexes = [
+  '''(?i)_pilot\b''',
+  '''udp_admin_\d+''',
+  '''(?i)\bs3cr3t\b''',
+  '''(?i)\bmarquez\b''',
+  '''(?i)default-realm,root,''',
+  '''(?i)(changeme|example|placeholder|dummy|test[_-]?(key|secret|token))''',
+]
