@@ -1039,10 +1039,17 @@ curl -s -o /dev/null -X POST \
   -H "Content-Type: application/json" \
   -d '{ "principalRole": { "name": "service_admin" } }' || true
 
-# 4. Assign the principal to the principal-role.
+# 4. Assign the principal to the principal-role. Polaris 1.4.1 exposes this as
+#    PUT /principals/{name}/principal-roles with the role in the body. The
+#    inverse path (/principal-roles/{role}/principals/{name}) returns 404
+#    "Unable to find matching target resource method", which — swallowed by
+#    `|| true` — silently left the principal with ZERO roles, so every catalog
+#    op 403'd with "not authorized for op CREATE_NAMESPACE". VPS-verified fix.
 curl -s -o /dev/null -X PUT \
-  "${POLARIS_MGMT}/principal-roles/service_admin/principals/${PRINCIPAL_NAME}" \
-  -H "Authorization: Bearer ${ROOT_TOKEN}" || true
+  "${POLARIS_MGMT}/principals/${PRINCIPAL_NAME}/principal-roles" \
+  -H "Authorization: Bearer ${ROOT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{ "principalRole": { "name": "service_admin" } }' || true
 
 # 5. Bind the engineer catalog-role to the service_admin principal-role.
 #    This is the critical link that was missing -- without it, the
@@ -1101,6 +1108,11 @@ catalog = os.environ["POLARIS_CATALOG_NAME"]
 spark = (
     SparkSession.builder.appName("lhs-polaris-bootstrap")
     .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+    # The base spark image bakes spark.sql.defaultCatalog=udp (an Iceberg-REST
+    # catalog at iceberg-rest:8181, which is NOT in this stack). Pin the default
+    # to the Polaris catalog, or Spark initializes `udp` while resolving
+    # currentNamespace and dies with UnknownHostException. VPS-verified.
+    .config("spark.sql.defaultCatalog", catalog)
     .config(f"spark.sql.catalog.{catalog}", "org.apache.iceberg.spark.SparkCatalog")
     .config(f"spark.sql.catalog.{catalog}.type", "rest")
     .config(f"spark.sql.catalog.{catalog}.uri", os.environ["POLARIS_CATALOG_URI"])
@@ -1300,6 +1312,9 @@ catalog = os.environ["POLARIS_CATALOG_NAME"]
 spark = (
     SparkSession.builder.appName("lhs-polaris-smoke")
     .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+    # Pin the default catalog to Polaris — the base image bakes `udp`
+    # (Iceberg-REST) as default, which isn't in this stack (UnknownHost).
+    .config("spark.sql.defaultCatalog", catalog)
     .config(f"spark.sql.catalog.{catalog}", "org.apache.iceberg.spark.SparkCatalog")
     .config(f"spark.sql.catalog.{catalog}.type", "rest")
     .config(f"spark.sql.catalog.{catalog}.uri", os.environ["POLARIS_CATALOG_URI"])

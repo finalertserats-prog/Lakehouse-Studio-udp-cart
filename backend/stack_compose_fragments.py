@@ -948,6 +948,13 @@ def _render_polaris_fragment(env: dict) -> str:
         "      # bootstrap, Spark, and StarRocks.\n"
         "      # Ref: https://polaris.apache.org/docs/configuration/#bootstrapping\n"
         "      POLARIS_REALM_CONTEXT_REALMS: default-realm\n"
+        # Polaris (the SERVER) writes table metadata to MinIO/S3 itself, so it
+        # needs S3 credentials. Without them CREATE TABLE fails server-side with
+        # `Unable to load credentials from any of the providers`. The AWS SDK's
+        # EnvironmentVariableCredentialsProvider reads these. VPS-verified.
+        "      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-admin}\n"
+        "      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-udp_admin_12345}\n"
+        "      AWS_REGION: us-east-1\n"
         "    ports:\n"
         "      - \"8181:8181\"\n"
         "      - \"8182:8182\"\n"
