@@ -360,9 +360,12 @@ def _render_fintech_fragment(env: dict) -> str:
         "    depends_on:\n"
         "      postgres-marquez:\n"
         "        condition: service_healthy\n"
+        # Host-side ports are env-overridable so the stack coexists with
+        # anything already bound to 5000/5001 on the host (e.g. another app's
+        # dashboard). Container ports stay 5000/5001. Default keeps 5000/5001.
         "    ports:\n"
-        "      - \"5000:5000\"\n"
-        "      - \"5001:5001\"\n"
+        "      - \"${MARQUEZ_HTTP_PORT:-5000}:5000\"\n"
+        "      - \"${MARQUEZ_ADMIN_PORT:-5001}:5001\"\n"
         "    healthcheck:\n"
         "      test: [\"CMD-SHELL\", \"wget -qO- http://localhost:5000/api/v1/namespaces >/dev/null 2>&1 || exit 1\"]\n"
         "      interval: 15s\n"
@@ -387,7 +390,7 @@ def _render_fintech_fragment(env: dict) -> str:
         "      openlineage:\n"
         "        condition: service_started\n"
         "    ports:\n"
-        "      - \"3000:3000\"\n"
+        "      - \"${MARQUEZ_WEB_PORT:-3000}:3000\"\n"
         "    networks:\n"
         "      - default\n"
         # Hive Metastore so Fintech Compliance is multi-format too (Delta/Hudi catalogs).
