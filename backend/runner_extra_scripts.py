@@ -1289,9 +1289,12 @@ export MSYS2_ARG_CONV_EXCL='*'
 POLARIS_CATALOG_URI="${ICEBERG_REST_URI:-http://localhost:8181/api/catalog}"
 
 echo "[studio-polaris-smoke] checking Polaris..."
-curl -fsS "${POLARIS_CATALOG_URI}/v1/config" >/dev/null \
-  || { echo "polaris unreachable"; exit 1; }
-echo "  polaris OK"
+# Polaris 1.4.x auth-gates /v1/config, so an UNauthenticated probe returns 401 —
+# which still proves Polaris is up and serving. Treat any HTTP response (200 or
+# 401) as reachable; only a connection failure (000) is genuinely unreachable.
+POLARIS_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${POLARIS_CATALOG_URI}/v1/config?warehouse=probe" || echo 000)
+[ "${POLARIS_CODE}" = "000" ] && { echo "polaris unreachable"; exit 1; }
+echo "  polaris OK (HTTP ${POLARIS_CODE})"
 
 echo "[studio-polaris-smoke] checking StarRocks FE..."
 docker exec udp-starrocks-fe mysql -h 127.0.0.1 -P 9030 -u root -e "SELECT 1" >/dev/null \
