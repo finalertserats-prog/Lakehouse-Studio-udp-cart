@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from . import compose_hardening
 from .config import WORK_DIR
 from .etl_verify_job import ETL_VERIFY_SPARK_PY
 from .events import bus
@@ -1452,6 +1453,68 @@ class UDPRunner:
                   f"{path.name} ({len(services)} service"
                   f"{'s' if len(services) != 1 else ''})")
 
+    def _effective_service_names(self) -> list[str]:
+        """Every service that `docker compose up` will actually touch: the base
+        cloned compose plus every registered overlay/fragment. Read-only YAML
+        parse of the base file (keys only) — never re-serializes it, so the
+        fragile StarRocks command heredocs are left untouched."""
+        import yaml
+        names: list[str] = []
+        compose_path = self.install_dir / "docker-compose.yml"
+        if compose_path.exists():
+            try:
+                doc = yaml.safe_load(compose_path.read_text(encoding="utf-8")) or {}
+                names.extend((doc.get("services") or {}).keys())
+            except Exception as e:
+                self._log("env", "stderr",
+                          f"harden: base compose parse failed ({e}); "
+                          f"hardening declared overlay services only")
+        for ov in self._overlays:
+            names.extend(ov.get("services") or [])
+        return list(dict.fromkeys(n for n in names if n))
+
+    def _write_harden_overlay(self, env: dict[str, str]) -> None:
+        """P0.2 — write docker-compose.harden.yml and register it LAST so its
+        runtime security options layer over the base compose + fragment + any
+        opt-in overlays.
+
+        Default ON: security_opt no-new-privileges on every service (safe for
+        all certified stacks). Disable with LHS_HARDEN_RUNTIME_DISABLED=1.
+        Strict cap-drop/pids-limit is opt-in via LHS_HARDEN_STRICT (needs
+        per-stack verification before it can be trusted)."""
+        if (_is_truthy(env.get(compose_hardening.DISABLE_ENV))
+                or _is_truthy(os.environ.get(compose_hardening.DISABLE_ENV))):
+            self._log("env", "stdout",
+                      f"runtime hardening disabled via "
+                      f"{compose_hardening.DISABLE_ENV}")
+            return
+        names = self._effective_service_names()
+        if not names:
+            self._log("env", "stderr",
+                      "harden: no services resolved; skipping hardening overlay")
+            return
+        strict = (_is_truthy(env.get(compose_hardening.STRICT_ENV))
+                  or _is_truthy(os.environ.get(compose_hardening.STRICT_ENV)))
+        doc = compose_hardening.build_harden_overlay(names, strict=strict)
+        import yaml
+        path = self.install_dir / compose_hardening.OVERLAY_FILENAME
+        path.write_text(
+            yaml.dump(doc, default_flow_style=False, sort_keys=False),
+            encoding="utf-8",
+        )
+        # Register with NO services: the overlay only modifies services that are
+        # already started by earlier -f files, it must not add to the `up -d`
+        # service list.
+        self._overlays.append({
+            "name": "harden",
+            "file": path,
+            "services": [],
+        })
+        self._log("env", "stdout",
+                  f"runtime hardening overlay written: {path.name} "
+                  f"({len(names)} service{'s' if len(names) != 1 else ''}, "
+                  f"strict={strict})")
+
     def _write_optional_overlays(self, env: dict[str, str]) -> None:
         """v0.6.1 — write opt-in compose overlays (Airflow / Dagster / Superset)
         next to the base compose file.
@@ -1692,6 +1755,15 @@ class UDPRunner:
         except Exception as e:
             self._log("env", "stderr", f"stack fragment write warning: {e}")
 
+        # P0.2 — write the runtime hardening overlay LAST, after fragment +
+        # optional overlays are registered, so it can enumerate and harden
+        # every service that will actually start. Non-fatal: a hardening write
+        # failure must never block the certified stack from coming up.
+        try:
+            self._write_harden_overlay(merged)
+        except Exception as e:
+            self._log("env", "stderr", f"harden overlay write warning: {e}")
+
         # Make UDP scripts executable. On Windows chmod is a near-noop, but on
         # Linux/macOS it matters. Don't swallow surprising errors silently.
         try:
@@ -1777,6 +1849,17 @@ class UDPRunner:
                     })
         except ImportError:
             pass
+        # P0.2 runtime hardening overlay — LAST, so it layers over everything.
+        # services:[] because it only modifies services started by other files.
+        harden = self.install_dir / compose_hardening.OVERLAY_FILENAME
+        if harden.exists():
+            self._overlays.append({
+                "name": "harden",
+                "file": harden,
+                "services": [],
+            })
+            self._log("start", "stdout",
+                      f"recovered hardening overlay from disk: {harden.name}")
 
     async def _step_cmd(self, step_id: str, cmd_name: str) -> bool:
         self._step_start(step_id)
