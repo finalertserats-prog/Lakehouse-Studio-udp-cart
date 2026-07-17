@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import compose_hardening
+from . import credential_gen
 from .config import WORK_DIR
 from .etl_verify_job import ETL_VERIFY_SPARK_PY
 from .events import bus
@@ -1749,6 +1750,22 @@ class UDPRunner:
             import secrets as _sec
             merged["AIRFLOW_WEBSERVER_SECRET_KEY"] = _sec.token_hex(32)
 
+        # P0.4b — opt-in per-install credential generation (default OFF). When
+        # LHS_GENERATE_CREDENTIALS is set, replace the shipped demo MinIO secret
+        # with a strong random one so no two installs share the public default.
+        # Default path is byte-identical: without the flag nothing is generated
+        # and every consumer resolves to ${MINIO_ROOT_PASSWORD:-udp_admin_12345}.
+        # An explicit operator override always wins over generation.
+        self._generated_minio_secret: str | None = None
+        gen_creds = (_is_truthy(merged.get(credential_gen.GENERATE_ENV))
+                     or _is_truthy(os.environ.get(credential_gen.GENERATE_ENV)))
+        if gen_creds and not clean_overrides.get(credential_gen.MINIO_SECRET_ENV):
+            self._generated_minio_secret = credential_gen.generate_secret()
+            merged[credential_gen.MINIO_SECRET_ENV] = self._generated_minio_secret
+            self._log("env", "stdout",
+                      "P0.4b: generated a per-install MinIO secret "
+                      f"({credential_gen.MINIO_SECRET_ENV}=********)")
+
         # Patch Spark's catalog config: swap the default `udp` catalog from
         # hive-metastore-backed to iceberg-REST-backed so the Spark bootstrap
         # job works without hive-metastore. UDP ships a parallel `udp_rest`
@@ -1814,6 +1831,15 @@ class UDPRunner:
                 env_path.chmod(0o600)
             except Exception:
                 pass
+            # P0.4b — with a generated secret in hand, sweep the install dir and
+            # replace the shipped demo literal everywhere it was written (bootstrap
+            # + smoke scripts, patched compose, StarRocks conf injection, configs).
+            # Runs AFTER every env-step writer, so it catches all of them at once.
+            if self._generated_minio_secret:
+                self._rotate_install_credential(
+                    credential_gen.DEMO_MINIO_SECRET,
+                    self._generated_minio_secret,
+                )
             # Echo redacted preview line-by-line.
             for k, v in merged.items():
                 is_secret = (
@@ -1975,6 +2001,36 @@ class UDPRunner:
         ok = rc == 0
         self._step_end(step_id, ok, exit_code=rc)
         return ok
+
+    def _rotate_install_credential(self, old: str, new: str) -> None:
+        """P0.4b — replace the unique demo secret *old* with *new* across every
+        text artifact in install_dir (bootstrap/smoke scripts, patched compose,
+        StarRocks conf injection, generated configs, .env defaults).
+
+        A plain string replace of an UNAMBIGUOUS literal — no YAML round-trip, so
+        the fragile StarRocks command heredocs are preserved. Binary and .git
+        files are skipped. Idempotent: files without *old* are untouched."""
+        if not old or old == new:
+            return
+        changed = 0
+        for root, dirs, files in os.walk(self.install_dir):
+            if ".git" in dirs:
+                dirs.remove(".git")
+            for fn in files:
+                p = Path(root) / fn
+                try:
+                    text = p.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    continue  # binary or unreadable — not a credential carrier
+                if old in text:
+                    try:
+                        p.write_text(text.replace(old, new), encoding="utf-8")
+                        changed += 1
+                    except OSError as e:
+                        self._log("env", "stderr",
+                                  f"P0.4b: could not rewrite {p.name}: {e}")
+        self._log("env", "stdout",
+                  f"P0.4b: rotated demo MinIO secret across {changed} install file(s)")
 
     def _base_compose_filename(self) -> str | None:
         """Name of the stack's base compose file in install_dir, if present.
