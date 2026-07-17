@@ -170,3 +170,66 @@ def test_reconstruct_from_disk_reattaches_harden_last(tmp_path):
     assert r._overlays, "expected at least the harden overlay to be recovered"
     assert r._overlays[-1]["name"] == "harden"
     assert r._overlays[-1]["services"] == []
+
+
+# ---------------------------------------------------------------------------
+# Coverage-gap fix — services declared only in an overlay FILE (not its
+# metadata) are still enumerated and therefore hardened.
+# ---------------------------------------------------------------------------
+
+def test_effective_service_names_parses_overlay_file_contents(tmp_path):
+    r = _fake_runner(tmp_path)
+    _write_base_compose(tmp_path, ["minio"])
+    # Overlay file defines a service its metadata does NOT list.
+    frag = tmp_path / "docker-compose.fragment.yml"
+    frag.write_text(yaml.dump({"services": {"nessie": {"image": "n:1"},
+                                            "extra": {"image": "e:1"}}}),
+                    encoding="utf-8")
+    r._overlays = [{"name": "frag", "file": frag, "services": ["nessie"]}]  # 'extra' omitted
+    names = r._effective_service_names()
+    assert "extra" in names, "service present only in the overlay file must still be hardened"
+    assert {"minio", "nessie", "extra"} <= set(names)
+
+
+# ---------------------------------------------------------------------------
+# Codex-flagged edge cases — dedupe + disable-on-reconstruct.
+# ---------------------------------------------------------------------------
+
+def test_write_harden_overlay_dedupes_on_double_call(tmp_path):
+    r = _fake_runner(tmp_path)
+    _write_base_compose(tmp_path, ["minio"])
+    r._write_harden_overlay({})
+    r._write_harden_overlay({})
+    harden_entries = [o for o in r._overlays if o["name"] == "harden"]
+    assert len(harden_entries) == 1
+
+
+def test_reconstruct_dedupes_existing_harden(tmp_path):
+    r = _fake_runner(tmp_path)
+    (tmp_path / ch.OVERLAY_FILENAME).write_text("services: {}\n", encoding="utf-8")
+    # Pre-seed a harden entry as if env step already ran.
+    r._overlays = [{"name": "harden", "file": tmp_path / ch.OVERLAY_FILENAME, "services": []}]
+    r._reconstruct_overlays_from_disk()
+    assert len([o for o in r._overlays if o["name"] == "harden"]) == 1
+
+
+def test_reconstruct_honors_disable_flag(tmp_path, monkeypatch):
+    r = _fake_runner(tmp_path)
+    # A stale overlay file exists, but hardening is now disabled — it must NOT
+    # be re-attached (disable means disable, even across a retry).
+    (tmp_path / ch.OVERLAY_FILENAME).write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setenv(ch.DISABLE_ENV, "1")
+    r._reconstruct_overlays_from_disk()
+    assert [o for o in r._overlays if o["name"] == "harden"] == []
+
+
+# ---------------------------------------------------------------------------
+# Raw-argv coverage — COMPOSE_FILE points compose at the overlay for stacks
+# whose start command doesn't pass explicit -f (enterprise-hadoop/streaming).
+# ---------------------------------------------------------------------------
+
+def test_base_compose_filename_detection(tmp_path):
+    r = _fake_runner(tmp_path)
+    assert r._base_compose_filename() is None
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    assert r._base_compose_filename() == "docker-compose.yml"
